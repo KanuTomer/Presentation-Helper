@@ -4,6 +4,7 @@ import {
   AiService, AiServiceError, openAIClientOptions, toAiErrorInfo, type AiSettingsProvider, type OpenAIClientLike,
   type OpenAIResponseLike
 } from '../src/main/ai/service'
+import type { RetrievedChunk } from '../src/main/retrieval'
 
 const settings: AppSettings = {
   opacity: 0.9, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
@@ -15,13 +16,16 @@ const response: AssistantResponse = {
   ifChallenged: 'Explain that no project result was supplied.', evidence: []
 }
 
-function harness(create: (body: Record<string, unknown>, options: { signal: AbortSignal }) => Promise<OpenAIResponseLike>) {
+function harness(
+  create: (body: Record<string, unknown>, options: { signal: AbortSignal }) => Promise<OpenAIResponseLike>,
+  chunks: RetrievedChunk[] = []
+) {
   const usage = vi.fn(async () => undefined)
   const provider: AiSettingsProvider = { settings: { ...settings }, documents: [] as DocumentInfo[], addUsage: usage }
   const client: OpenAIClientLike = {
     models: { list: async () => [] }, audio: { transcriptions: { create: async () => '' } }, responses: { create }
   }
-  const service = new AiService({ getKey: async () => 'sk-test' }, provider, { search: () => [] }, { clientFactory: async () => client })
+  const service = new AiService({ getKey: async () => 'sk-test' }, provider, { search: () => chunks }, { clientFactory: async () => client })
   return { service, provider, usage }
 }
 function apiResponse(value: unknown, extra: Partial<OpenAIResponseLike> = {}): OpenAIResponseLike {
@@ -88,6 +92,49 @@ describe('manual AI service', () => {
     await expect(refusal.service.ask('Explain caching.')).rejects.toMatchObject({ code: 'malformed_response' })
     const empty = harness(async () => ({ output_text: '   ' }))
     await expect(empty.service.ask('Explain caching.')).rejects.toMatchObject({ code: 'malformed_response' })
+  })
+
+  it('rejects forged and duplicate citations, and canonicalizes valid citation metadata', async () => {
+    const chunk = {
+      id: 'doc-1:text:method:part:1', documentId: 'doc-1', text: 'The cache uses a bounded least-recently-used policy.',
+      kind: 'text', part: 1, partCount: 1, documentName: 'architecture.txt', location: 'Method', score: -1
+    } as RetrievedChunk
+    const forged = harness(async () => apiResponse({
+      ...response, evidence: [{ chunkId: 'forged', documentName: 'fake.txt', location: 'Nowhere' }]
+    }), [chunk])
+    await expect(forged.service.ask('What cache policy does our system use?')).rejects.toMatchObject({ code: 'malformed_response' })
+
+    const duplicate = harness(async () => apiResponse({
+      ...response,
+      evidence: [
+        { chunkId: chunk.id, documentName: 'wrong.txt', location: 'Wrong' },
+        { chunkId: chunk.id, documentName: 'wrong.txt', location: 'Wrong' }
+      ]
+    }), [chunk])
+    await expect(duplicate.service.ask('What cache policy does our system use?')).rejects.toMatchObject({ code: 'malformed_response' })
+
+    const valid = harness(async () => apiResponse({
+      ...response, evidence: [{ chunkId: chunk.id, documentName: 'wrong.txt', location: 'Wrong' }]
+    }), [chunk])
+    await expect(valid.service.ask('What cache policy does our system use?')).resolves.toMatchObject({
+      evidence: [{ chunkId: chunk.id, documentName: 'architecture.txt', location: 'Method' }]
+    })
+  })
+
+  it('includes only whole selected chunks within the exact request-context budget', async () => {
+    const chunks = Array.from({ length: 6 }, (_, index) => ({
+      id: `doc-${index}:text:section:part:1`, documentId: `doc-${index}`,
+      text: `evidence-marker-${index} ${String(index).repeat(2_080)}`,
+      kind: 'text', part: 1, partCount: 1, documentName: `document-${index}.txt`, location: 'Section 1', score: -index
+    })) as RetrievedChunk[]
+    const create = vi.fn(async () => apiResponse(response))
+    const { service } = harness(create, chunks)
+    await service.ask('Explain the indexed evidence.')
+    const input = String(create.mock.calls[0]?.[0].input)
+    expect(input).toContain('evidence-marker-0')
+    expect(input).toContain('evidence-marker-4')
+    expect(input).not.toContain('evidence-marker-5')
+    for (const chunk of chunks.slice(0, 5)) expect(input).toContain(chunk.text)
   })
 
   it('rejects overlap and prevents a cancelled late response from entering conversation context', async () => {

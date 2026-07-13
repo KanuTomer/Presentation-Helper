@@ -15,6 +15,8 @@ const api: PresenterAPI = {
   selectDocuments: () => ipcRenderer.invoke(channels.selectDocuments),
   listDocuments: () => ipcRenderer.invoke(channels.listDocuments),
   removeDocument: (id) => ipcRenderer.invoke(channels.removeDocument, id),
+  searchDocuments: (query) => ipcRenderer.invoke(channels.searchDocuments, query),
+  inspectDocument: (documentId, offset = 0, limit = 50) => ipcRenderer.invoke(channels.inspectDocument, { documentId, offset, limit }),
   clearSession: () => ipcRenderer.invoke(channels.clearSession),
   getUsage: () => ipcRenderer.invoke(channels.getUsage),
   setClickThrough: (enabled) => ipcRenderer.invoke(channels.clickThrough, enabled),

@@ -5,7 +5,7 @@ import {
   assistantResponseSchema, questionSchema, type AiErrorCode, type AiErrorInfo, type AppSettings,
   type AssistantResponse, type DocumentInfo
 } from '../../shared/contracts.js'
-import type { RetrievedChunk } from '../retrieval/index.js'
+import { selectEvidenceChunks, type RetrievedChunk } from '../retrieval/index.js'
 import { ConversationContext } from './conversation.js'
 import { buildInput, presenterInstructions, responseJsonSchema } from './prompts.js'
 import { responseRequestPolicy } from './requestPolicy.js'
@@ -96,7 +96,7 @@ export class AiService {
     let response: OpenAIResponseLike | undefined
     let outcome: AiRequestMetric['outcome'] = 'unknown'
     try {
-      const chunks = this.retrieval.search(validated.data, 5)
+      const chunks = selectEvidenceChunks(this.retrieval.search(validated.data, 5))
       const allowed = new Map(chunks.map((chunk) => [chunk.id, chunk]))
       const client = await this.client()
       response = await client.responses.create({
@@ -119,7 +119,11 @@ export class AiService {
       const validation = assistantResponseSchema.safeParse(raw)
       if (!validation.success) throw malformedResponse()
       const parsed = validation.data
-      parsed.evidence = parsed.evidence.filter((item) => allowed.has(item.chunkId)).map((item) => {
+      const citedIds = parsed.evidence.map((item) => item.chunkId)
+      if (new Set(citedIds).size !== citedIds.length || citedIds.some((chunkId) => !allowed.has(chunkId))) {
+        throw malformedResponse()
+      }
+      parsed.evidence = parsed.evidence.map((item) => {
         const chunk = allowed.get(item.chunkId)!; return { chunkId: chunk.id, documentName: chunk.documentName, location: chunk.location }
       })
       if (parsed.evidence.length === 0 && !parsed.warning && requiresProjectEvidence(validated.data)) {

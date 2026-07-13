@@ -35,14 +35,18 @@ Verification:
 
 ```powershell
 npm run verify
+npm run eval:m4
 npm run helper:build
 npm run test:helper-smoke
 npm run package:win
+npm run test:packaged-fts
 ```
 
 Milestone 3 is accepted: the mocked safety suite and budget-bounded local live-model gate passed for both Normal and Strong modes. The redacted acceptance record is in [docs/validation/milestone-3.md](docs/validation/milestone-3.md); raw prompts, responses, and credentials are not retained.
 
-The unsigned per-user NSIS installer is written to `release/`. Uninstalling it does not remove PresenterAI documents or settings. The Windows GitHub Actions workflow repeats the automated checks and uploads the installer as a workflow artifact; it does not create a public release.
+Milestone 4 is accepted offline: the versioned 50-case corpus reached 50/50 top-five recall, and the clean Windows CI runner built the installer and passed the packaged SQLite FTS5 probe. See [docs/validation/milestone-4.md](docs/validation/milestone-4.md) for the redacted gate record. This validation does not use OpenAI or consume API credits.
+
+The unsigned per-user NSIS installer is written to `release/`. Uninstalling it does not remove PresenterAI documents or settings. Windows Smart App Control may refuse to launch unsigned development builds; code signing remains outside this milestone. The Windows GitHub Actions workflow repeats the automated checks and uploads the installer as a workflow artifact; it does not create a public release.
 
 ## Privacy model
 

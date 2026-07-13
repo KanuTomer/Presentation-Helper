@@ -1,0 +1,104 @@
+{
+  "version": "m4-retrieval-v1",
+  "documents": [
+    {
+      "format": "pptx",
+      "path": "Presentation-Reliability.pptx",
+      "chunks": [
+        { "sourceKey": "slide:1", "kind": "slide", "pageOrSlide": 1, "title": "Adaptive Quorum Protocol", "text": "The Zephyr coordinator maintains write availability by accepting three of five replicas. During minority partitions it queues reconciliation markers instead of inventing committed state." },
+        { "sourceKey": "slide:2", "kind": "slide", "pageOrSlide": 2, "title": "Cedar Ingestion Pipeline", "text": "The Cedar pipeline validates signed event envelopes before decompressing payloads. Invalid signatures enter quarantine and never reach the project index." },
+        { "sourceKey": "slide:3", "kind": "slide", "pageOrSlide": 3, "title": "Nimbus Cache Policy", "text": "The Nimbus cache uses a twelve minute lease and invalidates entries whenever the source content hash changes." },
+        { "sourceKey": "slide:4", "kind": "slide", "pageOrSlide": 4, "title": "Orchid Scheduler", "text": "The Orchid scheduler uses weighted round robin across local workers and reserves one worker for urgent reviewer requests." },
+        { "sourceKey": "slide:5", "kind": "slide", "pageOrSlide": 5, "title": "Falcon Telemetry", "text": "Falcon telemetry is disabled by default. Local stage timing is recorded without prompts, responses, or document text." }
+      ]
+    },
+    {
+      "format": "pdf",
+      "path": "Research-Evidence.pdf",
+      "chunks": [
+        { "sourceKey": "page:1", "kind": "pdfPage", "pageOrSlide": 1, "title": "Lattice Benchmark", "text": "The Lattice benchmark contains forty scripted reviewer questions and reports median retrieval latency separately from model latency." },
+        { "sourceKey": "page:2", "kind": "pdfPage", "pageOrSlide": 2, "title": "Saffron Dataset", "text": "The Saffron dataset contains anonymized synthetic project descriptions and excludes recordings from real meetings." },
+        { "sourceKey": "page:3", "kind": "pdfPage", "pageOrSlide": 3, "title": "Harbor Threat Model", "text": "The Harbor threat model treats document excerpts as untrusted input and blocks external navigation from the renderer." },
+        { "sourceKey": "page:4", "kind": "pdfPage", "pageOrSlide": 4, "title": "Mosaic Ablation", "text": "The Mosaic ablation removes filename boosts and shows that acronym questions lose the most lexical recall." },
+        { "sourceKey": "page:5", "kind": "pdfPage", "pageOrSlide": 5, "title": "Quartz Runtime", "text": "The Quartz runtime experiment used Windows eleven on an eight core laptop with thirty two gigabytes of memory." }
+      ]
+    },
+    {
+      "format": "markdown",
+      "path": "Engineering-Notes.md",
+      "chunks": [
+        { "sourceKey": "section:1", "kind": "markdown", "section": "Kestrel Configuration", "title": "Kestrel Configuration", "text": "Kestrel configuration reads the output endpoint only when capture begins, allowing a changed Windows default device to take effect." },
+        { "sourceKey": "section:2", "kind": "markdown", "section": "Juniper Failure Handling", "title": "Juniper Failure Handling", "text": "Juniper failure handling permits one automatic helper restart while idle but never restarts during an active recording." },
+        { "sourceKey": "section:3", "kind": "markdown", "section": "Marigold Rollback", "title": "Marigold Rollback", "text": "Marigold rollback replaces document chunks and FTS rows inside one transaction while preserving the document identity." },
+        { "sourceKey": "section:4", "kind": "markdown", "section": "Tundra Deployment", "title": "Tundra Deployment", "text": "Tundra deployment packages the Windows helper through extraResources and produces an unsigned per user NSIS installer." },
+        { "sourceKey": "section:5", "kind": "markdown", "section": "Vela Privacy Boundary", "title": "Vela Privacy Boundary", "text": "Vela privacy rules send only selected excerpts to OpenAI and keep complete documents in the local SQLite index." }
+      ]
+    },
+    {
+      "format": "text",
+      "path": "Operations-Runbook.txt",
+      "chunks": [
+        { "sourceKey": "section:1", "kind": "text", "section": "Aster Memory Guard", "title": "Aster Memory Guard", "text": "Aster memory protection caps the rolling conversation at five reviewer turns and stores only short answer summaries." },
+        { "sourceKey": "section:2", "kind": "text", "section": "Boreal Recovery", "title": "Boreal Recovery", "text": "Boreal recovery removes abandoned temporary audio older than one hour during application startup." },
+        { "sourceKey": "section:3", "kind": "text", "section": "Coral Device Switch", "title": "Coral Device Switch", "text": "Coral device switching falls back visibly to the Windows default output when the selected endpoint disappears." },
+        { "sourceKey": "section:4", "kind": "text", "section": "Drift Cleanup", "title": "Drift Cleanup", "text": "Drift cleanup deletes temporary WAV data after transcription reaches success, failure, or cancellation." },
+        { "sourceKey": "section:5", "kind": "text", "section": "Ember Limits", "title": "Ember Limits", "text": "Ember request limits allow five retrieved chunks and enforce a twelve thousand character evidence budget." }
+      ]
+    }
+  ],
+  "cases": [
+    { "id": "p01", "format": "pptx", "question": "How does the Zephyr coordinator preserve write availability?", "expectedChunkIds": ["doc-pptx:slide:1:part:1"] },
+    { "id": "p02", "format": "pptx", "question": "How many replicas does Adaptive Quorum accept?", "expectedChunkIds": ["doc-pptx:slide:1:part:1"] },
+    { "id": "p03", "format": "pptx", "question": "What happens to reconciliation markers during minority partitions?", "expectedChunkIds": ["doc-pptx:slide:1:part:1"] },
+    { "id": "p04", "format": "pptx", "question": "What does the Cedar ingestion pipeline validate first?", "expectedChunkIds": ["doc-pptx:slide:2:part:1"] },
+    { "id": "p05", "format": "pptx", "question": "Where do invalid Cedar signatures go?", "expectedChunkIds": ["doc-pptx:slide:2:part:1"] },
+    { "id": "p06", "format": "pptx", "question": "Can an invalid event envelope reach the project index?", "expectedChunkIds": ["doc-pptx:slide:2:part:1"] },
+    { "id": "p07", "format": "pptx", "question": "How long is the Nimbus cache lease?", "expectedChunkIds": ["doc-pptx:slide:3:part:1"] },
+    { "id": "p08", "format": "pptx", "question": "What invalidates a Nimbus entry?", "expectedChunkIds": ["doc-pptx:slide:3:part:1"] },
+    { "id": "p09", "format": "pptx", "question": "Does the source content hash affect caching?", "expectedChunkIds": ["doc-pptx:slide:3:part:1"] },
+    { "id": "p10", "format": "pptx", "question": "Which scheduling policy does Orchid use?", "expectedChunkIds": ["doc-pptx:slide:4:part:1"] },
+    { "id": "p11", "format": "pptx", "question": "Why does Orchid reserve one worker?", "expectedChunkIds": ["doc-pptx:slide:4:part:1"] },
+    { "id": "p12", "format": "pptx", "question": "How are urgent reviewer requests scheduled?", "expectedChunkIds": ["doc-pptx:slide:4:part:1"] },
+    { "id": "p13", "format": "pptx", "question": "Is Falcon telemetry enabled by default?", "expectedChunkIds": ["doc-pptx:slide:5:part:1"] },
+    { "id": "p14", "format": "pptx", "question": "What local stage timing data is recorded?", "expectedChunkIds": ["doc-pptx:slide:5:part:1"] },
+    { "id": "p15", "format": "pptx", "question": "Does telemetry retain prompts or document text?", "expectedChunkIds": ["doc-pptx:slide:5:part:1"] },
+
+    { "id": "d01", "format": "pdf", "question": "How many reviewer questions are in the Lattice benchmark?", "expectedChunkIds": ["doc-pdf:page:1:part:1"] },
+    { "id": "d02", "format": "pdf", "question": "Which latency statistics does Lattice separate?", "expectedChunkIds": ["doc-pdf:page:1:part:1"] },
+    { "id": "d03", "format": "pdf", "question": "Does the benchmark combine retrieval latency with model latency?", "expectedChunkIds": ["doc-pdf:page:1:part:1"] },
+    { "id": "d04", "format": "pdf", "question": "What kind of project descriptions are in Saffron?", "expectedChunkIds": ["doc-pdf:page:2:part:1"] },
+    { "id": "d05", "format": "pdf", "question": "Are real meeting recordings included in the Saffron dataset?", "expectedChunkIds": ["doc-pdf:page:2:part:1"] },
+    { "id": "d06", "format": "pdf", "question": "How is the synthetic dataset anonymized?", "expectedChunkIds": ["doc-pdf:page:2:part:1"] },
+    { "id": "d07", "format": "pdf", "question": "How does Harbor treat document excerpts?", "expectedChunkIds": ["doc-pdf:page:3:part:1"] },
+    { "id": "d08", "format": "pdf", "question": "What navigation does the threat model block?", "expectedChunkIds": ["doc-pdf:page:3:part:1"] },
+    { "id": "d09", "format": "pdf", "question": "Are renderer excerpts trusted input?", "expectedChunkIds": ["doc-pdf:page:3:part:1"] },
+    { "id": "d10", "format": "pdf", "question": "Which boost is removed in the Mosaic ablation?", "expectedChunkIds": ["doc-pdf:page:4:part:1"] },
+    { "id": "d11", "format": "pdf", "question": "What kind of questions lose lexical recall?", "expectedChunkIds": ["doc-pdf:page:4:part:1"] },
+    { "id": "d12", "format": "pdf", "question": "What did removing filename boosts reveal?", "expectedChunkIds": ["doc-pdf:page:4:part:1"] },
+    { "id": "d13", "format": "pdf", "question": "Which Windows version ran the Quartz experiment?", "expectedChunkIds": ["doc-pdf:page:5:part:1"] },
+    { "id": "d14", "format": "pdf", "question": "How much memory did the runtime laptop have?", "expectedChunkIds": ["doc-pdf:page:5:part:1"] },
+    { "id": "d15", "format": "pdf", "question": "How many processor cores were used for Quartz?", "expectedChunkIds": ["doc-pdf:page:5:part:1"] },
+
+    { "id": "m01", "format": "markdown", "question": "When does Kestrel read the output endpoint?", "expectedChunkIds": ["doc-markdown:section:1:part:1"] },
+    { "id": "m02", "format": "markdown", "question": "Will a changed Windows default device take effect?", "expectedChunkIds": ["doc-markdown:section:1:part:1"] },
+    { "id": "m03", "format": "markdown", "question": "When may Juniper automatically restart the helper?", "expectedChunkIds": ["doc-markdown:section:2:part:1"] },
+    { "id": "m04", "format": "markdown", "question": "Can the helper restart during an active recording?", "expectedChunkIds": ["doc-markdown:section:2:part:1"] },
+    { "id": "m05", "format": "markdown", "question": "How does Marigold preserve document identity during rollback?", "expectedChunkIds": ["doc-markdown:section:3:part:1"] },
+    { "id": "m06", "format": "markdown", "question": "Are chunks and FTS rows replaced transactionally?", "expectedChunkIds": ["doc-markdown:section:3:part:1"] },
+    { "id": "m07", "format": "markdown", "question": "How does Tundra package the Windows helper?", "expectedChunkIds": ["doc-markdown:section:4:part:1"] },
+    { "id": "m08", "format": "markdown", "question": "What installer does Tundra deployment produce?", "expectedChunkIds": ["doc-markdown:section:4:part:1"] },
+    { "id": "m09", "format": "markdown", "question": "Which excerpts do Vela privacy rules send to OpenAI?", "expectedChunkIds": ["doc-markdown:section:5:part:1"] },
+    { "id": "m10", "format": "markdown", "question": "Where do complete documents remain?", "expectedChunkIds": ["doc-markdown:section:5:part:1"] },
+
+    { "id": "t01", "format": "text", "question": "How many reviewer turns does Aster retain?", "expectedChunkIds": ["doc-text:section:1:part:1"] },
+    { "id": "t02", "format": "text", "question": "Does the memory guard store complete answers?", "expectedChunkIds": ["doc-text:section:1:part:1"] },
+    { "id": "t03", "format": "text", "question": "How old must abandoned audio be for Boreal recovery?", "expectedChunkIds": ["doc-text:section:2:part:1"] },
+    { "id": "t04", "format": "text", "question": "When does startup remove temporary audio?", "expectedChunkIds": ["doc-text:section:2:part:1"] },
+    { "id": "t05", "format": "text", "question": "What happens when the selected Coral endpoint disappears?", "expectedChunkIds": ["doc-text:section:3:part:1"] },
+    { "id": "t06", "format": "text", "question": "Is fallback to Windows default output visible?", "expectedChunkIds": ["doc-text:section:3:part:1"] },
+    { "id": "t07", "format": "text", "question": "When does Drift cleanup delete WAV data?", "expectedChunkIds": ["doc-text:section:4:part:1"] },
+    { "id": "t08", "format": "text", "question": "Does cancellation retain a temporary recording?", "expectedChunkIds": ["doc-text:section:4:part:1"] },
+    { "id": "t09", "format": "text", "question": "How many retrieved chunks do Ember limits allow?", "expectedChunkIds": ["doc-text:section:5:part:1"] },
+    { "id": "t10", "format": "text", "question": "What is the character budget for evidence?", "expectedChunkIds": ["doc-text:section:5:part:1"] }
+  ]
+}
