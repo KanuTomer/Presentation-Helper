@@ -14,7 +14,11 @@
     "test:watch": "vitest",
     "test:helper": "dotnet test native/PresenterAI.WindowsHelper.Tests/PresenterAI.WindowsHelper.Tests.csproj -c Release",
     "test:helper-smoke": "node scripts/helper-smoke.mjs",
-    "helper:build": "dotnet publish native/PresenterAI.WindowsHelper/PresenterAI.WindowsHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o resources/windows-helper",
+    "test:packaged-fts": "node scripts/packaged-fts-smoke.mjs",
+    "postinstall": "patch-package --error-on-fail",
+    "eval:m3:live": "tsx scripts/m3-live-eval.ts",
+    "eval:m4": "tsx scripts/m4-offline-eval.ts",
+    "helper:build": "dotnet publish native/PresenterAI.WindowsHelper/PresenterAI.WindowsHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o resources/windows-helper",
     "verify": "npm run typecheck && npm test && npm run test:helper && npm run build",
     "package:win": "npm run helper:build && npm run build && electron-builder --win nsis --publish never"
   },
@@ -40,7 +44,9 @@
     "electron-builder": "^26.0.12",
     "electron-vite": "5.0.0",
     "jsdom": "^27.2.0",
+    "patch-package": "8.0.1",
     "tailwindcss": "4.3.2",
+    "tsx": "4.23.1",
     "typescript": "^5.9.3",
     "vite": "^7.2.2",
     "vitest": "^4.0.9"
@@ -53,8 +59,19 @@
       "output": "release"
     },
     "asar": true,
-    "files": ["out/**/*", "package.json"],
-    "extraResources": [{ "from": "resources/windows-helper", "to": "windows-helper", "filter": ["**/*"] }],
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/windows-helper",
+        "to": "windows-helper",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "build/icon.svg",

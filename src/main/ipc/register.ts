@@ -1,14 +1,19 @@
 import { app, dialog, globalShortcut, ipcMain, screen } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { channels } from '../../shared/channels.js'
-import type { AppSettings, AppStatus, CaptureTestInput } from '../../shared/contracts.js'
+import {
+  documentImportResultSchema, documentInspectionPageSchema, documentSearchHitsSchema,
+  type AppSettings, type AppStatus, type AskResult, type CaptureTestInput,
+  type DocumentInspectionPage, type DocumentSearchHit
+} from '../../shared/contracts.js'
 import type { SettingsStore } from '../settings/store.js'
 import type { SecretStore } from '../settings/secrets.js'
 import type { RetrievalIndex } from '../retrieval/index.js'
-import type { AiService } from '../ai/service.js'
+import { toAiErrorInfo, type AiService } from '../ai/service.js'
 import type { AudioController } from '../audio/controller.js'
 import type { WindowManager } from '../windows/windowManager.js'
 import type { CaptureProtection } from '../windows/captureProtection.js'
+import { parseDocumentId, parseDocumentInspectionRequest, parseDocumentSearchQuery } from './documentValidation.js'
 
 interface Services { store: SettingsStore; secrets: SecretStore; retrieval: RetrievalIndex; ai: AiService; audio: AudioController; windows: WindowManager; capture: CaptureProtection }
 
@@ -55,21 +60,33 @@ export function registerIpc(services: Services): void {
   handle<[string]>(channels.saveApiKey, (_event, key) => secrets.saveKey(key))
   handle(channels.deleteApiKey, () => secrets.deleteKey())
   handle(channels.testApiKey, () => ai.testKey())
-  handle<[string]>(channels.ask, async (_event, question) => {
-    audio.operation = 'retrieving'; broadcast()
-    globalShortcut.register('Escape', () => void audio.cancel())
-    try { audio.operation = 'generating'; broadcast(); return await ai.ask(question) }
+  handle<[string]>(channels.ask, async (_event, question): Promise<AskResult> => {
+    if (ai.isBusy) return { ok: false, error: { code: 'busy', message: 'Another question is already being answered.', retryable: false } }
+    audio.operation = 'generating'; broadcast()
+    globalShortcut.register('Escape', () => ai.cancel())
+    try { return { ok: true, response: await ai.ask(question) } }
+    catch (error) { return { ok: false, error: toAiErrorInfo(error) } }
     finally { globalShortcut.unregister('Escape'); audio.operation = 'idle'; broadcast() }
   })
   handle(channels.cancel, () => audio.cancel())
   handle(channels.clearSession, () => { ai.clearSession() })
   handle(channels.getUsage, () => store.usage)
-  handle(channels.listDocuments, () => store.documents)
+  handle(channels.listDocuments, () => retrieval.listDocuments())
   handle(channels.selectDocuments, async () => {
     const result = await dialog.showOpenDialog(windows.window!, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Presentation documents', extensions: ['pptx', 'pdf', 'md', 'markdown', 'txt'] }] })
-    return result.canceled ? store.documents : retrieval.addFiles(result.filePaths)
+    if (result.canceled) return { documents: retrieval.listDocuments(), outcomes: [] }
+    return documentImportResultSchema.parse(await retrieval.addFiles(result.filePaths))
   })
-  handle<[string]>(channels.removeDocument, (_event, id) => retrieval.remove(id))
+  handle<[unknown]>(channels.removeDocument, (_event, id) => retrieval.remove(parseDocumentId(id)))
+  handle<[unknown]>(channels.searchDocuments, async (_event, query): Promise<DocumentSearchHit[]> => {
+    const normalized = parseDocumentSearchQuery(query)
+    return documentSearchHitsSchema.parse(await retrieval.searchDocuments(normalized))
+  })
+  handle<[unknown]>(channels.inspectDocument, async (_event, request): Promise<DocumentInspectionPage> => {
+    const parsed = parseDocumentInspectionRequest(request)
+    const page = await retrieval.inspectDocument(parsed.documentId, parsed.offset, parsed.limit)
+    return documentInspectionPageSchema.parse(page)
+  })
   handle<[boolean]>(channels.clickThrough, async (_event, enabled) => { windows.setClickThrough(enabled); await store.updateSettings({ clickThrough: enabled }) })
   handle<[number]>(channels.opacity, async (_event, value) => { windows.setOpacity(value); await store.updateSettings({ opacity: value }) })
   handle(channels.showSettings, () => windows.openSettings())

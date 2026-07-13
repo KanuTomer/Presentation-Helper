@@ -50,14 +50,22 @@ jobs:
       - name: Build Electron application
         run: npm run build
 
+      - name: Evaluate Milestone 4 retrieval offline
+        run: npm run eval:m4
+
       - name: Create unsigned NSIS installer
         run: npx electron-builder --win nsis --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      - name: Upload Windows installer
+      - name: Verify packaged Electron SQLite FTS5
+        run: npm run test:packaged-fts
+
+      - name: Upload Windows installer and Milestone 4 report
         uses: actions/upload-artifact@v4
         with:
           name: PresenterAI-Windows-beta
-          path: release/PresenterAI-*-setup.exe
+          path: |
+            release/PresenterAI-*-setup.exe
+            artifacts/m4/m4-retrieval-report.json
           if-no-files-found: error
