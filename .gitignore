@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+release/
+.tsbuild/
+coverage/
+resources/windows-helper/
+*.log
+*.wav
+.env*
+!.env.example

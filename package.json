@@ -1,0 +1,54 @@
+{
+  "name": "presenter-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private, local-first AI presentation copilot for Windows",
+  "main": "out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "helper:build": "dotnet publish native/PresenterAI.WindowsHelper/PresenterAI.WindowsHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o resources/windows-helper",
+    "package:win": "npm run helper:build && npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "@electron-toolkit/utils": "4.0.0",
+    "fast-xml-parser": "^5.2.5",
+    "fflate": "^0.8.2",
+    "openai": "6.46.0",
+    "pdfjs-dist": "6.1.200",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron": "43.1.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "5.0.0",
+    "jsdom": "^27.2.0",
+    "tailwindcss": "4.3.2",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2",
+    "vitest": "^4.0.9"
+  },
+  "build": {
+    "appId": "com.presenterai.desktop",
+    "productName": "PresenterAI",
+    "asar": true,
+    "files": ["out/**/*", "package.json"],
+    "extraResources": [{ "from": "resources/windows-helper", "to": "windows-helper", "filter": ["**/*"] }],
+    "win": { "target": "nsis", "artifactName": "PresenterAI-${version}-setup.${ext}" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}
