@@ -10,7 +10,7 @@ PresenterAI is a private, local-first Windows presentation copilot. It runs as a
 - OpenAI Responses API with `store:false`, structured presenter output, local rolling context, cancellation, and grounded-evidence validation.
 - DPAPI-backed API-key encryption through Electron `safeStorage`; the renderer never receives the stored key.
 - Local PPTX, PDF, Markdown, and text parsing with SQLite FTS5 retrieval.
-- C#/.NET 8 WASAPI loopback helper source with restricted Ctrl+Shift+Space key-down/key-up detection.
+- Self-contained C#/.NET 8 WASAPI loopback helper with output-device selection, 16 kHz mono PCM finalization, restricted Ctrl+Shift+Space key-down/key-up detection, health reporting, and one idle restart.
 - Bounded transcription through `gpt-4o-mini-transcribe`, temporary-file cleanup, privacy disclosure, and local cost estimates.
 
 Application-specific Chrome process-tree capture and continuous listening remain disabled until their experimental gates are validated. Capture protection is never presented as a universal guarantee.
@@ -34,11 +34,13 @@ Without the .NET helper, the manual document-grounded copilot works normally; au
 Verification:
 
 ```powershell
-npm run typecheck
-npm test
-npm run build
+npm run verify
+npm run helper:build
+npm run test:helper-smoke
 npm run package:win
 ```
+
+The unsigned per-user NSIS installer is written to `release/`. Uninstalling it does not remove PresenterAI documents or settings. The Windows GitHub Actions workflow repeats the automated checks and uploads the installer as a workflow artifact; it does not create a public release.
 
 ## Privacy model
 
@@ -51,3 +53,5 @@ npm run package:win
 ## Capture compatibility
 
 Complete the checklist in [docs/capture-compatibility/matrix.md](docs/capture-compatibility/matrix.md) on every target Windows/Electron/Chrome/OBS combination. A successful API call is not equivalent to verified exclusion.
+
+Complete the physical-device and Meet checks in [docs/manual/windows-beta-validation.md](docs/manual/windows-beta-validation.md) before treating a build as a validated beta.

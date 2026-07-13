@@ -5,6 +5,9 @@ release/
 .tsbuild/
 coverage/
 resources/windows-helper/
+native/**/bin/
+native/**/obj/
+native/**/TestResults/
 *.log
 *.wav
 .env*

@@ -1,6 +1,7 @@
-import { dialog, globalShortcut, ipcMain } from 'electron'
+import { app, dialog, globalShortcut, ipcMain, screen } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { channels } from '../../shared/channels.js'
-import type { AppSettings, AppStatus } from '../../shared/contracts.js'
+import type { AppSettings, AppStatus, CaptureTestInput } from '../../shared/contracts.js'
 import type { SettingsStore } from '../settings/store.js'
 import type { SecretStore } from '../settings/secrets.js'
 import type { RetrievalIndex } from '../retrieval/index.js'
@@ -20,8 +21,11 @@ export function registerIpc(services: Services): void {
   const { store, secrets, retrieval, ai, audio, windows, capture } = services
   const handle = <T extends unknown[]>(channel: string, fn: (event: Electron.IpcMainInvokeEvent, ...args: T) => unknown) => ipcMain.handle(channel, (event, ...args) => { validate(event); return fn(event, ...(args as T)) })
   const status = (): AppStatus => ({
-    operation: audio.operation, capture: capture.status(windows.window), listening: audio.listening, audioSource: 'System output (WASAPI loopback)',
-    temporaryAudioExists: Boolean(audio.temporaryAudio), helperAvailable: audio.helper.available, shortcutWarnings: windows.shortcutWarnings
+    operation: audio.operation, capture: capture.status(windows.window), listening: audio.listening,
+    audioSource: audio.devices.find((device) => device.id === store.settings.selectedAudioEndpointId)?.name ?? 'Windows default output (WASAPI loopback)',
+    temporaryAudioExists: Boolean(audio.temporaryAudio), helperAvailable: audio.helper.available, helperState: audio.helper.state,
+    helperError: audio.helper.lastError ?? audio.warning, audioDevices: audio.devices, selectedAudioEndpointId: store.settings.selectedAudioEndpointId,
+    lastCapture: audio.lastCapture, shortcutWarnings: windows.shortcutWarnings
   })
   const broadcast = (): void => windows.window?.webContents.send(channels.status, status())
   audio.onState = broadcast
@@ -44,6 +48,7 @@ export function registerIpc(services: Services): void {
       try { await audio.configureShortcut(settings.listenShortcut) }
       catch (error) { await store.updateSettings({ listenShortcut: previous.listenShortcut }); await audio.configureShortcut(previous.listenShortcut); throw error }
     }
+    if (patch.selectedAudioEndpointId !== undefined) await audio.refreshDevices()
     broadcast(); return store.settings
   })
   handle(channels.hasApiKey, () => secrets.hasKey())
@@ -70,4 +75,21 @@ export function registerIpc(services: Services): void {
   handle(channels.showSettings, () => windows.openSettings())
   handle(channels.startListening, () => audio.startCapture())
   handle(channels.stopListening, () => audio.stopAndProcess())
+  handle(channels.refreshAudioDevices, () => audio.refreshDevices())
+  handle<[boolean]>(channels.setCaptureProtection, (_event, enabled) => {
+    if (!windows.window) throw new Error('Overlay window is unavailable.')
+    capture.setEnabled(windows.window, enabled); broadcast()
+  })
+  handle<[CaptureTestInput]>(channels.saveCaptureResult, async (_event, input) => {
+    const gpu = await app.getGPUInfo('basic') as { gpuDevice?: Array<{ deviceString?: string }> }
+    const result = {
+      ...input, id: randomUUID(), testedAt: new Date().toISOString(),
+      environment: {
+        windowsBuild: process.getSystemVersion(), presenterVersion: app.getVersion(), electronVersion: process.versions.electron,
+        gpu: gpu.gpuDevice?.[0]?.deviceString ?? 'Unknown', monitorCount: screen.getAllDisplays().length
+      }
+    }
+    await store.addCaptureResult(result); broadcast(); return result
+  })
+  handle<[string]>(channels.removeCaptureResult, async (_event, id) => { await store.removeCaptureResult(id); broadcast() })
 }

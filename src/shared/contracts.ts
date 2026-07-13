@@ -7,6 +7,11 @@ export const questionCategories = [
 export type QuestionCategory = (typeof questionCategories)[number]
 export type OperationState = 'idle' | 'listening' | 'transcribing' | 'retrieving' | 'generating' | 'error'
 export type ModelMode = 'normal' | 'strong'
+export type HelperLifecycle = 'missing' | 'starting' | 'ready' | 'capturing' | 'failed'
+export type CaptureTestOutcome = 'overlay-absent' | 'overlay-black' | 'overlay-visible' | 'unsupported' | 'untested'
+
+export interface AudioDevice { id: string; name: string; isDefault: boolean }
+export interface AudioCaptureResult { path: string; durationMs: number; bytes: number; sampleRate: number; channels: number; endpointId: string }
 
 export interface Evidence { chunkId: string; documentName: string; location: string }
 export interface AssistantResponse {
@@ -41,10 +46,18 @@ export interface DocumentInfo {
 export interface CaptureCompatibilityResult {
   id: string
   path: string
-  appVersion: string
-  result: 'overlay-absent' | 'overlay-black' | 'overlay-visible' | 'untested'
+  captureAppVersion: string
+  controlResult: CaptureTestOutcome
+  protectedResult: CaptureTestOutcome
   testedAt: string
   notes: string
+  environment: {
+    windowsBuild: string
+    presenterVersion: string
+    electronVersion: string
+    gpu: string
+    monitorCount: number
+  }
 }
 
 export interface CaptureProtectionStatus {
@@ -65,6 +78,7 @@ export interface AppSettings {
   hideShortcut: string
   listenShortcut: string
   projectSummary: string
+  selectedAudioEndpointId?: string
   inrPerUsd?: number
 }
 
@@ -75,7 +89,20 @@ export interface AppStatus {
   audioSource: string
   temporaryAudioExists: boolean
   helperAvailable: boolean
+  helperState: HelperLifecycle
+  helperError?: string
+  audioDevices: AudioDevice[]
+  selectedAudioEndpointId?: string
+  lastCapture?: Omit<AudioCaptureResult, 'path'>
   shortcutWarnings: string[]
+}
+
+export interface CaptureTestInput {
+  path: string
+  captureAppVersion: string
+  controlResult: CaptureTestOutcome
+  protectedResult: CaptureTestOutcome
+  notes: string
 }
 
 export interface UsageSummary { inputTokens: number; outputTokens: number; audioMinutes: number; estimatedUsd: number }
@@ -100,6 +127,10 @@ export interface PresenterAPI {
   showSettings(): Promise<void>
   startListening(): Promise<void>
   stopListening(): Promise<void>
+  refreshAudioDevices(): Promise<AudioDevice[]>
+  setCaptureProtection(enabled: boolean): Promise<void>
+  saveCaptureResult(result: CaptureTestInput): Promise<CaptureCompatibilityResult>
+  removeCaptureResult(id: string): Promise<void>
   onStatus(callback: (status: AppStatus) => void): () => void
   onFocusAsk(callback: () => void): () => void
   onOpenSettings(callback: () => void): () => void

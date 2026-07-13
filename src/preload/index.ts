@@ -22,6 +22,10 @@ const api: PresenterAPI = {
   showSettings: () => ipcRenderer.invoke(channels.showSettings),
   startListening: () => ipcRenderer.invoke(channels.startListening),
   stopListening: () => ipcRenderer.invoke(channels.stopListening),
+  refreshAudioDevices: () => ipcRenderer.invoke(channels.refreshAudioDevices),
+  setCaptureProtection: (enabled) => ipcRenderer.invoke(channels.setCaptureProtection, enabled),
+  saveCaptureResult: (result) => ipcRenderer.invoke(channels.saveCaptureResult, result),
+  removeCaptureResult: (id) => ipcRenderer.invoke(channels.removeCaptureResult, id),
   onStatus: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, value: Parameters<typeof callback>[0]) => callback(value)
     ipcRenderer.on(channels.status, listener)

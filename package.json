@@ -12,7 +12,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:helper": "dotnet test native/PresenterAI.WindowsHelper.Tests/PresenterAI.WindowsHelper.Tests.csproj -c Release",
+    "test:helper-smoke": "node scripts/helper-smoke.mjs",
     "helper:build": "dotnet publish native/PresenterAI.WindowsHelper/PresenterAI.WindowsHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o resources/windows-helper",
+    "verify": "npm run typecheck && npm test && npm run test:helper && npm run build",
     "package:win": "npm run helper:build && npm run build && electron-builder --win nsis"
   },
   "dependencies": {
@@ -45,10 +48,27 @@
   "build": {
     "appId": "com.presenterai.desktop",
     "productName": "PresenterAI",
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
     "asar": true,
     "files": ["out/**/*", "package.json"],
     "extraResources": [{ "from": "resources/windows-helper", "to": "windows-helper", "filter": ["**/*"] }],
-    "win": { "target": "nsis", "artifactName": "PresenterAI-${version}-setup.${ext}" },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.svg",
+      "artifactName": "PresenterAI-${version}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "shortcutName": "PresenterAI"
+    }
   }
 }

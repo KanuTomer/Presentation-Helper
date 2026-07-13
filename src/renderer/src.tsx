@@ -7,7 +7,7 @@ type View = 'copilot' | 'documents' | 'settings' | 'privacy' | 'capture'
 
 const blankStatus: AppStatus = {
   operation: 'idle', listening: false, audioSource: 'System output (WASAPI loopback)', temporaryAudioExists: false, helperAvailable: false,
-  shortcutWarnings: [], capture: { requested: false, electronReported: false, verifiedResults: [] }
+  helperState: 'missing', audioDevices: [], shortcutWarnings: [], capture: { requested: false, electronReported: false, verifiedResults: [] }
 }
 
 function App(): React.JSX.Element {
@@ -20,6 +20,7 @@ function App(): React.JSX.Element {
   const [response, setResponse] = useState<AssistantResponse>()
   const [error, setError] = useState('')
   const [hasKey, setHasKey] = useState(false)
+  const [recordingMs, setRecordingMs] = useState(0)
   const input = useRef<HTMLTextAreaElement>(null)
 
   const refresh = async (): Promise<void> => {
@@ -39,6 +40,12 @@ function App(): React.JSX.Element {
     ]
     return () => cleanups.forEach((cleanup) => cleanup())
   }, [])
+  useEffect(() => {
+    if (!status.listening) { setRecordingMs(0); return }
+    const startedAt = Date.now()
+    const timer = window.setInterval(() => setRecordingMs(Date.now() - startedAt), 100)
+    return () => window.clearInterval(timer)
+  }, [status.listening])
 
   const ask = async (): Promise<void> => {
     setError(''); setResponse(undefined)
@@ -55,7 +62,7 @@ function App(): React.JSX.Element {
       </div>
     </header>
 
-    {status.listening && <div className="listening-banner"><span className="pulse" /> LISTENING TO SYSTEM OUTPUT <button onClick={() => window.presenter.cancel()}>Cancel</button></div>}
+    {status.listening && <div className="listening-banner"><span className="pulse" /> LISTENING TO SYSTEM OUTPUT · {(recordingMs / 1000).toFixed(1)}s <button onClick={() => window.presenter.cancel()}>Cancel</button></div>}
     {status.operation !== 'idle' && !status.listening && <div className="progress-banner">{status.operation.toUpperCase()}… <button onClick={() => window.presenter.cancel()}>Esc / Cancel</button></div>}
 
     <nav className="tabs no-drag">
@@ -65,9 +72,9 @@ function App(): React.JSX.Element {
     <section className="content no-drag">
       {view === 'copilot' && <Copilot question={question} setQuestion={setQuestion} input={input} ask={ask} response={response} error={error} hasKey={hasKey} helperAvailable={status.helperAvailable} listening={status.listening} />}
       {view === 'documents' && <Documents documents={documents} onChange={refresh} />}
-      {view === 'settings' && settings && <Settings settings={settings} hasKey={hasKey} onChange={refresh} setError={setError} />}
-      {view === 'privacy' && <Privacy status={status} documents={documents} usage={usage} />}
-      {view === 'capture' && <CaptureStatus status={status} />}
+      {view === 'settings' && settings && <Settings settings={settings} status={status} recordingMs={recordingMs} hasKey={hasKey} onChange={refresh} setError={setError} />}
+      {view === 'privacy' && <Privacy status={status} recordingMs={recordingMs} documents={documents} usage={usage} />}
+      {view === 'capture' && <CaptureStatus status={status} onChange={refresh} />}
     </section>
     <footer><span>Audio defaults OFF</span><span>Ctrl+Shift+I restores interaction</span></footer>
   </main>
@@ -103,31 +110,39 @@ function Documents({ documents, onChange }: { documents: DocumentInfo[]; onChang
     {documents.length === 0 ? <Notice>No documents indexed. Add PPTX, PDF, Markdown, or text files.</Notice> : documents.map((doc) => <div className="document" key={doc.id}><div><strong>{doc.name}</strong><small>{doc.kind.toUpperCase()} · {doc.chunkCount} chunks</small></div><button onClick={async () => { await window.presenter.removeDocument(doc.id); await onChange() }}>Remove</button></div>)}</div>
 }
 
-function Settings({ settings, hasKey, onChange, setError }: { settings: AppSettings; hasKey: boolean; onChange(): Promise<void>; setError(v: string): void }) {
+function Settings({ settings, status, recordingMs, hasKey, onChange, setError }: { settings: AppSettings; status: AppStatus; recordingMs: number; hasKey: boolean; onChange(): Promise<void>; setError(v: string): void }) {
   const [key, setKey] = useState(''); const [message, setMessage] = useState('')
   const update = async (patch: Partial<AppSettings>) => { await window.presenter.updateSettings(patch); await onChange() }
   return <div className="stack"><h2>Settings</h2>
     <fieldset><legend>OpenAI API key</legend><p>{hasKey ? 'A DPAPI-encrypted key is stored for this Windows user.' : 'No API key is stored.'}</p><input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" /><div className="actions"><button className="primary" onClick={async () => { try { await window.presenter.saveApiKey(key); setKey(''); setMessage('Key saved.'); await onChange() } catch (e) { setError((e as Error).message) } }}>Save key</button><button disabled={!hasKey} onClick={async () => setMessage((await window.presenter.testApiKey()).message)}>Test</button><button disabled={!hasKey} onClick={async () => { await window.presenter.deleteApiKey(); await onChange() }}>Delete</button></div>{message && <small>{message}</small>}</fieldset>
     <fieldset><legend>Answer model</legend><select value={settings.modelMode} onChange={(e) => void update({ modelMode: e.target.value as AppSettings['modelMode'] })}><option value="normal">Normal · {settings.normalModel}</option><option value="strong">Strong · {settings.strongModel}</option></select></fieldset>
+    <fieldset><legend>System audio</legend><div className="helper-health"><span className={`health-dot ${status.helperState}`} /><strong>{status.helperState}</strong></div>{status.listening && <p>Recording: {(recordingMs / 1000).toFixed(1)} seconds</p>}{status.helperError && <p className="muted">{status.helperError}</p>}<label>Output device<select value={settings.selectedAudioEndpointId ?? ''} disabled={!status.helperAvailable} onChange={(e) => void update({ selectedAudioEndpointId: e.target.value || undefined })}><option value="">Windows default output</option>{status.audioDevices.map((device) => <option value={device.id} key={device.id}>{device.name}{device.isDefault ? ' (default)' : ''}</option>)}</select></label><button onClick={async () => { await window.presenter.refreshAudioDevices(); await onChange() }}>Refresh devices</button></fieldset>
     <fieldset><legend>Overlay</legend><label>Opacity <input type="range" min="0.45" max="1" step="0.01" value={settings.opacity} onChange={(e) => void update({ opacity: Number(e.target.value) })} /></label><label className="toggle"><input type="checkbox" checked={settings.clickThrough} onChange={(e) => void update({ clickThrough: e.target.checked })} /> Click-through mode</label></fieldset>
     <fieldset><legend>Project summary</legend><textarea value={settings.projectSummary} onChange={(e) => void update({ projectSummary: e.target.value })} placeholder="Optional user-authored facts that may be sent with each request." /></fieldset>
     <fieldset><legend>Shortcuts</legend><label>Ask <input value={settings.askShortcut} onChange={(e) => void update({ askShortcut: e.target.value })} /></label><label>Hide/show <input value={settings.hideShortcut} onChange={(e) => void update({ hideShortcut: e.target.value })} /></label><label>Hold-to-listen <input value={settings.listenShortcut} onChange={(e) => void update({ listenShortcut: e.target.value })} /></label><p className="muted">Emergency interaction restore: Ctrl+Shift+I.</p></fieldset>
   </div>
 }
 
-function Privacy({ status, documents, usage }: { status: AppStatus; documents: DocumentInfo[]; usage?: UsageSummary }) {
+function Privacy({ status, recordingMs, documents, usage }: { status: AppStatus; recordingMs: number; documents: DocumentInfo[]; usage?: UsageSummary }) {
   return <div className="stack"><h2>Privacy & usage</h2><Notice tone="warning">Live AI assistance may be prohibited in interviews, examinations, or graded assessments. Check the applicable rules and obtain consent where required.</Notice>
-    <div className="info-grid"><Info label="Listening" value={status.listening ? 'ACTIVE' : 'OFF'} /><Info label="Audio source" value={status.audioSource} /><Info label="Temporary audio" value={status.temporaryAudioExists ? 'Exists during current operation' : 'None'} /><Info label="Local documents" value={`${documents.length} indexed`} /></div>
+    <div className="info-grid"><Info label="Listening" value={status.listening ? `ACTIVE · ${(recordingMs / 1000).toFixed(1)}s` : 'OFF'} /><Info label="Audio source" value={status.audioSource} /><Info label="Audio helper" value={status.helperState} /><Info label="Temporary audio" value={status.temporaryAudioExists ? 'Exists during current operation' : 'None'} /><Info label="Last capture" value={status.lastCapture ? `${(status.lastCapture.durationMs / 1000).toFixed(1)}s · ${status.lastCapture.sampleRate} Hz mono` : 'None this session'} /><Info label="Local documents" value={`${documents.length} indexed`} /></div>
     <h3>Sent to OpenAI only when requested</h3><ul><li>The typed question or bounded reviewer-audio segment</li><li>Up to five locally retrieved document chunks</li><li>Up to five recent question/response summaries</li><li>Your optional project summary</li></ul>
     <p>No analytics or telemetry are implemented. Responses use <code>store:false</code>, but OpenAI API retention policies may still apply.</p>
     {usage && <div className="usage"><strong>Local session estimate</strong><span>${usage.estimatedUsd.toFixed(4)} USD</span><small>{usage.inputTokens + usage.outputTokens} text tokens · {usage.audioMinutes.toFixed(2)} audio minutes</small></div>}
     <button onClick={() => window.presenter.clearSession()}>Clear rolling conversation context</button></div>
 }
 
-function CaptureStatus({ status }: { status: AppStatus }) {
-  return <div className="stack capture-test"><h2>Capture protection</h2><div className="info-grid"><Info label="Requested" value={status.capture.requested ? 'Yes' : 'No'} /><Info label="Electron reported" value={status.capture.electronReported ? 'Enabled' : 'Not enabled'} /><Info label="Windows affinity" value={status.capture.windowsAffinity ?? 'Unknown'} /><Info label="Verified paths" value={String(status.capture.verifiedResults.length)} /></div>
+function CaptureStatus({ status, onChange }: { status: AppStatus; onChange(): Promise<void> }) {
+  const [path, setPath] = useState('Google Meet — entire screen'); const [captureAppVersion, setCaptureAppVersion] = useState('')
+  const [controlResult, setControlResult] = useState<'overlay-visible' | 'overlay-absent' | 'overlay-black' | 'unsupported' | 'untested'>('untested')
+  const [protectedResult, setProtectedResult] = useState<typeof controlResult>('untested'); const [notes, setNotes] = useState('')
+  const outcomes = ['untested', 'overlay-visible', 'overlay-absent', 'overlay-black', 'unsupported'] as const
+  return <div className="stack capture-test"><h2>Capture protection</h2><div className="info-grid"><Info label="Requested" value={status.capture.requested ? 'Yes' : 'No'} /><Info label="Electron reported" value={status.capture.electronReported ? 'Enabled' : 'Not enabled'} /><Info label="Verified paths" value={String(status.capture.verifiedResults.filter((result) => result.controlResult !== 'untested' && result.protectedResult !== 'untested').length)} /></div>
     <Notice tone="warning">This requests exclusion from supported Windows capture paths. It is not a security guarantee and must be tested for each sharing or recording method.</Notice>
     <div className="test-pattern"><span>CAPTURE TEST</span></div>
+    <div className="actions"><button className={!status.capture.electronReported ? 'primary' : ''} onClick={async () => { await window.presenter.setCaptureProtection(false); await onChange() }}>Protection OFF control</button><button className={status.capture.electronReported ? 'primary' : ''} onClick={async () => { await window.presenter.setCaptureProtection(true); await onChange() }}>Protection ON</button></div>
+    <fieldset><legend>Record test result</legend><label>Capture path<select value={path} onChange={(e) => setPath(e.target.value)}>{['Google Meet — entire screen','Google Meet — Chrome window','Google Meet — Chrome tab','Windows Snipping Tool','OBS Display Capture','OBS Window Capture — Chrome','OBS Window Capture — PresenterAI'].map((value) => <option key={value}>{value}</option>)}</select></label><label>Capture app/version<input value={captureAppVersion} onChange={(e) => setCaptureAppVersion(e.target.value)} placeholder="Chrome 148 / OBS 32…" /></label><label>Protection OFF control<select value={controlResult} onChange={(e) => setControlResult(e.target.value as typeof controlResult)}>{outcomes.map((value) => <option key={value}>{value}</option>)}</select></label><label>Protection ON result<select value={protectedResult} onChange={(e) => setProtectedResult(e.target.value as typeof protectedResult)}>{outcomes.map((value) => <option key={value}>{value}</option>)}</select></label><label>Notes<textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></label><button className="primary" disabled={!captureAppVersion.trim() || controlResult === 'untested' || protectedResult === 'untested'} onClick={async () => { await window.presenter.saveCaptureResult({ path, captureAppVersion, controlResult, protectedResult, notes }); await window.presenter.setCaptureProtection(true); setNotes(''); await onChange() }}>Save compatibility result</button></fieldset>
+    {status.capture.verifiedResults.map((result) => <div className="document" key={result.id}><div><strong>{result.path}</strong><small>OFF: {result.controlResult} · ON: {result.protectedResult}</small><small>{result.captureAppVersion} · Windows {result.environment.windowsBuild}</small></div><button onClick={async () => { await window.presenter.removeCaptureResult(result.id); await onChange() }}>Remove</button></div>)}
     <h3>Required manual matrix</h3><ul><li>Google Meet: entire screen, Chrome window, Chrome tab</li><li>Windows Snipping Tool</li><li>OBS Display Capture and Window Capture</li></ul></div>
 }
 

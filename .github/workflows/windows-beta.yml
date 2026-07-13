@@ -1,0 +1,63 @@
+name: Windows beta
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore JavaScript dependencies
+        run: npm ci
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run renderer and main-process tests
+        run: npm test
+
+      - name: Build and test Windows helper
+        run: npm run test:helper
+
+      - name: Publish self-contained Windows helper
+        run: npm run helper:build
+
+      - name: Build Electron application
+        run: npm run build
+
+      - name: Create unsigned NSIS installer
+        run: npx electron-builder --win nsis
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PresenterAI-Windows-beta
+          path: release/PresenterAI-*-setup.exe
+          if-no-files-found: error

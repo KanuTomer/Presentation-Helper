@@ -10,6 +10,7 @@ import { registerIpc } from './ipc/register.js'
 
 let retrieval: RetrievalIndex | undefined
 let audio: AudioController | undefined
+let quitting = false
 
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.presenterai.desktop')
@@ -23,5 +24,9 @@ app.whenReady().then(async () => {
   registerIpc({ store, secrets, retrieval, ai, audio, windows, capture })
 })
 
-app.on('before-quit', () => { globalShortcut.unregisterAll(); retrieval?.close(); audio?.dispose() })
+app.on('before-quit', (event) => {
+  if (quitting) return
+  event.preventDefault(); quitting = true; globalShortcut.unregisterAll(); retrieval?.close()
+  void (audio?.dispose() ?? Promise.resolve()).finally(() => app.quit())
+})
 app.on('window-all-closed', () => { /* keep tray application alive */ })

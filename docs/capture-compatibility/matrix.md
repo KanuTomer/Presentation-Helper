@@ -12,6 +12,6 @@ Record Windows build, PresenterAI/Electron version, capture application version,
 | OBS Window Capture — Chrome | Untested | Untested | | |
 | OBS Window Capture — PresenterAI | Untested | Untested | | |
 
-Allowed results: `overlay-absent`, `overlay-black`, `overlay-visible`, or `untested`.
+Allowed results: `overlay-absent`, `overlay-black`, `overlay-visible`, `unsupported`, or `untested`.
 
 Never describe an untested capture path as protected. `WDA_EXCLUDEFROMCAPTURE` is a request to supported Windows capture APIs, not DRM and not a guarantee against physical cameras or unsupported capture methods.

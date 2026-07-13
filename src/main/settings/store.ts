@@ -50,6 +50,8 @@ export class SettingsStore {
   }
   async setWindowBounds(bounds: NonNullable<StoredData['windowBounds']>): Promise<void> { this.data.windowBounds = bounds; await this.flush() }
   async setDocuments(documents: DocumentInfo[]): Promise<void> { this.data.documents = documents; await this.flush() }
+  async addCaptureResult(result: CaptureCompatibilityResult): Promise<void> { this.data.captureResults.unshift(result); await this.flush() }
+  async removeCaptureResult(id: string): Promise<void> { this.data.captureResults = this.data.captureResults.filter((result) => result.id !== id); await this.flush() }
   async addUsage(inputTokens: number, outputTokens: number, audioMinutes = 0): Promise<void> {
     this.data.usage.inputTokens += inputTokens; this.data.usage.outputTokens += outputTokens; this.data.usage.audioMinutes += audioMinutes
     const model = this.data.settings.modelMode === 'strong' ? this.data.settings.strongModel : this.data.settings.normalModel

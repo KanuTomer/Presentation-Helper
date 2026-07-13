@@ -22,7 +22,7 @@ export class WindowManager {
     })
     this.window.setOpacity(this.store.settings.opacity)
     this.window.setIgnoreMouseEvents(this.store.settings.clickThrough, { forward: true })
-    this.capture.enable(this.window)
+    this.capture.setEnabled(this.window, true)
     this.window.once('ready-to-show', () => this.window?.showInactive())
     this.window.on('move', () => this.persistBounds()); this.window.on('resize', () => this.persistBounds())
     this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
