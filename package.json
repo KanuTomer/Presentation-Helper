@@ -16,7 +16,7 @@
     "test:helper-smoke": "node scripts/helper-smoke.mjs",
     "helper:build": "dotnet publish native/PresenterAI.WindowsHelper/PresenterAI.WindowsHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o resources/windows-helper",
     "verify": "npm run typecheck && npm test && npm run test:helper && npm run build",
-    "package:win": "npm run helper:build && npm run build && electron-builder --win nsis"
+    "package:win": "npm run helper:build && npm run build && electron-builder --win nsis --publish never"
   },
   "dependencies": {
     "@electron-toolkit/utils": "4.0.0",

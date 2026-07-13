@@ -51,7 +51,7 @@ jobs:
         run: npm run build
 
       - name: Create unsigned NSIS installer
-        run: npx electron-builder --win nsis
+        run: npx electron-builder --win nsis --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
