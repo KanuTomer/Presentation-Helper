@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { AppSettings, AppStatus, AssistantResponse, DocumentInfo, UsageSummary } from '../shared/contracts'
+import type { AiErrorInfo, AppSettings, AppStatus, AssistantResponse, DocumentInfo, UsageSummary } from '../shared/contracts'
 import './style.css'
+import { AiErrorPanel } from './aiError'
 
 type View = 'copilot' | 'documents' | 'settings' | 'privacy' | 'capture'
 
@@ -19,6 +20,7 @@ function App(): React.JSX.Element {
   const [question, setQuestion] = useState('')
   const [response, setResponse] = useState<AssistantResponse>()
   const [error, setError] = useState('')
+  const [aiError, setAiError] = useState<AiErrorInfo>()
   const [hasKey, setHasKey] = useState(false)
   const [recordingMs, setRecordingMs] = useState(0)
   const input = useRef<HTMLTextAreaElement>(null)
@@ -48,8 +50,12 @@ function App(): React.JSX.Element {
   }, [status.listening])
 
   const ask = async (): Promise<void> => {
-    setError(''); setResponse(undefined)
-    try { setResponse(await window.presenter.ask(question)); void refresh() } catch (value) { setError((value as Error).message) }
+    setError(''); setAiError(undefined); setResponse(undefined)
+    try {
+      const result = await window.presenter.ask(question)
+      if (result.ok) setResponse(result.response); else setAiError(result.error)
+      void refresh()
+    } catch (value) { setAiError({ code: 'unknown', message: (value as Error).message || 'Request failed.', retryable: false }) }
   }
 
   return <main className={`shell ${status.listening ? 'is-listening' : ''}`}>
@@ -70,7 +76,7 @@ function App(): React.JSX.Element {
     </nav>
 
     <section className="content no-drag">
-      {view === 'copilot' && <Copilot question={question} setQuestion={setQuestion} input={input} ask={ask} response={response} error={error} hasKey={hasKey} helperAvailable={status.helperAvailable} listening={status.listening} />}
+      {view === 'copilot' && <Copilot question={question} setQuestion={setQuestion} input={input} ask={ask} response={response} error={error} aiError={aiError} openSettings={() => setView('settings')} hasKey={hasKey} helperAvailable={status.helperAvailable} listening={status.listening} />}
       {view === 'documents' && <Documents documents={documents} onChange={refresh} />}
       {view === 'settings' && settings && <Settings settings={settings} status={status} recordingMs={recordingMs} hasKey={hasKey} onChange={refresh} setError={setError} />}
       {view === 'privacy' && <Privacy status={status} recordingMs={recordingMs} documents={documents} usage={usage} />}
@@ -80,7 +86,7 @@ function App(): React.JSX.Element {
   </main>
 }
 
-function Copilot(props: { question: string; setQuestion(v: string): void; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; response?: AssistantResponse; error: string; hasKey: boolean; helperAvailable: boolean; listening: boolean }) {
+function Copilot(props: { question: string; setQuestion(v: string): void; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; response?: AssistantResponse; error: string; aiError?: AiErrorInfo; openSettings(): void; hasKey: boolean; helperAvailable: boolean; listening: boolean }) {
   return <div className="stack">
     {!props.hasKey && <Notice tone="warning">Add your OpenAI API key in Settings before asking a question.</Notice>}
     <div className="question-box">
@@ -89,6 +95,7 @@ function Copilot(props: { question: string; setQuestion(v: string): void; input:
         <button disabled={!props.helperAvailable} onMouseDown={() => window.presenter.startListening()} onMouseUp={() => window.presenter.stopListening()} title={props.helperAvailable ? 'Hold while the reviewer speaks' : 'Build the Windows helper first'}>◉ Hold to listen</button></div>
     </div>
     {props.error && <Notice tone="danger">{props.error}</Notice>}
+    {props.aiError && <AiErrorPanel error={props.aiError} onRetry={props.ask} onOpenSettings={props.openSettings} />}
     {props.response ? <ResponseCard response={props.response} /> : <div className="empty"><div className="wave">∿</div><h2>Ready when you are</h2><p>Type a question or hold Ctrl + Shift + Space while a reviewer speaks.</p></div>}
   </div>
 }

@@ -9,6 +9,11 @@ export type OperationState = 'idle' | 'listening' | 'transcribing' | 'retrieving
 export type ModelMode = 'normal' | 'strong'
 export type HelperLifecycle = 'missing' | 'starting' | 'ready' | 'capturing' | 'failed'
 export type CaptureTestOutcome = 'overlay-absent' | 'overlay-black' | 'overlay-visible' | 'unsupported' | 'untested'
+export const aiErrorCodes = [
+  'invalid_key', 'quota', 'rate_limit', 'timeout', 'offline', 'cancelled', 'output_limit',
+  'malformed_response', 'busy', 'unknown'
+] as const
+export type AiErrorCode = (typeof aiErrorCodes)[number]
 
 export interface AudioDevice { id: string; name: string; isDefault: boolean }
 export interface AudioCaptureResult { path: string; durationMs: number; bytes: number; sampleRate: number; channels: number; endpointId: string }
@@ -33,6 +38,15 @@ export const assistantResponseSchema = z.object({
     chunkId: z.string(), documentName: z.string(), location: z.string()
   })).max(8)
 })
+
+export const questionSchema = z.string().trim().min(1, 'Enter a question first.').max(4_000, 'Questions are limited to 4,000 characters.')
+export const aiErrorInfoSchema = z.object({ code: z.enum(aiErrorCodes), message: z.string().min(1).max(800), retryable: z.boolean() })
+export type AiErrorInfo = z.infer<typeof aiErrorInfoSchema>
+export type AskResult = { ok: true; response: AssistantResponse } | { ok: false; error: AiErrorInfo }
+export const askResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), response: assistantResponseSchema }),
+  z.object({ ok: z.literal(false), error: aiErrorInfoSchema })
+])
 
 export interface DocumentInfo {
   id: string
@@ -115,7 +129,7 @@ export interface PresenterAPI {
   saveApiKey(key: string): Promise<void>
   deleteApiKey(): Promise<void>
   testApiKey(): Promise<{ ok: boolean; message: string }>
-  ask(question: string): Promise<AssistantResponse>
+  ask(question: string): Promise<AskResult>
   cancel(): Promise<void>
   selectDocuments(): Promise<DocumentInfo[]>
   listDocuments(): Promise<DocumentInfo[]>

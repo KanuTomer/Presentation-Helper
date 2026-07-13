@@ -4,6 +4,7 @@ dist/
 release/
 .tsbuild/
 coverage/
+artifacts/
 resources/windows-helper/
 native/**/bin/
 native/**/obj/
@@ -12,3 +13,5 @@ native/**/TestResults/
 *.wav
 .env*
 !.env.example
+# Never commit locally supplied API credential files.
+OpenAI Key.txt

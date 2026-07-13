@@ -40,6 +40,8 @@ npm run test:helper-smoke
 npm run package:win
 ```
 
+Milestone 3 is accepted: the mocked safety suite and budget-bounded local live-model gate passed for both Normal and Strong modes. The redacted acceptance record is in [docs/validation/milestone-3.md](docs/validation/milestone-3.md); raw prompts, responses, and credentials are not retained.
+
 The unsigned per-user NSIS installer is written to `release/`. Uninstalling it does not remove PresenterAI documents or settings. The Windows GitHub Actions workflow repeats the automated checks and uploads the installer as a workflow artifact; it does not create a public release.
 
 ## Privacy model
