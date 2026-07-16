@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import type { AppSettings } from '../../shared/contracts.js'
 
 const emergencyShortcut = 'CONTROL+SHIFT+I'
@@ -6,11 +7,64 @@ const sensitiveKeys: ReadonlySet<keyof AppSettings> = new Set([
   'listenShortcut', 'projectSummary', 'approvedVocabulary', 'selectedAudioEndpointId'
 ])
 
+const unicodeLength = (value: string): number => Array.from(value).length
+const shortcutSchema = z.string().trim().min(1).max(128).superRefine((value, context) => {
+  try { canonicalAccelerator(value) }
+  catch (error) {
+    context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid shortcut.' })
+  }
+})
+const modelSchema = z.string().trim().min(1).max(128).regex(
+  /^[A-Za-z0-9][A-Za-z0-9._:-]*$/,
+  'Model IDs may contain only letters, numbers, dots, underscores, colons, and hyphens.'
+)
+const projectSummarySchema = z.string().refine(
+  (value) => unicodeLength(value) <= 4_000,
+  'The project summary is limited to 4,000 characters.'
+)
+const endpointSchema = z.string().trim().min(1).max(2_048).refine(
+  (value) => !/[\u0000-\u001f\u007f]/u.test(value),
+  'Audio endpoint IDs cannot contain control characters.'
+)
+const vocabularySchema = z.array(z.string()).max(30).transform((value, context) => {
+  try { return validateVocabularyTerms(value) }
+  catch (error) {
+    context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid approved vocabulary.' })
+    return z.NEVER
+  }
+})
+
+/** Strict persistence and IPC boundary for the renderer-visible settings object. */
+export const appSettingsSchema = z.object({
+  opacity: z.number().finite().min(0.45).max(1),
+  clickThrough: z.boolean(),
+  modelMode: z.enum(['normal', 'strong']),
+  normalModel: modelSchema,
+  strongModel: modelSchema,
+  transcriptionModel: modelSchema,
+  askShortcut: shortcutSchema,
+  hideShortcut: shortcutSchema,
+  listenShortcut: shortcutSchema,
+  projectSummary: projectSummarySchema,
+  approvedVocabulary: vocabularySchema,
+  selectedAudioEndpointId: endpointSchema.optional(),
+  inrPerUsd: z.number().finite().min(1).max(1_000).optional()
+}).strict()
+
+export const appSettingsPatchSchema = appSettingsSchema.partial().strict()
+
+export function parseSettingsPatch(value: unknown): Partial<AppSettings> {
+  const parsed = appSettingsPatchSchema.safeParse(value)
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid settings update.')
+  return parsed.data
+}
+
 export function validateSettingsMutation(
   current: AppSettings,
   patch: Partial<AppSettings>,
   operationBusy: boolean
 ): void {
+  patch = parseSettingsPatch(patch)
   if (operationBusy && Object.keys(patch).some((key) => sensitiveKeys.has(key as keyof AppSettings))) {
     throw new Error('Finish or cancel the active PresenterAI operation before changing request, audio, or shortcut settings.')
   }
@@ -30,6 +84,20 @@ export function validateSettingsMutation(
     if (conflict) throw new Error(`${label} conflicts with the ${conflict} shortcut.`)
     seen.set(accelerator, label)
   }
+}
+
+export function validateVocabularyTerms(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 30) throw new Error('Approved vocabulary is limited to 30 terms.')
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') throw new Error('Approved vocabulary terms must be text.')
+    const normalized = item.normalize('NFKC').trim()
+    if (!normalized || unicodeLength(normalized) > 64) throw new Error('Each approved vocabulary term must contain 1–64 characters.')
+    const key = normalized.toLocaleLowerCase('en-US')
+    if (!seen.has(key)) { seen.add(key); result.push(normalized) }
+  }
+  return result
 }
 
 /** Canonical subset accepted by both Electron and the restricted native hook. */

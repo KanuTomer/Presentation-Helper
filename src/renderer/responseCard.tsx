@@ -1,17 +1,14 @@
 import React from 'react'
-import type { AssistantResponse } from '../shared/contracts'
+import type { AssistantResponse, SupportLevel } from '../shared/contracts'
 
-export type EvidenceSupport = 'document-supported' | 'general' | 'evidence-unavailable'
+export type EvidenceSupport = SupportLevel
 
-export function evidenceSupport(response: AssistantResponse): EvidenceSupport {
-  if (response.warning) return 'evidence-unavailable'
-  return response.evidence.length > 0 ? 'document-supported' : 'general'
-}
+export function evidenceSupport(response: AssistantResponse): EvidenceSupport { return response.support }
 
 const labels: Record<EvidenceSupport, string> = {
   'document-supported': 'Document-supported',
-  general: 'General explanation',
-  'evidence-unavailable': 'Evidence unavailable'
+  'general-technical': 'General technical explanation',
+  'unsupported-project-claim': 'Project evidence unavailable'
 }
 
 export function ResponseCard({ response }: { response: AssistantResponse }): React.JSX.Element {

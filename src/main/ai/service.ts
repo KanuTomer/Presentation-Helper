@@ -5,8 +5,10 @@ import {
   assistantResponseSchema, questionSchema, type AiErrorCode, type AiErrorInfo, type AppSettings,
   type AssistantResponse, type DocumentInfo
 } from '../../shared/contracts.js'
-import { selectEvidenceChunks, type RetrievedChunk } from '../retrieval/index.js'
+import type { RetrievedChunk } from '../retrieval/index.js'
 import { ConversationContext } from './conversation.js'
+import { validateGroundingResponse } from './grounding.js'
+import { attachPreparedAnswer, prepareAnswer, preparedAnswerFromChunks, type PreparedAnswer } from './preparedAnswer.js'
 import { buildInput, presenterInstructions, responseJsonSchema } from './prompts.js'
 import { responseRequestPolicy } from './requestPolicy.js'
 import {
@@ -36,7 +38,17 @@ export interface AiSettingsProvider {
   readonly settings: AppSettings
   readonly documents: DocumentInfo[]
   addUsage(inputTokens: number, outputTokens: number, audioMinutes?: number): Promise<void>
-  addTranscriptionUsage(usage: TranscriptionUsage, model: string): Promise<void>
+  addTranscriptionUsage(usage: TranscriptionUsage, model: string, requestedModel?: string, durationMs?: number): Promise<void>
+  recordUsage?(input: {
+    endpoint: 'responses' | 'transcription'
+    requestedModel: string
+    returnedModel?: string
+    inputTokens: number
+    outputTokens: number
+    reasoningTokens?: number
+    audioTokens?: number
+    durationMs?: number
+  }): Promise<unknown>
 }
 export interface RetrievalProvider {
   search(query: string, limit?: number): RetrievedChunk[]
@@ -70,6 +82,9 @@ export interface TranscriptionMetric {
 export interface TranscriptionOptions {
   signal: AbortSignal
   approvedVocabulary?: readonly string[]
+  durationMs?: number
+  /** Immutable hint already disclosed in the outbound preview. */
+  terminologyHint?: string
 }
 export interface TranscriptionAudioSource {
   /** Exact validated byte snapshot; no renderer-controlled path is uploaded. */
@@ -101,6 +116,13 @@ export class AiService {
   get isBusy(): boolean { return this.active !== undefined }
   cancel(): void { this.active?.controller?.abort() }
   clearSession(): void { this.context.clear() }
+  transcriptionTerminologyHint(extraVocabulary: readonly string[] = []): string {
+    return buildTerminologyHint({
+      approvedVocabulary: [...(this.settings.settings.approvedVocabulary ?? []), ...extraVocabulary],
+      documentNames: this.settings.documents.map((document) => document.name),
+      documentTitles: this.documentTitles()
+    })
+  }
   async testKey(): Promise<{ ok: boolean; message: string }> {
     try { const client = await this.client(); await client.models.list(); return { ok: true, message: 'API key is valid.' } }
     catch (error) { return { ok: false, message: toAiErrorInfo(error).message } }
@@ -122,14 +144,7 @@ export class AiService {
         : Buffer.from(source.bytes)
       throwIfAborted(options.signal)
       const client = await this.client()
-      const hint = buildTerminologyHint({
-        approvedVocabulary: [
-          ...(this.settings.settings.approvedVocabulary ?? []),
-          ...(options.approvedVocabulary ?? [])
-        ],
-        documentNames: this.settings.documents.map((doc) => doc.name),
-        documentTitles: this.documentTitles()
-      })
+      const hint = options.terminologyHint ?? this.transcriptionTerminologyHint(options.approvedVocabulary)
       requestDispatched = true
       const raw = await client.audio.transcriptions.create({
         file: await toFile(bytes, typeof source === 'string' ? 'reviewer.wav' : source.filename ?? 'reviewer.wav', { type: 'audio/wav' }),
@@ -141,10 +156,8 @@ export class AiService {
       if (metadata) {
         returnedModel = metadata.model
         usage = metadata.usage
-        if (usage.type !== 'none') {
-          await this.settings.addTranscriptionUsage(usage, returnedModel ?? requestedModel).catch(() => undefined)
-        }
       }
+      await this.recordTranscriptionUsage(requestedModel, returnedModel, usage, options.durationMs)
       // Cancellation suppresses transcript/retrieval use, but a provider
       // response that already arrived may be billable and its returned usage
       // must be recorded first.
@@ -171,9 +184,9 @@ export class AiService {
     const validated = questionSchema.safeParse(question)
     if (!validated.success) throw new AiServiceError('unknown', validated.error.issues[0]?.message ?? 'Enter a valid question.', false)
     if (options.signal) throwIfAborted(options.signal)
-    const chunks = selectEvidenceChunks(this.retrieval.search(validated.data, 5))
+    const prepared = this.prepare(validated.data, options.signal)
     if (options.signal) throwIfAborted(options.signal)
-    return chunks
+    return attachPreparedAnswer(prepared)
   }
   async ask(question: string, options: AskOptions = {}): Promise<AssistantResponse> {
     if (this.active) throw new AiServiceError('busy', 'Another question is already being answered.', false)
@@ -203,7 +216,8 @@ export class AiService {
     let outcome: AiRequestMetric['outcome'] = 'unknown'
     let requestDispatched = false
     try {
-      const selectedChunks = selectEvidenceChunks(chunks)
+      const prepared = this.resolvePrepared(validated.data, chunks, operation.signal)
+      const selectedChunks = [...prepared.chunks]
       const allowed = new Map(selectedChunks.map((chunk) => [chunk.id, chunk]))
       const client = await this.client()
       requestDispatched = true
@@ -211,7 +225,7 @@ export class AiService {
         model: requestedModel,
         reasoning: { effort: policy.reasoningEffort },
         instructions: presenterInstructions,
-        input: buildInput(validated.data, selectedChunks, this.context.asPrompt(), settings.projectSummary),
+        input: buildInput(prepared.question, selectedChunks, prepared.conversationPrompt, prepared.projectSummary),
         max_output_tokens: policy.maxOutputTokens, store: false,
         text: {
           ...(policy.verbosity ? { verbosity: policy.verbosity } : {}),
@@ -234,11 +248,9 @@ export class AiService {
       parsed.evidence = parsed.evidence.map((item) => {
         const chunk = allowed.get(item.chunkId)!; return { chunkId: chunk.id, documentName: chunk.documentName, location: chunk.location }
       })
-      if (parsed.evidence.length === 0 && !parsed.warning && requiresProjectEvidence(validated.data)) {
-        parsed.warning = 'No project evidence was supplied for this project-specific claim.'
-      }
+      if (!validateGroundingResponse(parsed, prepared.question, selectedChunks).valid) throw malformedResponse()
       ensureCurrentOperation(operation, this.active)
-      this.context.add(validated.data, parsed)
+      this.context.add(prepared.question, parsed, prepared.contextRevision)
       outcome = 'success'
       return parsed
     } catch (error) {
@@ -247,7 +259,16 @@ export class AiService {
       const inputTokens = response?.usage?.input_tokens ?? 0
       const outputTokens = response?.usage?.output_tokens ?? 0
       const reasoningTokens = response?.usage?.output_tokens_details?.reasoning_tokens ?? 0
-      if (response?.usage) await this.settings.addUsage(inputTokens, outputTokens).catch(() => undefined)
+      if (response?.usage) {
+        if (this.settings.recordUsage) {
+          await this.settings.recordUsage({
+            endpoint: 'responses', requestedModel, ...(response.model ? { returnedModel: response.model } : {}),
+            inputTokens, outputTokens, reasoningTokens
+          }).catch(() => undefined)
+        } else {
+          await this.settings.addUsage(inputTokens, outputTokens).catch(() => undefined)
+        }
+      }
       this.options.onMetric?.({
         operationId: operation.id, requestedModel, returnedModel: response?.model, latencyMs: performance.now() - startedAt,
         inputTokens, outputTokens, reasoningTokens, outcome,
@@ -259,6 +280,48 @@ export class AiService {
   private documentTitles(): readonly string[] {
     try { return this.retrieval.documentTitles?.() ?? [] }
     catch { return [] }
+  }
+  private async recordTranscriptionUsage(
+    requestedModel: string,
+    returnedModel: string | undefined,
+    usage: TranscriptionUsage,
+    durationMs: number | undefined
+  ): Promise<void> {
+    if (usage.type === 'none') return
+    if (this.settings.recordUsage) {
+      await this.settings.recordUsage({
+        endpoint: 'transcription', requestedModel, ...(returnedModel ? { returnedModel } : {}),
+        inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, audioTokens: usage.audioTokens,
+        ...(durationMs === undefined ? {} : { durationMs })
+      }).catch(() => undefined)
+      return
+    }
+    await this.settings.addTranscriptionUsage(usage, returnedModel ?? requestedModel).catch(() => undefined)
+  }
+  private prepare(question: string, signal?: AbortSignal): PreparedAnswer {
+    return prepareAnswer({
+      question,
+      context: this.context,
+      projectSummary: this.settings.settings.projectSummary,
+      search: (query, limit) => this.retrieval.search(query, limit),
+      ...(signal ? { signal } : {})
+    })
+  }
+  private resolvePrepared(question: string, chunks: RetrievedChunk[], signal: AbortSignal): PreparedAnswer {
+    const attached = preparedAnswerFromChunks(chunks)
+    // The renderer preview and the model request must describe the exact same
+    // immutable snapshot. Clearing the session after retrieval increments the
+    // revision so the late answer cannot repopulate context, but it must not
+    // silently replace already-previewed chunks or background.
+    if (attached?.question === question) return attached
+    if (attached) return this.prepare(question, signal)
+    return prepareAnswer({
+      question,
+      context: this.context,
+      projectSummary: this.settings.settings.projectSummary,
+      chunks,
+      signal
+    })
   }
   private async client(): Promise<OpenAIClientLike> {
     if (this.options.clientFactory) return this.options.clientFactory()
@@ -313,9 +376,4 @@ function ensureCurrentOperation(
 }
 function containsRefusal(output: unknown[] | undefined): boolean {
   return Boolean(output?.some((item) => item && typeof item === 'object' && ((item as { type?: string }).type === 'refusal' || JSON.stringify(item).includes('"refusal"'))))
-}
-function requiresProjectEvidence(question: string): boolean {
-  const projectReference = /\b(our|my|we|this (?:project|system|prototype|implementation|approach|model))\b/i.test(question)
-  const projectClaim = /\b(result|accuracy|runtime|dataset|training data|outperform|experiment|implemented|algorithm|benchmark|baseline|hardware|participant|precision|recall|ablation|cost|failure rate|memory)\b/i.test(question)
-  return projectReference && projectClaim
 }

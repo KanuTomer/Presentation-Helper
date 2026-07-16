@@ -8,13 +8,14 @@ import {
 describe('assistant response contract', () => {
   it('accepts the presenter format', () => {
     expect(assistantResponseSchema.parse({
-      category: 'CHALLENGE', say: 'The design favors predictable local behavior.',
-      keyPoints: ['Documents remain local.', 'Only selected excerpts are transmitted.'],
+      category: 'CHALLENGE', support: 'unsupported-project-claim', evidenceIssue: 'missing',
+      say: 'The design favors predictable local behavior.',
+      keyPoints: ['Documents remain local.', 'Only selected excerpts are transmitted.', 'Evidence limitations remain visible.'],
       ifChallenged: 'The trade-off is weaker semantic recall.', warning: 'No benchmark was supplied.', evidence: []
     }).category).toBe('CHALLENGE')
   })
   it('rejects long key-point lists and unknown categories', () => {
-    expect(() => assistantResponseSchema.parse({ category: 'OPINION', say: 'x', keyPoints: ['1', '2', '3', '4', '5'], ifChallenged: 'x', evidence: [] })).toThrow()
+    expect(() => assistantResponseSchema.parse({ category: 'OPINION', support: 'general-technical', evidenceIssue: 'none', say: 'x', keyPoints: ['1', '2', '3', '4', '5'], ifChallenged: 'x', evidence: [] })).toThrow()
   })
   it('validates typed IPC outcomes and bounded questions', () => {
     for (const code of aiErrorCodes) expect(askResultSchema.parse({ ok: false, error: { code, message: 'Safe message.', retryable: false } }).ok).toBe(false)

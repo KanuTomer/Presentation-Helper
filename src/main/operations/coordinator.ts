@@ -9,6 +9,8 @@ export interface OperationHandle {
   signal: AbortSignal
 }
 
+export type TransmissionStage = 'transcription' | 'response'
+
 export interface OperationSnapshot {
   operation: OperationState
   operationId?: string
@@ -53,6 +55,11 @@ interface ActiveOperation {
   answerRenderConfirmed?: boolean
   answerVisibleAt?: number
   answerVisibility?: { promise: Promise<boolean>; confirm(): void }
+  transmissionVisibility?: {
+    stage: TransmissionStage
+    promise: Promise<boolean>
+    confirm(): void
+  }
 }
 
 const timingField: Partial<Record<OperationState, keyof OperationTimings>> = {
@@ -80,6 +87,7 @@ const systemClock: Clock = {
 
 export class OperationCoordinator {
   private active?: ActiveOperation
+  private maintenanceReserved = false
   private displayState: OperationState = 'idle'
   private lastTimings: OperationTimings = {}
   private lastIndicatorLatencyMs?: number
@@ -94,7 +102,7 @@ export class OperationCoordinator {
     private clock: Clock = systemClock
   ) {}
 
-  get isBusy(): boolean { return Boolean(this.active) }
+  get isBusy(): boolean { return Boolean(this.active) || this.maintenanceReserved }
 
   get current(): OperationHandle | undefined {
     const operation = this.active
@@ -102,7 +110,7 @@ export class OperationCoordinator {
   }
 
   begin(kind: OperationKind, initialStage: OperationState): OperationHandle {
-    if (this.active) throw operationError('busy', 'Another PresenterAI operation is already active.', false)
+    if (this.active || this.maintenanceReserved) throw operationError('busy', 'Another PresenterAI operation is already active.', false)
     const now = this.clock.now()
     const operation: ActiveOperation = {
       id: randomUUID(), kind, controller: new AbortController(), stage: initialStage,
@@ -246,6 +254,52 @@ export class OperationCoordinator {
     this.emit()
   }
 
+  acquireMaintenance(): () => void {
+    if (this.active || this.maintenanceReserved) {
+      throw operationError('busy', 'Another PresenterAI operation is already active.', false)
+    }
+    this.maintenanceReserved = true
+    this.emit()
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.maintenanceReserved = false
+      this.emit()
+    }
+  }
+
+  waitForTransmissionPreview(id: string, stage: TransmissionStage, timeoutMs = 2_000): Promise<boolean> {
+    const operation = this.active
+    if (!operation || operation.id !== id || operation.terminal) return Promise.resolve(false)
+    if (operation.transmissionVisibility?.stage === stage) return operation.transmissionVisibility.promise
+    let confirm!: () => void
+    const promise = new Promise<boolean>((resolve) => {
+      let settled = false
+      const finish = (confirmed: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        operation.controller.signal.removeEventListener('abort', abort)
+        resolve(confirmed)
+      }
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      const abort = (): void => finish(false)
+      confirm = () => finish(true)
+      if (operation.controller.signal.aborted) abort()
+      else operation.controller.signal.addEventListener('abort', abort, { once: true })
+    })
+    operation.transmissionVisibility = { stage, promise, confirm }
+    return promise
+  }
+
+  acknowledgeTransmissionPreview(id: string, stage: TransmissionStage): void {
+    const operation = this.active
+    if (!operation || operation.id !== id || operation.terminal) return
+    if (operation.transmissionVisibility?.stage !== stage) return
+    operation.transmissionVisibility.confirm()
+  }
+
   isCurrent(id: string): boolean { return this.active?.id === id }
 
   snapshot(): OperationSnapshot {
@@ -290,6 +344,7 @@ export function toOperationError(error: unknown): AiErrorInfo {
 function isOperationCode(code: string): code is AiErrorInfo['code'] {
   return [
     'invalid_key', 'quota', 'rate_limit', 'timeout', 'offline', 'cancelled', 'output_limit', 'malformed_response',
-    'busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio', 'invalid_transcript', 'capture_timeout', 'unknown'
+    'busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio', 'invalid_transcript', 'capture_timeout',
+    'listening_consent_required', 'privacy_preview_unavailable', 'unknown'
   ].includes(code)
 }

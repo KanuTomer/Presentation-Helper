@@ -10,6 +10,12 @@ export const questionCategories = [
 ] as const
 
 export type QuestionCategory = (typeof questionCategories)[number]
+export const supportLevels = [
+  'document-supported', 'general-technical', 'unsupported-project-claim'
+] as const
+export type SupportLevel = (typeof supportLevels)[number]
+export const evidenceIssues = ['none', 'missing', 'insufficient', 'conflicting'] as const
+export type EvidenceIssue = (typeof evidenceIssues)[number]
 export const operationStates = [
   'idle', 'starting_capture', 'listening', 'finalizing', 'transcribing', 'retrieving', 'generating', 'cancelling', 'error'
 ] as const
@@ -21,7 +27,8 @@ export type CaptureTestOutcome = 'overlay-absent' | 'overlay-black' | 'overlay-v
 export const aiErrorCodes = [
   'invalid_key', 'quota', 'rate_limit', 'timeout', 'offline', 'cancelled', 'output_limit',
   'malformed_response', 'busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio',
-  'invalid_transcript', 'capture_timeout', 'unknown'
+  'invalid_transcript', 'capture_timeout', 'listening_consent_required',
+  'privacy_preview_unavailable', 'unknown'
 ] as const
 export type AiErrorCode = (typeof aiErrorCodes)[number]
 
@@ -52,6 +59,8 @@ export interface OperationTimings {
 export interface Evidence { chunkId: string; documentName: string; location: string }
 export interface AssistantResponse {
   category: QuestionCategory
+  support: SupportLevel
+  evidenceIssue: EvidenceIssue
   say: string
   keyPoints: string[]
   ifChallenged: string
@@ -61,8 +70,10 @@ export interface AssistantResponse {
 
 export const assistantResponseSchema = z.object({
   category: z.enum(questionCategories),
+  support: z.enum(supportLevels),
+  evidenceIssue: z.enum(evidenceIssues),
   say: z.string().min(1).max(1800),
-  keyPoints: z.array(z.string().min(1).max(300)).min(2).max(4),
+  keyPoints: z.array(z.string().min(1).max(300)).length(3),
   ifChallenged: z.string().min(1).max(800),
   warning: z.string().max(800).optional(),
   evidence: z.array(z.object({
@@ -223,6 +234,42 @@ export interface AppSettings {
   inrPerUsd?: number
 }
 
+export interface ApiKeyStatus {
+  configured: boolean
+  masked: boolean
+  protection: 'windows-dpapi' | 'unavailable'
+  updatedAt?: string
+}
+
+export interface PrivacyConsentStatus {
+  requiredVersion: number
+  acceptedVersion?: number
+  acceptedAt?: string
+  satisfied: boolean
+}
+export const LISTENING_CONSENT_VERSION = 2
+
+export interface OutboundTransmissionPreview {
+  operationId: string
+  stage: 'transcription' | 'response'
+  audio?: { durationMs: number; bytes: number; endpointName: string }
+  terminologyHint?: string
+  chunks: Array<{
+    chunkId: string
+    documentName: string
+    title?: string
+    location: string
+    text: string
+  }>
+  rollingTurnCount: number
+  includesProjectSummary: boolean
+}
+
+export interface SettingsRecoveryWarning {
+  code: 'invalid_json' | 'invalid_shape' | 'unsupported_schema'
+  recoveredAt: string
+}
+
 export interface AppStatus {
   operation: OperationState
   operationId?: string
@@ -245,6 +292,9 @@ export interface AppStatus {
   activeAudioEndpoint?: AudioDevice
   operationError?: AiErrorInfo
   shortcutWarnings: string[]
+  privacyConsent: PrivacyConsentStatus
+  outboundPreview?: OutboundTransmissionPreview
+  settingsRecoveryWarning?: SettingsRecoveryWarning
 }
 
 export interface CaptureTestInput {
@@ -266,13 +316,53 @@ export interface UsageSummary {
   pricingVersion: string
 }
 
+export type UsageEndpoint = 'responses' | 'transcription'
+export interface UsageRecord {
+  id: string
+  timestamp: string
+  endpoint: UsageEndpoint
+  requestedModel: string
+  returnedModel?: string
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens?: number
+  audioTokens?: number
+  durationMs?: number
+  pricingVersion: string
+  priced: boolean
+  estimatedUsd: number
+}
+
+export interface UsageRollup {
+  endpoint: UsageEndpoint | 'legacy'
+  model: string
+  requestCount: number
+  unpricedRequestCount: number
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  audioTokens: number
+  durationMs: number
+  estimatedUsd: number
+}
+
+export interface UsageLedger {
+  summary: UsageSummary
+  recent: UsageRecord[]
+  rollups: UsageRollup[]
+}
+
+export type LocalDataScope = 'session' | 'documents' | 'usage' | 'compatibility' | 'settings' | 'consent' | 'api-key' | 'temporary-audio'
+export interface LocalDataScopeResult { scope: LocalDataScope; ok: boolean; message?: string }
+export interface DeleteAllLocalDataResult { ok: boolean; message?: string; results: LocalDataScopeResult[] }
+
 export type OperationActionResult = { ok: true } | { ok: false; error: AiErrorInfo }
 
 export interface PresenterAPI {
   getStatus(): Promise<AppStatus>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
-  hasApiKey(): Promise<boolean>
+  getApiKeyStatus(): Promise<ApiKeyStatus>
   saveApiKey(key: string): Promise<void>
   deleteApiKey(): Promise<void>
   testApiKey(): Promise<{ ok: boolean; message: string }>
@@ -284,7 +374,14 @@ export interface PresenterAPI {
   searchDocuments(query: string): Promise<DocumentSearchHit[]>
   inspectDocument(documentId: string, offset?: number, limit?: number): Promise<DocumentInspectionPage>
   clearSession(): Promise<void>
-  getUsage(): Promise<UsageSummary>
+  getUsage(): Promise<UsageLedger>
+  clearUsage(): Promise<void>
+  clearCaptureResults(): Promise<void>
+  clearAllDocuments(): Promise<void>
+  acceptListeningConsent(version: number): Promise<PrivacyConsentStatus>
+  acknowledgeTransmissionPreview(operationId: string, stage: OutboundTransmissionPreview['stage']): Promise<void>
+  deleteAllLocalData(confirmation: string): Promise<DeleteAllLocalDataResult>
+  dismissSettingsRecoveryWarning(): Promise<void>
   setClickThrough(enabled: boolean): Promise<void>
   setOpacity(value: number): Promise<void>
   showSettings(): Promise<void>
@@ -299,6 +396,7 @@ export interface PresenterAPI {
   onStatus(callback: (status: AppStatus) => void): () => void
   onFocusAsk(callback: () => void): () => void
   onOpenSettings(callback: () => void): () => void
+  onOpenPrivacy(callback: () => void): () => void
   onResponse(callback: (response: AssistantResponse, operationId: string) => void): () => void
   onError(callback: (error: AiErrorInfo) => void): () => void
 }

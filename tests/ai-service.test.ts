@@ -12,13 +12,15 @@ const settings: AppSettings = {
   listenShortcut: 'Control+Shift+Space', projectSummary: '', approvedVocabulary: []
 }
 const response: AssistantResponse = {
-  category: 'FACTUAL', say: 'Use evidence that is actually available.', keyPoints: ['State what is known.', 'Name the limitation.'],
+  category: 'FACTUAL', support: 'general-technical', evidenceIssue: 'none',
+  say: 'Use evidence that is actually available.', keyPoints: ['State what is known.', 'Name the limitation.', 'Avoid unsupported claims.'],
   ifChallenged: 'Explain that no project result was supplied.', evidence: []
 }
 
 function harness(
   create: (body: Record<string, unknown>, options: { signal: AbortSignal }) => Promise<OpenAIResponseLike>,
-  chunks: RetrievedChunk[] = []
+  chunks: RetrievedChunk[] = [],
+  search?: (query: string, limit?: number) => RetrievedChunk[]
 ) {
   const usage = vi.fn(async () => undefined)
   const provider: AiSettingsProvider = {
@@ -28,7 +30,7 @@ function harness(
   const client: OpenAIClientLike = {
     models: { list: async () => [] }, audio: { transcriptions: { create: async () => '' } }, responses: { create }
   }
-  const service = new AiService({ getKey: async () => 'sk-test' }, provider, { search: () => chunks }, { clientFactory: async () => client })
+  const service = new AiService({ getKey: async () => 'sk-test' }, provider, { search: search ?? (() => chunks) }, { clientFactory: async () => client })
   return { service, provider, usage }
 }
 function apiResponse(value: unknown, extra: Partial<OpenAIResponseLike> = {}): OpenAIResponseLike {
@@ -36,8 +38,11 @@ function apiResponse(value: unknown, extra: Partial<OpenAIResponseLike> = {}): O
 }
 
 describe('manual AI service', () => {
-  it('sends one bounded, stateless structured Responses request and adds an unsupported-project warning', async () => {
-    const create = vi.fn(async () => apiResponse({ ...response, warning: null }))
+  it('sends one bounded, stateless structured Responses request and preserves an unsupported-project warning', async () => {
+    const create = vi.fn(async () => apiResponse({
+      ...response, support: 'unsupported-project-claim', evidenceIssue: 'missing',
+      warning: 'No project evidence was supplied for this project-specific claim.'
+    }))
     const { service, usage } = harness(create)
     const result = await service.ask('  What accuracy did our experiment achieve?  ')
     expect(result.warning).toMatch(/project evidence/i)
@@ -120,7 +125,8 @@ describe('manual AI service', () => {
     await expect(duplicate.service.ask('What cache policy does our system use?')).rejects.toMatchObject({ code: 'malformed_response' })
 
     const valid = harness(async () => apiResponse({
-      ...response, evidence: [{ chunkId: chunk.id, documentName: 'wrong.txt', location: 'Wrong' }]
+      ...response, support: 'document-supported', evidenceIssue: 'none',
+      evidence: [{ chunkId: chunk.id, documentName: 'wrong.txt', location: 'Wrong' }]
     }), [chunk])
     await expect(valid.service.ask('What cache policy does our system use?')).resolves.toMatchObject({
       evidence: [{ chunkId: chunk.id, documentName: 'architecture.txt', location: 'Method' }]
@@ -183,6 +189,67 @@ describe('manual AI service', () => {
     expect(stages).toEqual(['retrieving', 'generating'])
     expect(create).toHaveBeenCalledTimes(2)
     expect(String(requests[1]?.input)).not.toContain('Externally cancelled question')
+  })
+
+  it('uses only the prior reviewer question to expand referential retrieval', async () => {
+    const queries: string[] = []
+    const { service } = harness(
+      async () => apiResponse({ ...response, say: 'SECRET RESPONSE SUMMARY' }), [],
+      (query) => { queries.push(query); return [] }
+    )
+    await service.ask('What is eventual consistency?')
+    await service.ask('How does that affect convergence?')
+    expect(queries[1]).toContain('What is eventual consistency?')
+    expect(queries[1]).not.toContain('SECRET RESPONSE SUMMARY')
+  })
+
+  it('does not repopulate cleared context when an in-flight response arrives late', async () => {
+    let resolveFirst!: (value: OpenAIResponseLike) => void
+    let call = 0
+    const requests: Record<string, unknown>[] = []
+    const { service } = harness((body) => {
+      requests.push(body); call += 1
+      if (call === 1) return new Promise((resolve) => { resolveFirst = resolve })
+      return Promise.resolve(apiResponse(response))
+    })
+    const first = service.ask('Question that will be cleared')
+    await vi.waitFor(() => expect(requests).toHaveLength(1))
+    service.clearSession()
+    resolveFirst(apiResponse(response))
+    await first
+    await service.ask('Fresh question after clear')
+    expect(String(requests[1]?.input)).not.toContain('Question that will be cleared')
+  })
+
+  it('uses the exact prepared snapshot after preview even when session clearing advances the revision', async () => {
+    const previewedChunk = {
+      id: 'previewed:1', documentId: 'previewed', documentName: 'previewed.txt', location: 'Section 1',
+      text: 'PREVIEWED EVIDENCE SNAPSHOT', kind: 'text', part: 1, partCount: 1, score: -1
+    } as RetrievedChunk
+    const replacementChunk = {
+      ...previewedChunk, id: 'replacement:1', documentId: 'replacement', documentName: 'replacement.txt',
+      text: 'UNPREVIEWED REPLACEMENT EVIDENCE'
+    } as RetrievedChunk
+    let searchCalls = 0
+    const requests: Record<string, unknown>[] = []
+    const { service, provider } = harness(
+      async (body) => { requests.push(body); return apiResponse(response) },
+      [],
+      () => (++searchCalls === 1 ? [previewedChunk] : [replacementChunk])
+    )
+    provider.settings.projectSummary = 'PREVIEWED PROJECT BACKGROUND'
+    const preparedChunks = service.retrieve('Explain eventual consistency.')
+    service.clearSession()
+    provider.settings.projectSummary = 'UNPREVIEWED REPLACEMENT BACKGROUND'
+
+    await service.generate('Explain eventual consistency.', preparedChunks)
+
+    expect(searchCalls).toBe(1)
+    expect(String(requests[0]?.input)).toContain('PREVIEWED EVIDENCE SNAPSHOT')
+    expect(String(requests[0]?.input)).toContain('PREVIEWED PROJECT BACKGROUND')
+    expect(String(requests[0]?.input)).not.toContain('UNPREVIEWED REPLACEMENT')
+    await service.ask('Fresh question after the preview race.')
+    expect(String(requests[1]?.input)).not.toContain('Explain eventual consistency.')
   })
 
   it('validates and bounds questions before making a request', async () => {

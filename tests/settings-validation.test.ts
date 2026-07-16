@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AppSettings } from '../src/shared/contracts'
-import { canonicalAccelerator, validateSettingsMutation } from '../src/main/settings/validation'
+import { canonicalAccelerator, parseSettingsPatch, validateSettingsMutation } from '../src/main/settings/validation'
 
 const settings: AppSettings = {
   opacity: 0.92, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna',
@@ -25,5 +25,18 @@ describe('runtime settings validation', () => {
     expect(() => validateSettingsMutation(settings, { selectedAudioEndpointId: 'next' }, true)).toThrow(/active/i)
     expect(() => validateSettingsMutation(settings, { listenShortcut: 'Control+Alt+Space' }, true)).toThrow(/active/i)
     expect(() => validateSettingsMutation(settings, { opacity: 0.8 }, true)).not.toThrow()
+  })
+
+  it('strictly bounds renderer patches and rejects unknown fields', () => {
+    expect(parseSettingsPatch({ inrPerUsd: 83.5, projectSummary: '🧪'.repeat(4_000) })).toMatchObject({ inrPerUsd: 83.5 })
+    expect(() => parseSettingsPatch({ inrPerUsd: 0 })).toThrow()
+    expect(() => parseSettingsPatch({ inrPerUsd: 1_001 })).toThrow()
+    expect(() => parseSettingsPatch({ projectSummary: '🧪'.repeat(4_001) })).toThrow(/4,000/i)
+    expect(() => parseSettingsPatch({ telemetry: true })).toThrow(/unrecognized|invalid/i)
+  })
+
+  it('normalizes approved vocabulary without accepting duplicate or oversized terms', () => {
+    expect(parseSettingsPatch({ approvedVocabulary: ['  WASAPI ', 'wasapi', 'FTS5'] }).approvedVocabulary).toEqual(['WASAPI', 'FTS5'])
+    expect(() => parseSettingsPatch({ approvedVocabulary: ['x'.repeat(65)] })).toThrow(/1–64/i)
   })
 })

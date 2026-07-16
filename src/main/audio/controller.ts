@@ -12,6 +12,10 @@ import {
   OperationCoordinator, operationError, toOperationError, type OperationHandle
 } from '../operations/coordinator.js'
 import { validatePresenterWav } from './wavValidation.js'
+import {
+  buildResponseTransmissionPreview, buildTranscriptionTransmissionPreview,
+  type TransmissionPreviewGate
+} from '../privacy/transmissionPreview.js'
 
 interface CaptureSession {
   operation: OperationHandle
@@ -32,6 +36,8 @@ export interface AudioControllerOptions {
   helper?: HelperClient
   temporaryDirectory?: () => string
   idGenerator?: () => string
+  transmissionPreviewGate?: TransmissionPreviewGate
+  onListeningConsentRequired?: () => void
 }
 
 export class AudioController {
@@ -82,7 +88,9 @@ export class AudioController {
   }
 
   async configureShortcut(accelerator: string): Promise<void> {
-    if (!this.helper.available) return
+    if (!this.helper.available) {
+      throw operationError('helper_unavailable', 'The Windows helper must be ready before changing the hold-to-listen shortcut.', true)
+    }
     await this.helper.command({ type: 'configureShortcut', accelerator }, ['shortcutConfigured', 'error'])
   }
 
@@ -102,6 +110,14 @@ export class AudioController {
 
   async startCapture(): Promise<OperationActionResult> {
     if (this.disposed) return failure('helper_unavailable', 'PresenterAI is shutting down.', false)
+    if (!this.settings.privacyConsent.satisfied) {
+      this.options.onListeningConsentRequired?.()
+      return failure(
+        'listening_consent_required',
+        'Review and accept the first-use listening disclosure in Privacy before starting capture.',
+        false
+      )
+    }
     let operation: OperationHandle
     try { operation = this.operations.begin('audio', 'starting_capture') }
     catch (error) { return { ok: false, error: toOperationError(error) } }
@@ -121,6 +137,9 @@ export class AudioController {
     this.warning = undefined
     this.activeEndpoint = undefined
     this.operations.registerCleanup(operation.id, async () => this.cleanupSession(session))
+    if (this.options.transmissionPreviewGate) {
+      this.operations.registerCleanup(operation.id, () => this.options.transmissionPreviewGate?.clear(operation.id))
+    }
     this.operations.setCancelHandler(operation.id, async () => this.cancelSession(session))
     this.notify()
 
@@ -214,6 +233,25 @@ export class AudioController {
     await this.helper.stopProcess()
   }
 
+  async clearOwnedTemporaryAudio(): Promise<void> {
+    if (this.operations.isBusy) throw operationError('busy', 'Wait for the active PresenterAI operation to finish before clearing local data.', false)
+    const directory = this.tempDirectory()
+    await mkdir(directory, { recursive: true })
+    const failures: string[] = []
+    for (const file of await readdir(directory)) {
+      if (!file.toLocaleLowerCase('en-US').endsWith('.wav')) continue
+      const path = join(directory, file)
+      try {
+        const info = await lstat(path)
+        if (info.isFile() && !await this.deleteAudio(path)) failures.push(file)
+      } catch { failures.push(file) }
+    }
+    if (failures.length) throw new Error(`PresenterAI could not remove ${failures.length} temporary audio file(s).`)
+    this.orphanedAudioPath = undefined
+    this.warning = undefined
+    this.notify()
+  }
+
   private async processCapture(session: CaptureSession): Promise<void> {
     if (session.processing || session.terminal || !this.operations.isCurrent(session.operation.id)) return
     session.processing = true
@@ -233,13 +271,21 @@ export class AudioController {
       session.filePresent = true
       const validatedAudio = await validatePresenterWav(session.path, this.tempDirectory(), capture)
       this.lastCapture = withoutPath(capture)
-      await this.settings.addUsage(0, 0, capture.durationMs / 60_000).catch(() => undefined)
       this.activeEndpoint = { id: capture.endpointId, name: capture.endpointName, isDefault: this.devices.find((device) => device.id === capture.endpointId)?.isDefault ?? false }
 
       this.operations.transition(operation.id, 'transcribing')
       let transcription: Awaited<ReturnType<AiService['transcribe']>>
+      const terminologyHint = this.ai.transcriptionTerminologyHint()
       try {
-        transcription = await this.ai.transcribe({ bytes: validatedAudio.bytes, filename: 'reviewer.wav' }, { signal: operation.signal })
+        await this.options.transmissionPreviewGate?.present(buildTranscriptionTransmissionPreview(
+          operation.id,
+          { durationMs: validatedAudio.durationMs, bytes: validatedAudio.byteCount, endpointName: capture.endpointName },
+          terminologyHint
+        ))
+        transcription = await this.ai.transcribe(
+          { bytes: validatedAudio.bytes, filename: 'reviewer.wav' },
+          { signal: operation.signal, durationMs: validatedAudio.durationMs, terminologyHint }
+        )
       } finally {
         await this.deleteSessionAudio(session, true)
       }
@@ -247,6 +293,9 @@ export class AudioController {
 
       this.operations.transition(operation.id, 'retrieving')
       const chunks = this.ai.retrieve(transcription.text, { signal: operation.signal })
+      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
+
+      await this.options.transmissionPreviewGate?.present(buildResponseTransmissionPreview(operation.id, chunks))
       if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
 
       this.operations.transition(operation.id, 'generating')
