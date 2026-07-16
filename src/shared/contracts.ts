@@ -10,18 +10,44 @@ export const questionCategories = [
 ] as const
 
 export type QuestionCategory = (typeof questionCategories)[number]
-export type OperationState = 'idle' | 'listening' | 'transcribing' | 'retrieving' | 'generating' | 'error'
+export const operationStates = [
+  'idle', 'starting_capture', 'listening', 'finalizing', 'transcribing', 'retrieving', 'generating', 'cancelling', 'error'
+] as const
+export type OperationState = (typeof operationStates)[number]
+export type OperationKind = 'typed' | 'audio'
 export type ModelMode = 'normal' | 'strong'
 export type HelperLifecycle = 'missing' | 'starting' | 'ready' | 'capturing' | 'failed'
 export type CaptureTestOutcome = 'overlay-absent' | 'overlay-black' | 'overlay-visible' | 'unsupported' | 'untested'
 export const aiErrorCodes = [
   'invalid_key', 'quota', 'rate_limit', 'timeout', 'offline', 'cancelled', 'output_limit',
-  'malformed_response', 'busy', 'unknown'
+  'malformed_response', 'busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio',
+  'invalid_transcript', 'capture_timeout', 'unknown'
 ] as const
 export type AiErrorCode = (typeof aiErrorCodes)[number]
 
 export interface AudioDevice { id: string; name: string; isDefault: boolean }
-export interface AudioCaptureResult { path: string; durationMs: number; bytes: number; sampleRate: number; channels: number; endpointId: string }
+export type AudioCaptureTerminalReason = 'released' | 'maximum_duration' | 'maximum_size' | 'stopped'
+export interface AudioCaptureResult {
+  path: string
+  durationMs: number
+  bytes: number
+  sampleRate: number
+  channels: number
+  endpointId: string
+  endpointName: string
+  terminalReason: AudioCaptureTerminalReason
+}
+
+export interface OperationTimings {
+  captureStartMs?: number
+  listeningMs?: number
+  finalizationMs?: number
+  transcriptionMs?: number
+  retrievalMs?: number
+  generationMs?: number
+  releaseToAnswerMs?: number
+  totalMs?: number
+}
 
 export interface Evidence { chunkId: string; documentName: string; location: string }
 export interface AssistantResponse {
@@ -192,12 +218,20 @@ export interface AppSettings {
   hideShortcut: string
   listenShortcut: string
   projectSummary: string
+  approvedVocabulary: string[]
   selectedAudioEndpointId?: string
   inrPerUsd?: number
 }
 
 export interface AppStatus {
   operation: OperationState
+  operationId?: string
+  operationKind?: OperationKind
+  operationStartedAt?: string
+  stageStartedAt?: string
+  operationTimings: OperationTimings
+  indicatorLatencyMs?: number
+  answerRenderConfirmed?: boolean
   capture: CaptureProtectionStatus
   listening: boolean
   audioSource: string
@@ -208,6 +242,8 @@ export interface AppStatus {
   audioDevices: AudioDevice[]
   selectedAudioEndpointId?: string
   lastCapture?: Omit<AudioCaptureResult, 'path'>
+  activeAudioEndpoint?: AudioDevice
+  operationError?: AiErrorInfo
   shortcutWarnings: string[]
 }
 
@@ -219,7 +255,18 @@ export interface CaptureTestInput {
   notes: string
 }
 
-export interface UsageSummary { inputTokens: number; outputTokens: number; audioMinutes: number; estimatedUsd: number }
+export interface UsageSummary {
+  inputTokens: number
+  outputTokens: number
+  audioMinutes: number
+  transcriptionInputTokens: number
+  transcriptionAudioTokens: number
+  transcriptionOutputTokens: number
+  estimatedUsd: number
+  pricingVersion: string
+}
+
+export type OperationActionResult = { ok: true } | { ok: false; error: AiErrorInfo }
 
 export interface PresenterAPI {
   getStatus(): Promise<AppStatus>
@@ -230,7 +277,7 @@ export interface PresenterAPI {
   deleteApiKey(): Promise<void>
   testApiKey(): Promise<{ ok: boolean; message: string }>
   ask(question: string): Promise<AskResult>
-  cancel(): Promise<void>
+  cancel(): Promise<OperationActionResult>
   selectDocuments(): Promise<DocumentImportResult>
   listDocuments(): Promise<DocumentInfo[]>
   removeDocument(id: string): Promise<void>
@@ -241,8 +288,10 @@ export interface PresenterAPI {
   setClickThrough(enabled: boolean): Promise<void>
   setOpacity(value: number): Promise<void>
   showSettings(): Promise<void>
-  startListening(): Promise<void>
-  stopListening(): Promise<void>
+  startListening(): Promise<OperationActionResult>
+  stopListening(): Promise<OperationActionResult>
+  ackListeningIndicator(operationId: string): Promise<void>
+  ackAnswerVisible(operationId: string): Promise<void>
   refreshAudioDevices(): Promise<AudioDevice[]>
   setCaptureProtection(enabled: boolean): Promise<void>
   saveCaptureResult(result: CaptureTestInput): Promise<CaptureCompatibilityResult>
@@ -250,6 +299,6 @@ export interface PresenterAPI {
   onStatus(callback: (status: AppStatus) => void): () => void
   onFocusAsk(callback: () => void): () => void
   onOpenSettings(callback: () => void): () => void
-  onResponse(callback: (response: AssistantResponse) => void): () => void
-  onError(callback: (message: string) => void): () => void
+  onResponse(callback: (response: AssistantResponse, operationId: string) => void): () => void
+  onError(callback: (error: AiErrorInfo) => void): () => void
 }

@@ -116,6 +116,15 @@ export class RetrievalIndex {
     `).all().map((row) => rowToDocumentInfo(row as unknown as DocumentRow))
   }
 
+  documentTitles(): readonly string[] {
+    return (this.requireDb().prepare(`
+      SELECT DISTINCT title FROM chunks
+      WHERE title IS NOT NULL AND trim(title) <> ''
+      ORDER BY title COLLATE NOCASE
+      LIMIT 100
+    `).all() as Array<{ title: string }>).map((row) => row.title)
+  }
+
   async addFiles(paths: string[]): Promise<DocumentImportResult> {
     return this.withWriteLock(async () => {
       const outcomes: DocumentImportOutcome[] = []

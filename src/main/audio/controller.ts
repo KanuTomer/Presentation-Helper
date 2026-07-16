@@ -1,135 +1,488 @@
-import { app, globalShortcut } from 'electron'
-import { mkdir, readdir, rm, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { app } from 'electron'
+import { lstat, mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { AiService } from '../ai/service.js'
-import { HelperClient, type HelperEvent } from './helperClient.js'
-import type { AssistantResponse, AudioCaptureResult, AudioDevice, OperationState } from '../../shared/contracts.js'
+import { HelperClient, HelperClientError, type HelperEvent } from './helperClient.js'
+import type {
+  AiErrorInfo, AssistantResponse, AudioCaptureResult, AudioDevice, OperationActionResult
+} from '../../shared/contracts.js'
 import type { SettingsStore } from '../settings/store.js'
+import type { AiService } from '../ai/service.js'
+import {
+  OperationCoordinator, operationError, toOperationError, type OperationHandle
+} from '../operations/coordinator.js'
+import { validatePresenterWav } from './wavValidation.js'
+
+interface CaptureSession {
+  operation: OperationHandle
+  path: string
+  captureStarted: boolean
+  captureCommandIssued: boolean
+  helperTerminal: boolean
+  filePresent: boolean
+  releaseRequested: boolean
+  cancelRequested: boolean
+  processing: boolean
+  terminal: boolean
+  limitTimer?: NodeJS.Timeout
+  cancellation?: Promise<void>
+}
+
+export interface AudioControllerOptions {
+  helper?: HelperClient
+  temporaryDirectory?: () => string
+  idGenerator?: () => string
+}
 
 export class AudioController {
-  readonly helper = new HelperClient()
-  listening = false
-  temporaryAudio?: string
-  operation: OperationState = 'idle'
+  readonly helper: HelperClient
   devices: AudioDevice[] = []
   lastCapture?: Omit<AudioCaptureResult, 'path'>
+  activeEndpoint?: AudioDevice
   warning?: string
   onState?: () => void
-  onResponse?: (response: AssistantResponse) => void
-  onError?: (message: string) => void
-  private busy = false
-  private restarted = false
-  constructor(private ai: AiService, private settings: SettingsStore) {}
+  onResponse?: (response: AssistantResponse, operationId: string) => void
+  onError?: (error: AiErrorInfo) => void
+  private session?: CaptureSession
+  private restartUsed = false
+  private disposed = false
+  private helperInitialization?: Promise<void>
+  private orphanedAudioPath?: string
+
+  constructor(
+    private ai: AiService,
+    private settings: SettingsStore,
+    readonly operations: OperationCoordinator,
+    private options: AudioControllerOptions = {}
+  ) {
+    this.helper = options.helper ?? new HelperClient()
+    this.operations.onChange = () => this.notify()
+  }
+
+  get listening(): boolean { return this.operations.snapshot().operation === 'listening' }
+  get temporaryAudio(): string | undefined { return this.session?.filePresent ? this.session.path : this.orphanedAudioPath }
 
   async initialize(): Promise<void> {
     await this.cleanupStale()
     this.helper.onState = () => this.notify()
-    this.helper.onShortcutDown = () => { if (!this.busy) void this.startCapture().catch((error) => this.fail(error)) }
-    this.helper.onShortcutUp = () => { if (this.listening) void this.stopAndProcess() }
-    this.helper.onUnexpectedExit = () => void this.recoverHelper()
-    await this.startHelper()
+    this.helper.onShortcutDown = () => {
+      void this.startCapture().then((result) => { if (!result.ok) this.report(result.error) })
+    }
+    this.helper.onShortcutUp = () => { void this.stopAndProcess() }
+    this.helper.onCaptureLimitReached = (operationId, reason) => {
+      const session = this.session
+      if (!session || session.operation.id !== operationId || session.processing || session.terminal) return
+      this.warning = reason === 'maximum_size'
+        ? 'The bounded 128 MiB capture limit was reached. PresenterAI is finalizing the recording.'
+        : 'The 90-second capture limit was reached. PresenterAI is finalizing the bounded recording.'
+      void this.processCapture(session)
+    }
+    this.helper.onUnexpectedExit = () => { void this.recoverHelper() }
+    await this.startHelper(false)
   }
+
   async configureShortcut(accelerator: string): Promise<void> {
-    if (this.helper.available) await this.helper.command({ type: 'configureShortcut', accelerator }, ['shortcutConfigured', 'error'])
+    if (!this.helper.available) return
+    await this.helper.command({ type: 'configureShortcut', accelerator }, ['shortcutConfigured', 'error'])
   }
-  async refreshDevices(): Promise<AudioDevice[]> {
+
+  async refreshDevices(manualRetry = false): Promise<AudioDevice[]> {
+    if (!this.helper.available && manualRetry) await this.startHelper(true)
     if (!this.helper.available) { this.devices = []; this.notify(); return [] }
     const response = await this.helper.command({ type: 'listDevices' }, ['deviceList', 'error'])
-    this.devices = Array.isArray(response.devices) ? response.devices.map((device) => {
-      const value = device as Record<string, unknown>
-      return { id: String(value.id), name: String(value.name), isDefault: Boolean(value.isDefault) }
-    }) : []
+    this.devices = parseDevices(response.devices)
     const selected = this.settings.settings.selectedAudioEndpointId
     if (selected && !this.devices.some((device) => device.id === selected)) {
       this.warning = 'The selected audio output is unavailable. PresenterAI will use the current Windows default output.'
       await this.settings.updateSettings({ selectedAudioEndpointId: undefined })
     }
-    this.notify(); return this.devices
+    this.notify()
+    return this.devices
   }
-  async startCapture(): Promise<void> {
-    if (this.busy) return
-    if (!this.helper.available) throw new Error(this.helper.lastError ?? 'Windows audio helper is unavailable.')
-    this.busy = true; this.operation = 'listening'; this.warning = undefined; this.notify()
-    const directory = this.tempDirectory(); await mkdir(directory, { recursive: true })
-    this.temporaryAudio = join(directory, `${randomUUID()}.wav`)
+
+  async startCapture(): Promise<OperationActionResult> {
+    if (this.disposed) return failure('helper_unavailable', 'PresenterAI is shutting down.', false)
+    let operation: OperationHandle
+    try { operation = this.operations.begin('audio', 'starting_capture') }
+    catch (error) { return { ok: false, error: toOperationError(error) } }
+    if (!this.helper.available) {
+      const error = operationError('helper_unavailable', this.helper.lastError ?? 'Windows audio helper is unavailable.', true)
+      await this.operations.finish(operation.id, 'error', error)
+      return { ok: false, error }
+    }
+
+    const directory = this.tempDirectory()
+    const session: CaptureSession = {
+      operation, path: join(directory, `${(this.options.idGenerator ?? randomUUID)()}.wav`),
+      captureStarted: false, captureCommandIssued: false, helperTerminal: false, filePresent: false,
+      releaseRequested: false, cancelRequested: false, processing: false, terminal: false
+    }
+    this.session = session
+    this.warning = undefined
+    this.activeEndpoint = undefined
+    this.operations.registerCleanup(operation.id, async () => this.cleanupSession(session))
+    this.operations.setCancelHandler(operation.id, async () => this.cancelSession(session))
+    this.notify()
+
     try {
-      await this.helper.command({ type: 'startCapture', path: this.temporaryAudio, endpointId: this.settings.settings.selectedAudioEndpointId }, ['captureStarted', 'error'])
-      this.listening = true; this.helper.setLifecycle('capturing')
-      if (!globalShortcut.register('Escape', () => void this.cancel())) this.warning = 'Esc could not be registered globally; use Cancel in PresenterAI.'
+      await mkdir(directory, { recursive: true })
+      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) {
+        await this.cancelSession(session)
+        return { ok: true }
+      }
+      let event: HelperEvent
+      try { event = await this.startHelperCapture(session, this.settings.settings.selectedAudioEndpointId) }
+      catch (error) {
+        if (!this.settings.settings.selectedAudioEndpointId || !isDeviceUnavailable(error) || !this.operations.isCurrent(operation.id)) throw error
+        this.warning = 'The selected audio output disappeared. PresenterAI switched to the current Windows default output.'
+        await this.settings.updateSettings({ selectedAudioEndpointId: undefined })
+        try { await this.refreshDevices() }
+        catch {
+          // Enumeration and default activation are separate Windows operations.
+          // A disappearing endpoint can invalidate enumeration while the new
+          // default is already usable, so the one permitted fallback attempt
+          // must not be skipped solely because refresh failed.
+          this.devices = []
+          this.warning = 'The selected audio output disappeared and device refresh failed. PresenterAI is trying the current Windows default output once.'
+          this.notify()
+        }
+        event = await this.startHelperCapture(session, undefined)
+      }
+      if (!this.operations.isCurrent(operation.id)) return { ok: true }
+      validateOperationEvent(event, operation.id)
+      session.captureStarted = true
+      this.activeEndpoint = endpointFromEvent(event, this.devices)
+      this.helper.setLifecycle('capturing')
+      if (operation.signal.aborted || session.cancelRequested) {
+        await this.cancelSession(session)
+      } else if (session.releaseRequested) {
+        void this.processCapture(session)
+      } else {
+        this.operations.transition(operation.id, 'listening')
+        session.limitTimer = setTimeout(() => {
+          if (!this.operations.isCurrent(operation.id) || session.processing || session.terminal) return
+          this.warning = 'The 90-second capture limit was reached. PresenterAI is finalizing the bounded recording.'
+          void this.processCapture(session)
+        }, 90_000)
+      }
+      return { ok: true }
+    } catch (error) {
+      const mapped = mapCaptureError(error)
+      // finish(error) aborts the shared signal as part of terminal cleanup, so
+      // cancellation ownership must be captured before finish mutates it.
+      const wasCancelled = operation.signal.aborted
+      await this.operations.finish(operation.id, wasCancelled ? 'cancelled' : 'error', wasCancelled ? undefined : mapped)
+      return wasCancelled ? { ok: true } : { ok: false, error: mapped }
+    }
+  }
+
+  async stopAndProcess(): Promise<OperationActionResult> {
+    const session = this.session
+    if (!session || !this.operations.isCurrent(session.operation.id)) {
+      return failure('busy', 'PresenterAI is not currently capturing audio.', false)
+    }
+    const stage = this.operations.snapshot().operation
+    if (stage === 'starting_capture') {
+      session.releaseRequested = true
       this.notify()
-    } catch (error) {
-      const path = this.temporaryAudio
-      if (path) { await rm(path, { force: true }); await rm(`${path}.raw.wav`, { force: true }) }
-      this.busy = false; this.operation = 'error'; this.temporaryAudio = undefined
-      if (this.helper.state !== 'failed' && this.helper.state !== 'missing') this.helper.setLifecycle('ready')
-      this.notify(); throw error
+      return { ok: true }
     }
+    if (stage !== 'listening' || session.processing) return { ok: true }
+    void this.processCapture(session)
+    return { ok: true }
   }
-  async stopAndProcess(): Promise<void> {
-    if (!this.listening || !this.temporaryAudio) return
-    const path = this.temporaryAudio; this.listening = false; this.operation = 'transcribing'; this.notify()
+
+  async cancel(): Promise<OperationActionResult> {
+    if (!this.operations.isBusy) { await this.operations.cancel(); return { ok: true } }
+    await this.operations.cancel()
+    return { ok: true }
+  }
+
+  acknowledgeListeningIndicator(operationId: string): void {
+    this.operations.acknowledgeListeningIndicator(operationId)
+  }
+
+  acknowledgeAnswerVisible(operationId: string): void {
+    this.operations.acknowledgeAnswerVisible(operationId)
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true
+    await this.operations.cancel()
+    const session = this.session
+    if (session) await this.cleanupSession(session)
+    await this.helper.stopProcess()
+  }
+
+  private async processCapture(session: CaptureSession): Promise<void> {
+    if (session.processing || session.terminal || !this.operations.isCurrent(session.operation.id)) return
+    session.processing = true
+    clearTimeout(session.limitTimer)
+    const { operation } = session
+    let terminalError: AiErrorInfo | undefined
     try {
-      const event = await this.helper.command({ type: 'stopCapture' }, ['captureStopped', 'error'], 30_000)
+      this.operations.transition(operation.id, 'finalizing')
+      const event = await this.helper.command({
+        type: 'stopCapture', operationId: operation.id, terminalReason: 'released'
+      }, ['captureStopped', 'error'], 30_000)
+      validateOperationEvent(event, operation.id)
+      session.helperTerminal = true
+      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
       this.helper.setLifecycle('ready')
-      const capture = captureResult(event)
-      this.lastCapture = { durationMs: capture.durationMs, bytes: capture.bytes, sampleRate: capture.sampleRate, channels: capture.channels, endpointId: capture.endpointId }
-      await this.settings.addUsage(0, 0, capture.durationMs / 60_000)
-      const transcript = await this.ai.transcribe(path)
-      this.operation = 'retrieving'; this.notify()
-      this.operation = 'generating'; this.notify()
-      const response = await this.ai.ask(transcript)
-      this.onResponse?.(response); this.operation = 'idle'
+      const capture = captureResult(event, session.path)
+      session.filePresent = true
+      const validatedAudio = await validatePresenterWav(session.path, this.tempDirectory(), capture)
+      this.lastCapture = withoutPath(capture)
+      await this.settings.addUsage(0, 0, capture.durationMs / 60_000).catch(() => undefined)
+      this.activeEndpoint = { id: capture.endpointId, name: capture.endpointName, isDefault: this.devices.find((device) => device.id === capture.endpointId)?.isDefault ?? false }
+
+      this.operations.transition(operation.id, 'transcribing')
+      let transcription: Awaited<ReturnType<AiService['transcribe']>>
+      try {
+        transcription = await this.ai.transcribe({ bytes: validatedAudio.bytes, filename: 'reviewer.wav' }, { signal: operation.signal })
+      } finally {
+        await this.deleteSessionAudio(session, true)
+      }
+      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
+
+      this.operations.transition(operation.id, 'retrieving')
+      const chunks = this.ai.retrieve(transcription.text, { signal: operation.signal })
+      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
+
+      this.operations.transition(operation.id, 'generating')
+      const response = await this.ai.generate(transcription.text, chunks, { signal: operation.signal })
+      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
+      this.operations.completeCurrentStage(operation.id)
+      this.onResponse?.(response, operation.id)
+      const answerVisible = await this.operations.waitForAnswerVisible(operation.id)
+      if (!answerVisible && !operation.signal.aborted) {
+        throw operationError('timeout', 'The answer was generated, but PresenterAI could not confirm that it became visible.', true)
+      }
     } catch (error) {
-      if (this.helper.state !== 'failed' && this.helper.state !== 'missing') this.helper.setLifecycle('ready')
-      this.operation = 'error'; this.onError?.((error as Error).message)
+      terminalError = mapPipelineError(error)
+      if (terminalError.code !== 'cancelled' && !operation.signal.aborted && this.operations.isCurrent(operation.id)) this.report(terminalError)
     } finally {
-      globalShortcut.unregister('Escape')
-      await rm(path, { force: true }); await rm(`${path}.raw.wav`, { force: true }); this.temporaryAudio = undefined; this.busy = false; this.notify()
+      session.terminal = true
+      await this.operations.finish(operation.id, operation.signal.aborted || terminalError?.code === 'cancelled' ? 'cancelled' : terminalError ? 'error' : 'success', terminalError)
     }
   }
-  async cancel(): Promise<void> {
-    this.ai.cancel()
-    globalShortcut.unregister('Escape')
-    if (this.listening) await this.helper.command({ type: 'cancel' }, ['captureCancelled', 'error']).catch(() => undefined)
-    if (this.temporaryAudio) { await rm(this.temporaryAudio, { force: true }); await rm(`${this.temporaryAudio}.raw.wav`, { force: true }) }
-    this.listening = false; this.busy = false; this.temporaryAudio = undefined; this.operation = 'idle'
-    if (this.helper.state === 'capturing') this.helper.setLifecycle('ready')
+
+  private async cancelSession(session: CaptureSession): Promise<void> {
+    session.cancelRequested = true
+    if (session.terminal) return
+    if (session.cancellation) return session.cancellation
+    session.cancellation = (async () => {
+      await this.ensureHelperTerminal(session)
+      session.terminal = true
+      await this.operations.finish(session.operation.id, 'cancelled')
+    })()
+    return session.cancellation
+  }
+
+  private async cleanupSession(session: CaptureSession): Promise<void> {
+    clearTimeout(session.limitTimer)
+    await this.ensureHelperTerminal(session)
+    await this.deleteSessionAudio(session)
+    if (this.session?.operation.id === session.operation.id) this.session = undefined
+    this.activeEndpoint = undefined
+    if (this.helper.state !== 'failed' && this.helper.state !== 'missing' && this.helper.state !== 'starting') this.helper.setLifecycle('ready')
     this.notify()
   }
-  async dispose(): Promise<void> { await this.helper.stopProcess() }
 
-  private async startHelper(): Promise<void> {
+  private async startHelperCapture(session: CaptureSession, endpointId?: string): Promise<HelperEvent> {
+    session.captureCommandIssued = true
+    return this.helper.command({
+      type: 'startCapture', operationId: session.operation.id, path: session.path,
+      ...(endpointId ? { endpointId } : {})
+    }, ['captureStarted', 'error'])
+  }
+
+  private async startHelper(manual: boolean): Promise<void> {
+    if (manual) this.restartUsed = false
+    if (this.helperInitialization) return this.helperInitialization
+    const attempt = this.initializeHelper().finally(() => {
+      if (this.helperInitialization === attempt) this.helperInitialization = undefined
+    })
+    this.helperInitialization = attempt
+    return attempt
+  }
+
+  private async initializeHelper(): Promise<void> {
     if (!await this.helper.start()) return
-    await this.configureShortcut(this.settings.settings.listenShortcut)
-    await this.refreshDevices()
+    try {
+      await this.configureShortcut(this.settings.settings.listenShortcut)
+    } catch (error) {
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'The hold-to-listen shortcut could not be configured.'
+      await this.helper.stopProcess()
+      this.helper.setFailure(message)
+      this.warning = message
+      this.notify()
+      return
+    }
+    try {
+      await this.refreshDevices()
+    } catch (error) {
+      this.devices = []
+      this.warning = error instanceof Error && error.message
+        ? `Audio devices could not be enumerated: ${error.message}`
+        : 'Audio devices could not be enumerated. The Windows default output will be tried.'
+      this.notify()
+    }
   }
+
   private async recoverHelper(): Promise<void> {
-    this.listening = false
-    if (this.busy || this.restarted) { this.operation = 'error'; this.onError?.('Windows audio helper stopped unexpectedly.'); this.notify(); return }
-    this.restarted = true
-    await this.startHelper()
-    if (!this.helper.available) this.onError?.('Windows audio helper could not be restarted.')
+    const active = this.operations.current
+    if (active?.kind === 'audio') {
+      const error = operationError('helper_unavailable', 'Windows audio helper stopped unexpectedly.', true)
+      this.report(error)
+      await this.operations.finish(active.id, 'error', error)
+      return
+    }
+    if (this.restartUsed || this.disposed) {
+      this.report(operationError('helper_unavailable', 'Windows audio helper stopped again. Use Retry after checking the installation.', true))
+      return
+    }
+    this.restartUsed = true
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    await this.startHelper(false)
+    if (!this.helper.available) this.report(operationError('helper_unavailable', 'Windows audio helper could not be restarted.', true))
   }
-  private fail(error: unknown): void { this.operation = 'error'; this.onError?.((error as Error).message); this.notify() }
+
+  private report(error: AiErrorInfo): void { this.onError?.(error); this.notify() }
   private notify(): void { this.onState?.() }
-  private tempDirectory(): string { return join(app.getPath('temp'), 'PresenterAI-audio') }
+  private tempDirectory(): string { return this.options.temporaryDirectory?.() ?? join(app.getPath('temp'), 'PresenterAI-audio') }
+  private async deleteAudio(path: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await rm(path, { force: true })
+        try { await stat(path) } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true
+          throw error
+        }
+      } catch { /* retry after the helper/file handle has had a chance to close */ }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    return false
+  }
+
+  private async deleteSessionAudio(session: CaptureSession, required = false): Promise<void> {
+    const deleted = await this.deleteAudio(session.path)
+    session.filePresent = !deleted
+    this.orphanedAudioPath = deleted ? (this.orphanedAudioPath === session.path ? undefined : this.orphanedAudioPath) : session.path
+    if (!deleted) this.warning = 'PresenterAI could not delete its temporary WAV. Close applications that may be scanning the file, then restart PresenterAI to retry stale-file cleanup.'
+    this.notify()
+    if (!deleted && required) {
+      throw operationError('invalid_audio', 'PresenterAI could not delete its temporary WAV, so no document or model processing was allowed to continue.', false)
+    }
+  }
+
+  private async ensureHelperTerminal(session: CaptureSession): Promise<void> {
+    if (!session.captureCommandIssued || session.helperTerminal) return
+    if (!this.helper.available) { session.helperTerminal = true; return }
+    try {
+      const terminal = await this.helper.command(
+        { type: 'cancel', operationId: session.operation.id },
+        ['captureCancelled', 'error'],
+        5_000
+      )
+      validateOperationEvent(terminal, session.operation.id)
+      session.helperTerminal = true
+      this.helper.setLifecycle('ready')
+    } catch (error) {
+      if (error instanceof HelperClientError && error.code === 'duplicate_terminal') {
+        // Protocol v2 records terminal operations before replying. A concurrent
+        // stop may therefore win the race and make this cleanup cancel
+        // redundant; duplicate_terminal is positive proof that capture ended.
+        session.helperTerminal = true
+        this.helper.setLifecycle('ready')
+        return
+      }
+      // A timed-out/invalid start may still become active after the UI has
+      // moved on. Terminating the sidecar is the only definitive way to prove
+      // WASAPI capture has stopped when no matching terminal event arrives.
+      await this.helper.stopProcess()
+      session.helperTerminal = true
+    }
+  }
+
   private async cleanupStale(): Promise<void> {
-    const directory = this.tempDirectory(); await mkdir(directory, { recursive: true })
+    const directory = this.tempDirectory()
+    await mkdir(directory, { recursive: true })
     for (const file of await readdir(directory)) {
-      const path = join(directory, file); const info = await stat(path)
-      if (Date.now() - info.mtimeMs > 3_600_000) await rm(path, { force: true })
+      if (!file.toLocaleLowerCase('en-US').endsWith('.wav')) continue
+      const path = join(directory, file)
+      try {
+        const info = await lstat(path)
+        if (info.isFile() && Date.now() - info.mtimeMs > 3_600_000) await rm(path, { force: true })
+      } catch { /* another process may have removed or locked a stale file */ }
     }
   }
 }
 
-function captureResult(event: HelperEvent): AudioCaptureResult {
-  const result = {
+function parseDevices(value: unknown): AudioDevice[] {
+  if (!Array.isArray(value)) return []
+  return value.map((device) => {
+    const item = device as Record<string, unknown>
+    return { id: String(item.id), name: String(item.name), isDefault: Boolean(item.isDefault) }
+  }).filter((device) => device.id !== 'undefined' && device.name !== 'undefined')
+}
+
+function endpointFromEvent(event: HelperEvent, devices: AudioDevice[]): AudioDevice {
+  const id = String(event.endpointId)
+  const name = String(event.endpointName)
+  if (!id || id === 'undefined' || !name || name === 'undefined') throw operationError('invalid_audio', 'The Windows helper returned invalid endpoint metadata.', true)
+  return { id, name, isDefault: devices.find((device) => device.id === id)?.isDefault ?? false }
+}
+
+function captureResult(event: HelperEvent, expectedPath: string): AudioCaptureResult {
+  const terminalReason = String(event.terminalReason)
+  const result: AudioCaptureResult = {
     path: String(event.path), durationMs: Number(event.durationMs), bytes: Number(event.bytes), sampleRate: Number(event.sampleRate),
-    channels: Number(event.channels), endpointId: String(event.endpointId)
+    channels: Number(event.channels), endpointId: String(event.endpointId), endpointName: String(event.endpointName),
+    terminalReason: terminalReason as AudioCaptureResult['terminalReason']
   }
-  if (!result.path || result.path === 'undefined' || !result.endpointId || result.endpointId === 'undefined' ||
-      !Number.isFinite(result.durationMs) || result.durationMs < 250 || !Number.isFinite(result.bytes) || result.bytes <= 44 ||
-      result.sampleRate !== 16_000 || result.channels !== 1) throw new Error('The Windows helper returned invalid capture metadata.')
+  if (resolve(result.path) !== resolve(expectedPath) || !result.endpointId || result.endpointId === 'undefined' ||
+      !result.endpointName || result.endpointName === 'undefined' || !['released', 'maximum_duration', 'maximum_size', 'stopped'].includes(terminalReason) ||
+      !Number.isFinite(result.durationMs) || result.durationMs < 250 || result.durationMs > 90_000 ||
+      !Number.isFinite(result.bytes) || result.bytes <= 44 || result.bytes > 3_100_000 ||
+      result.sampleRate !== 16_000 || result.channels !== 1) {
+    throw operationError('invalid_audio', 'The Windows helper returned invalid capture metadata.', true)
+  }
   return result
+}
+
+function validateOperationEvent(event: HelperEvent, operationId: string): void {
+  if (event.operationId !== operationId) throw operationError('invalid_audio', 'The Windows helper returned a stale capture event.', true)
+}
+
+function withoutPath(capture: AudioCaptureResult): Omit<AudioCaptureResult, 'path'> {
+  const { path: _path, ...metadata } = capture
+  return metadata
+}
+
+function isDeviceUnavailable(error: unknown): boolean {
+  return error instanceof HelperClientError && ['device_unavailable', 'endpoint_not_found'].includes(error.code)
+}
+
+function mapCaptureError(error: unknown): AiErrorInfo {
+  if (error instanceof HelperClientError) {
+    if (isDeviceUnavailable(error)) return operationError('device_unavailable', error.message, true)
+    if (error.code === 'invalid_audio') return operationError('invalid_audio', error.message, true)
+    if (error.code === 'helper_timeout' || error.code === 'capture_timeout') return operationError('capture_timeout', error.message, true)
+    return operationError('helper_unavailable', error.message, true)
+  }
+  return toOperationError(error)
+}
+
+function mapPipelineError(error: unknown): AiErrorInfo {
+  // Finalization uses the same helper error vocabulary as startup. AI and
+  // coordinator errors already carry an allowed application-level code.
+  if (error instanceof HelperClientError) return mapCaptureError(error)
+  return toOperationError(error)
+}
+
+function failure(code: AiErrorInfo['code'], message: string, retryable: boolean): OperationActionResult {
+  return { ok: false, error: { code, message, retryable } }
 }

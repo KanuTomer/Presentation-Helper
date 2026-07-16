@@ -1,0 +1,535 @@
+// @vitest-environment node
+import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AiService } from '../src/main/ai/service'
+import {
+  HelperClientError,
+  type HelperClient,
+  type HelperEvent
+} from '../src/main/audio/helperClient'
+import type { SettingsStore } from '../src/main/settings/store'
+import type { AppSettings, AssistantResponse, AudioDevice } from '../src/shared/contracts'
+
+vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
+
+const answer: AssistantResponse = {
+  category: 'QUESTION', say: 'A grounded answer.', keyPoints: ['One.', 'Two.', 'Three.'],
+  ifChallenged: 'Use the supplied evidence.', evidence: []
+}
+
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve(value: T): void
+  reject(error: unknown): void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((accept, decline) => { resolve = accept; reject = decline })
+  return { promise, resolve, reject }
+}
+
+class FakeHelper {
+  state: 'missing' | 'starting' | 'ready' | 'capturing' | 'failed' = 'ready'
+  lastError?: string
+  features: string[] = []
+  onState?: () => void
+  onShortcutDown?: () => void
+  onShortcutUp?: () => void
+  onCaptureLimitReached?: (operationId: string, reason: string) => void
+  onUnexpectedExit?: () => void
+  commands: Record<string, unknown>[] = []
+  startCalls = 0
+  stopProcessCalls = 0
+  startCaptureReply?: Promise<HelperEvent>
+  commandOverride?: (command: Record<string, unknown>) => Promise<HelperEvent> | HelperEvent | undefined
+  devices: AudioDevice[] = [{ id: 'default', name: 'Default speakers', isDefault: true }]
+  capturePath = ''
+
+  get available() { return this.state === 'ready' || this.state === 'capturing' }
+
+  async start() {
+    this.startCalls++
+    this.setLifecycle('ready')
+    return true
+  }
+
+  async stopProcess() {
+    this.stopProcessCalls++
+    this.setLifecycle('missing')
+  }
+
+  setLifecycle(state: typeof this.state) { this.state = state; this.onState?.() }
+  setFailure(message: string) { this.lastError = message; this.setLifecycle('failed') }
+
+  async command(command: Record<string, unknown>): Promise<HelperEvent> {
+    this.commands.push(command)
+    const overridden = await this.commandOverride?.(command)
+    if (overridden) return overridden
+    const operationId = String(command.operationId)
+    if (command.type === 'startCapture') {
+      this.capturePath = String(command.path)
+      return this.startCaptureReply ?? {
+        type: 'captureStarted', operationId, endpointId: 'default', endpointName: 'Default speakers'
+      }
+    }
+    if (command.type === 'stopCapture') {
+      await writeFile(this.capturePath, pcmWave(1_000))
+      return stopped(operationId, this.capturePath)
+    }
+    if (command.type === 'cancel') return { type: 'captureCancelled', operationId }
+    if (command.type === 'listDevices') return { type: 'deviceList', devices: this.devices }
+    if (command.type === 'configureShortcut') return { type: 'shortcutConfigured' }
+    return { type: 'ready' }
+  }
+}
+
+function stopped(operationId: string, path: string, overrides: Partial<HelperEvent> = {}): HelperEvent {
+  return {
+    type: 'captureStopped', operationId, path, durationMs: 1_000, bytes: 32_044,
+    sampleRate: 16_000, channels: 1, endpointId: 'default', endpointName: 'Default speakers',
+    terminalReason: 'released', ...overrides
+  }
+}
+
+function pcmWave(durationMs: number): Buffer {
+  const dataBytes = Math.floor(durationMs / 1_000 * 32_000)
+  const output = Buffer.alloc(44 + dataBytes)
+  output.write('RIFF', 0, 'ascii'); output.writeUInt32LE(output.length - 8, 4); output.write('WAVE', 8, 'ascii')
+  output.write('fmt ', 12, 'ascii'); output.writeUInt32LE(16, 16); output.writeUInt16LE(1, 20)
+  output.writeUInt16LE(1, 22); output.writeUInt32LE(16_000, 24); output.writeUInt32LE(32_000, 28)
+  output.writeUInt16LE(2, 32); output.writeUInt16LE(16, 34); output.write('data', 36, 'ascii'); output.writeUInt32LE(dataBytes, 40)
+  return output
+}
+
+function appSettings(): AppSettings {
+  return {
+    opacity: 0.9, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
+    transcriptionModel: 'gpt-4o-mini-transcribe', askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H',
+    listenShortcut: 'Control+Shift+Space', projectSummary: '', approvedVocabulary: []
+  }
+}
+
+async function harness(overrides: Partial<AiService> = {}, initialSettings: Partial<AppSettings> = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'presenter-audio-test-'))
+  const helper = new FakeHelper()
+  const settings = {
+    settings: { ...appSettings(), ...initialSettings },
+    updates: [] as Partial<AppSettings>[],
+    usage: [] as Array<[number, number, number]>,
+    async updateSettings(patch: Partial<AppSettings>) {
+      this.updates.push(patch)
+      this.settings = { ...this.settings, ...patch }
+      return this.settings
+    },
+    async addUsage(input: number, output: number, duration: number) { this.usage.push([input, output, duration]) }
+  }
+  const ai = {
+    transcribe: vi.fn(async () => ({ text: 'What does the project use?', model: 'gpt-4o-mini-transcribe', latencyMs: 10, usage: {} })),
+    retrieve: vi.fn(() => []),
+    generate: vi.fn(async () => answer),
+    ...overrides
+  }
+  const shortcuts = { register: vi.fn(() => true), unregister: vi.fn() }
+  const { OperationCoordinator } = await import('../src/main/operations/coordinator')
+  const { AudioController } = await import('../src/main/audio/controller')
+  const operations = new OperationCoordinator(shortcuts)
+  const controller = new AudioController(
+    ai as unknown as AiService, settings as unknown as SettingsStore, operations,
+    { helper: helper as unknown as HelperClient, temporaryDirectory: () => directory, idGenerator: () => 'capture' }
+  )
+  controller.devices = [...helper.devices]
+  const errors: unknown[] = []
+  const responses: AssistantResponse[] = []
+  controller.onError = (error) => errors.push(error)
+  controller.onResponse = (response, operationId) => {
+    responses.push(response)
+    queueMicrotask(() => controller.acknowledgeAnswerVisible(operationId))
+  }
+  return {
+    controller, operations, helper, ai, settings, errors, responses, shortcuts, directory,
+    cleanup: () => rm(directory, { recursive: true, force: true })
+  }
+}
+
+async function startListening(h: Awaited<ReturnType<typeof harness>>): Promise<string> {
+  await expect(h.controller.startCapture()).resolves.toEqual({ ok: true })
+  expect(h.operations.snapshot().operation).toBe('listening')
+  return h.operations.snapshot().operationId!
+}
+
+async function waitForIdle(h: Awaited<ReturnType<typeof harness>>): Promise<void> {
+  await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('idle'), { timeout: 20_000 })
+}
+
+beforeEach(() => vi.restoreAllMocks())
+
+describe('audio controller operation lifecycle', () => {
+  it('removes only abandoned WAV files older than one hour during startup', async () => {
+    const h = await harness()
+    const stale = join(h.directory, 'abandoned.wav')
+    const recent = join(h.directory, 'recent.wav')
+    const unrelated = join(h.directory, 'keep.txt')
+    await Promise.all([writeFile(stale, pcmWave(1_000)), writeFile(recent, pcmWave(1_000)), writeFile(unrelated, 'keep')])
+    const old = new Date(Date.now() - 2 * 3_600_000)
+    await Promise.all([utimes(stale, old, old), utimes(unrelated, old, old)])
+
+    await h.controller.initialize()
+
+    expect((await readdir(h.directory)).sort()).toEqual(['keep.txt', 'recent.wav'])
+    await h.cleanup()
+  })
+
+  it('latches a rapid release and processes exactly one finalized segment', async () => {
+    const h = await harness()
+    const start = deferred<HelperEvent>()
+    h.helper.startCaptureReply = start.promise
+    const starting = h.controller.startCapture()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('starting_capture'))
+    await expect(h.controller.stopAndProcess()).resolves.toEqual({ ok: true })
+    const operationId = h.operations.snapshot().operationId!
+    start.resolve({ type: 'captureStarted', operationId, endpointId: 'default', endpointName: 'Default speakers' })
+    await starting
+    await waitForIdle(h)
+    expect(h.helper.commands.filter((item) => item.type === 'stopCapture')).toHaveLength(1)
+    expect(h.ai.transcribe).toHaveBeenCalledTimes(1)
+    expect(h.ai.generate).toHaveBeenCalledTimes(1)
+    expect(h.responses).toEqual([answer])
+    await expect(readFile(join(h.directory, 'capture.wav'))).rejects.toThrow()
+    await h.cleanup()
+  })
+
+  it('cancels during startup, ignores the late reply, and removes the owned path', async () => {
+    const h = await harness()
+    const start = deferred<HelperEvent>()
+    h.helper.startCaptureReply = start.promise
+    const starting = h.controller.startCapture()
+    await vi.waitFor(() => expect(h.operations.snapshot().operationId).toBeTruthy())
+    const operationId = h.operations.snapshot().operationId!
+    await vi.waitFor(() => expect(h.helper.commands.some((item) => item.type === 'startCapture')).toBe(true), { timeout: 20_000 })
+    await h.controller.cancel()
+    start.resolve({ type: 'captureStarted', operationId, endpointId: 'default', endpointName: 'Default speakers' })
+    await starting
+    expect(h.operations.snapshot().operation).toBe('idle')
+    expect(h.ai.transcribe).not.toHaveBeenCalled()
+    expect(h.helper.commands.filter((item) => item.type === 'cancel')).toHaveLength(1)
+    await expect(readFile(join(h.directory, 'capture.wav'))).rejects.toThrow()
+    await h.cleanup()
+  })
+
+  it('cancels during finalization and ignores the late stop reply', async () => {
+    const h = await harness()
+    const stop = deferred<HelperEvent>()
+    h.helper.commandOverride = async (command) => command.type === 'stopCapture' ? stop.promise : undefined
+    const operationId = await startListening(h)
+    await h.controller.stopAndProcess()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('finalizing'))
+    await h.controller.cancel()
+    expect(h.operations.snapshot().operation).toBe('idle')
+    stop.resolve(stopped(operationId, join(h.directory, 'capture.wav')))
+    await vi.waitFor(() => expect(h.ai.transcribe).not.toHaveBeenCalled())
+    expect(h.errors).toEqual([])
+    expect(h.responses).toEqual([])
+    expect(h.shortcuts.unregister).toHaveBeenCalledTimes(1)
+    await h.cleanup()
+  })
+
+  it('treats duplicate_terminal during a stop/cancel race as proof of cleanup without killing the helper', async () => {
+    const h = await harness()
+    const stop = deferred<HelperEvent>()
+    h.helper.commandOverride = async (command) => {
+      if (command.type === 'stopCapture') return stop.promise
+      if (command.type === 'cancel') throw new HelperClientError('duplicate_terminal', 'The operation already ended.')
+      return undefined
+    }
+    const operationId = await startListening(h)
+    await h.controller.stopAndProcess()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('finalizing'))
+    await h.controller.cancel()
+
+    expect(h.operations.snapshot().operation).toBe('idle')
+    expect(h.helper.stopProcessCalls).toBe(0)
+    expect(h.helper.state).toBe('ready')
+    stop.resolve(stopped(operationId, join(h.directory, 'capture.wav')))
+    await vi.waitFor(() => expect(h.ai.transcribe).not.toHaveBeenCalled())
+    expect(h.errors).toEqual([])
+    await h.cleanup()
+  })
+
+  it('cancels during transcription, deletes the WAV, and prevents retrieval', async () => {
+    const transcription = deferred<Awaited<ReturnType<AiService['transcribe']>>>()
+    const h = await harness({ transcribe: vi.fn(() => transcription.promise) as never })
+    await startListening(h)
+    await h.controller.stopAndProcess()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('transcribing'))
+    expect(h.controller.temporaryAudio).toBe(join(h.directory, 'capture.wav'))
+    await h.controller.cancel()
+    await waitForIdle(h)
+    expect(existsSync(join(h.directory, 'capture.wav'))).toBe(false)
+    transcription.resolve({ text: 'late transcript', model: 'gpt-4o-mini-transcribe', latencyMs: 1, usage: {} })
+    await vi.waitFor(() => expect(h.ai.retrieve).not.toHaveBeenCalled())
+    expect(h.errors).toEqual([])
+    expect(h.responses).toEqual([])
+    await h.cleanup()
+  })
+
+  it('observes cancellation initiated during synchronous retrieval before generation', async () => {
+    const h = await harness()
+    h.ai.retrieve.mockImplementation(() => {
+      void h.controller.cancel()
+      return []
+    })
+    await startListening(h)
+    await h.controller.stopAndProcess()
+    await waitForIdle(h)
+    expect(h.ai.retrieve).toHaveBeenCalledTimes(1)
+    expect(h.ai.generate).not.toHaveBeenCalled()
+    expect(h.responses).toEqual([])
+    expect(h.errors).toEqual([])
+    await h.cleanup()
+  })
+
+  it('cancels during generation and suppresses the late response', async () => {
+    const generation = deferred<AssistantResponse>()
+    const h = await harness({ generate: vi.fn(() => generation.promise) as never })
+    await startListening(h)
+    await h.controller.stopAndProcess()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('generating'))
+    await h.controller.cancel()
+    await waitForIdle(h)
+    generation.resolve(answer)
+    await vi.waitFor(() => expect(h.responses).toEqual([]))
+    expect(h.errors).toEqual([])
+    await h.cleanup()
+  })
+
+  it('deletes audio immediately after transcription, before retrieval', async () => {
+    const h = await harness()
+    h.ai.retrieve.mockImplementation(() => {
+      expect(existsSync(join(h.directory, 'capture.wav'))).toBe(false)
+      expect(h.controller.temporaryAudio).toBeUndefined()
+      return []
+    })
+    await startListening(h)
+    await h.controller.stopAndProcess()
+    await waitForIdle(h)
+    expect(h.ai.retrieve).toHaveBeenCalledTimes(1)
+    expect(await readdir(h.directory)).toEqual([])
+    await h.cleanup()
+  })
+
+  it('returns Busy for a second capture or typed/audio overlap without issuing another start', async () => {
+    const h = await harness()
+    await startListening(h)
+    await expect(h.controller.startCapture()).resolves.toMatchObject({ ok: false, error: { code: 'busy' } })
+    expect(h.helper.commands.filter((item) => item.type === 'startCapture')).toHaveLength(1)
+    await h.controller.cancel()
+
+    const typed = h.operations.begin('typed', 'retrieving')
+    await expect(h.controller.startCapture()).resolves.toMatchObject({ ok: false, error: { code: 'busy' } })
+    await h.operations.finish(typed.id, 'success')
+    await h.cleanup()
+  })
+
+  it('rejects a stale stop reply as invalid audio and emits exactly one terminal error', async () => {
+    const h = await harness()
+    await startListening(h)
+    h.helper.commandOverride = async (command) => command.type === 'stopCapture'
+      ? stopped('expired-operation', join(h.directory, 'capture.wav'))
+      : undefined
+    await h.controller.stopAndProcess()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('error'))
+    expect(h.errors).toHaveLength(1)
+    expect(h.errors[0]).toMatchObject({ code: 'invalid_audio' })
+    expect(h.responses).toEqual([])
+    expect(h.shortcuts.unregister).toHaveBeenCalledTimes(1)
+    expect(existsSync(join(h.directory, 'capture.wav'))).toBe(false)
+    await h.cleanup()
+  })
+
+  it('maps a finalization timeout to capture_timeout and cancels the helper once', async () => {
+    const h = await harness()
+    await startListening(h)
+    h.helper.commandOverride = async (command) => {
+      if (command.type === 'stopCapture') throw new HelperClientError('helper_timeout', 'Windows helper timed out.')
+      return undefined
+    }
+    await h.controller.stopAndProcess()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('error'))
+    expect(h.errors).toEqual([expect.objectContaining({ code: 'capture_timeout', retryable: true })])
+    expect(h.helper.commands.filter((item) => item.type === 'cancel')).toHaveLength(1)
+    expect(h.responses).toEqual([])
+    await h.cleanup()
+  })
+
+  it('refreshes once and falls back visibly when a saved endpoint disappears', async () => {
+    const h = await harness({}, { selectedAudioEndpointId: 'removed-output' })
+    let starts = 0
+    h.helper.commandOverride = async (command) => {
+      if (command.type !== 'startCapture') return undefined
+      starts++
+      if (starts === 1) throw new HelperClientError('device_unavailable', 'The selected endpoint disappeared.')
+      return { type: 'captureStarted', operationId: String(command.operationId), endpointId: 'default', endpointName: 'Default speakers' }
+    }
+    await expect(h.controller.startCapture()).resolves.toEqual({ ok: true })
+    expect(starts).toBe(2)
+    const startCommands = h.helper.commands.filter((item) => item.type === 'startCapture')
+    expect(startCommands[0]).toMatchObject({ endpointId: 'removed-output' })
+    expect(startCommands[1]).not.toHaveProperty('endpointId')
+    expect(h.settings.settings.selectedAudioEndpointId).toBeUndefined()
+    expect(h.controller.warning).toMatch(/switched to the current Windows default/i)
+    expect(h.controller.activeEndpoint).toMatchObject({ id: 'default', name: 'Default speakers' })
+    await h.controller.cancel()
+    await h.cleanup()
+  })
+
+  it('still tries the Windows default once when endpoint refresh also fails', async () => {
+    const h = await harness({}, { selectedAudioEndpointId: 'removed-output' })
+    let starts = 0
+    h.helper.commandOverride = async (command) => {
+      if (command.type === 'listDevices') throw new HelperClientError('device_unavailable', 'Enumeration was invalidated.')
+      if (command.type !== 'startCapture') return undefined
+      starts++
+      if (starts === 1) throw new HelperClientError('device_unavailable', 'The selected endpoint disappeared.')
+      return { type: 'captureStarted', operationId: String(command.operationId), endpointId: 'new-default', endpointName: 'New default speakers' }
+    }
+    await expect(h.controller.startCapture()).resolves.toEqual({ ok: true })
+    expect(starts).toBe(2)
+    expect(h.helper.commands.filter((item) => item.type === 'listDevices')).toHaveLength(1)
+    expect(h.helper.commands.filter((item) => item.type === 'startCapture')[1]).not.toHaveProperty('endpointId')
+    expect(h.controller.warning).toMatch(/device refresh failed.*default output once/i)
+    expect(h.controller.activeEndpoint).toMatchObject({ id: 'new-default', name: 'New default speakers' })
+    await h.controller.cancel()
+    await h.cleanup()
+  })
+
+  it('delivers a shortcut-driven capture-start failure exactly once', async () => {
+    const h = await harness()
+    await h.controller.initialize()
+    h.helper.commandOverride = async (command) => {
+      if (command.type === 'startCapture') throw new HelperClientError('device_unavailable', 'The default endpoint is unavailable.')
+      return undefined
+    }
+    h.helper.onShortcutDown?.()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('error'))
+    await vi.waitFor(() => expect(h.errors).toHaveLength(1))
+    expect(h.errors).toEqual([expect.objectContaining({ code: 'device_unavailable' })])
+    await h.cleanup()
+  })
+
+  it('handles an active helper crash with one error, full cleanup, and no automatic restart', async () => {
+    const h = await harness()
+    await h.controller.initialize()
+    await startListening(h)
+    h.helper.setLifecycle('failed')
+    h.helper.onUnexpectedExit?.()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('error'))
+    expect(h.errors).toEqual([expect.objectContaining({ code: 'helper_unavailable' })])
+    expect(h.helper.startCalls).toBe(1)
+    expect(h.responses).toEqual([])
+    expect(h.controller.temporaryAudio).toBeUndefined()
+    expect(await readdir(h.directory)).toEqual([])
+    await h.cleanup()
+  })
+
+  it('reports a helper crash during pending finalization only once', async () => {
+    const h = await harness()
+    await h.controller.initialize()
+    const stop = deferred<HelperEvent>()
+    h.helper.commandOverride = async (command) => command.type === 'stopCapture' ? stop.promise : undefined
+    await startListening(h)
+    await h.controller.stopAndProcess()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('finalizing'))
+
+    h.helper.setLifecycle('failed')
+    h.helper.onUnexpectedExit?.()
+    stop.reject(new HelperClientError('helper_exited', 'The helper exited.'))
+
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('error'))
+    expect(h.errors).toEqual([expect.objectContaining({ code: 'helper_unavailable' })])
+    expect(h.responses).toEqual([])
+    await h.cleanup()
+  })
+
+  it('restarts an idle sidecar crash without cancelling an unrelated typed operation', async () => {
+    vi.useFakeTimers()
+    const h = await harness()
+    await h.controller.initialize()
+    const typed = h.operations.begin('typed', 'generating')
+
+    h.helper.setLifecycle('failed')
+    h.helper.onUnexpectedExit?.()
+    await vi.advanceTimersByTimeAsync(500)
+    await vi.waitFor(() => expect(h.helper.startCalls).toBe(2))
+
+    expect(h.operations.current).toMatchObject({ id: typed.id, kind: 'typed' })
+    expect(h.operations.snapshot().operation).toBe('generating')
+    expect(h.errors).toEqual([])
+    await h.operations.finish(typed.id, 'success')
+    vi.useRealTimers()
+    await h.cleanup()
+  })
+
+  it('automatically restarts only the first idle crash until an explicit retry resets the allowance', async () => {
+    vi.useFakeTimers()
+    const h = await harness()
+    await h.controller.initialize()
+    expect(h.helper.startCalls).toBe(1)
+
+    h.helper.setLifecycle('failed')
+    h.helper.onUnexpectedExit?.()
+    await vi.advanceTimersByTimeAsync(500)
+    await vi.waitFor(() => expect(h.helper.startCalls).toBe(2))
+    expect(h.helper.state).toBe('ready')
+
+    h.helper.setLifecycle('failed')
+    h.helper.onUnexpectedExit?.()
+    await vi.runAllTicks()
+    expect(h.helper.startCalls).toBe(2)
+    expect(h.errors).toEqual([expect.objectContaining({ code: 'helper_unavailable' })])
+
+    await h.controller.refreshDevices(true)
+    expect(h.helper.startCalls).toBe(3)
+    expect(h.helper.state).toBe('ready')
+    vi.useRealTimers()
+    await h.cleanup()
+  })
+
+  it('treats duplicate native safety-limit notifications as one finalization', async () => {
+    const h = await harness()
+    await h.controller.initialize()
+    const operationId = await startListening(h)
+    h.helper.commandOverride = async (command) => {
+      if (command.type !== 'stopCapture') return undefined
+      await writeFile(h.helper.capturePath, pcmWave(1_000))
+      return stopped(operationId, h.helper.capturePath, { terminalReason: 'maximum_duration' })
+    }
+    h.helper.onCaptureLimitReached?.(operationId, 'maximum_duration')
+    h.helper.onCaptureLimitReached?.(operationId, 'maximum_duration')
+    await waitForIdle(h)
+    expect(h.helper.commands.filter((item) => item.type === 'stopCapture')).toHaveLength(1)
+    expect(h.ai.transcribe).toHaveBeenCalledTimes(1)
+    expect(h.responses).toEqual([answer])
+    expect(h.controller.lastCapture?.terminalReason).toBe('maximum_duration')
+    await h.cleanup()
+  })
+
+  it('dispose cancels active capture, deletes owned files, and shuts the helper down once', async () => {
+    const h = await harness()
+    await h.controller.initialize()
+    await startListening(h)
+    await writeFile(join(h.directory, 'capture.wav'), pcmWave(1_000))
+    await h.controller.dispose()
+    expect(h.operations.snapshot().operation).toBe('idle')
+    expect(h.helper.commands.filter((item) => item.type === 'cancel')).toHaveLength(1)
+    expect(h.helper.stopProcessCalls).toBe(1)
+    expect(h.controller.temporaryAudio).toBeUndefined()
+    expect(await readdir(h.directory)).toEqual([])
+    await expect(h.controller.startCapture()).resolves.toMatchObject({ ok: false, error: { code: 'helper_unavailable' } })
+    await h.cleanup()
+  })
+})

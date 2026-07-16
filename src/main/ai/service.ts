@@ -9,6 +9,10 @@ import { selectEvidenceChunks, type RetrievedChunk } from '../retrieval/index.js
 import { ConversationContext } from './conversation.js'
 import { buildInput, presenterInstructions, responseJsonSchema } from './prompts.js'
 import { responseRequestPolicy } from './requestPolicy.js'
+import {
+  buildTerminologyHint, normalizeTranscript, parseTranscriptionMetadata, parseTranscriptionResponse,
+  type TranscriptionResult, type TranscriptionUsage
+} from './transcription.js'
 
 export interface OpenAIResponseLike {
   output_text?: string
@@ -24,7 +28,7 @@ export interface OpenAIResponseLike {
 }
 export interface OpenAIClientLike {
   models: { list(): Promise<unknown> }
-  audio: { transcriptions: { create(body: Record<string, unknown>, options: { signal: AbortSignal }): Promise<string> } }
+  audio: { transcriptions: { create(body: Record<string, unknown>, options: { signal: AbortSignal }): Promise<unknown> } }
   responses: { create(body: Record<string, unknown>, options: { signal: AbortSignal }): Promise<OpenAIResponseLike> }
 }
 export interface SecretProvider { getKey(): Promise<string> }
@@ -32,8 +36,12 @@ export interface AiSettingsProvider {
   readonly settings: AppSettings
   readonly documents: DocumentInfo[]
   addUsage(inputTokens: number, outputTokens: number, audioMinutes?: number): Promise<void>
+  addTranscriptionUsage(usage: TranscriptionUsage, model: string): Promise<void>
 }
-export interface RetrievalProvider { search(query: string, limit?: number): RetrievedChunk[] }
+export interface RetrievalProvider {
+  search(query: string, limit?: number): RetrievedChunk[]
+  documentTitles?(): readonly string[]
+}
 export interface AiRequestMetric {
   operationId: string
   requestedModel: string
@@ -42,11 +50,38 @@ export interface AiRequestMetric {
   inputTokens: number
   outputTokens: number
   reasoningTokens: number
+  usagePresent: boolean
+  requestDispatched: boolean
   outcome: 'success' | AiErrorCode
 }
 export interface AiServiceOptions {
   clientFactory?: () => Promise<OpenAIClientLike>
   onMetric?: (metric: AiRequestMetric) => void
+  onTranscriptionMetric?: (metric: TranscriptionMetric) => void
+}
+export interface TranscriptionMetric {
+  requestedModel: string
+  returnedModel?: string
+  latencyMs: number
+  usage: TranscriptionUsage
+  requestDispatched: boolean
+  outcome: 'success' | AiErrorCode
+}
+export interface TranscriptionOptions {
+  signal: AbortSignal
+  approvedVocabulary?: readonly string[]
+}
+export interface TranscriptionAudioSource {
+  /** Exact validated byte snapshot; no renderer-controlled path is uploaded. */
+  bytes: Uint8Array
+  filename?: string
+}
+export interface AskOptions {
+  signal?: AbortSignal
+  onStage?: (stage: 'retrieving' | 'generating') => void
+}
+export interface GenerateOptions {
+  signal?: AbortSignal
 }
 
 export class AiServiceError extends Error {
@@ -54,8 +89,7 @@ export class AiServiceError extends Error {
 }
 
 export class AiService {
-  private active?: { id: string; controller: AbortController }
-  private transcriptionAbort?: AbortController
+  private active?: { id: string; controller?: AbortController; signal: AbortSignal }
   private context = new ConversationContext()
   constructor(
     private secrets: SecretProvider,
@@ -65,29 +99,101 @@ export class AiService {
   ) {}
 
   get isBusy(): boolean { return this.active !== undefined }
-  cancel(): void { this.active?.controller.abort(); this.transcriptionAbort?.abort() }
+  cancel(): void { this.active?.controller?.abort() }
   clearSession(): void { this.context.clear() }
   async testKey(): Promise<{ ok: boolean; message: string }> {
     try { const client = await this.client(); await client.models.list(); return { ok: true, message: 'API key is valid.' } }
     catch (error) { return { ok: false, message: toAiErrorInfo(error).message } }
   }
-  async transcribe(path: string): Promise<string> {
-    const client = await this.client(); const controller = new AbortController(); this.transcriptionAbort = controller
+  async transcribe(source: string | TranscriptionAudioSource, options: TranscriptionOptions): Promise<TranscriptionResult> {
+    const startedAt = performance.now()
+    const requestedModel = this.settings.settings.transcriptionModel
+    let returnedModel: string | undefined
+    let usage: TranscriptionUsage = emptyTranscriptionUsage()
+    let outcome: TranscriptionMetric['outcome'] = 'unknown'
+    let requestDispatched = false
     try {
-      const bytes = await readFile(path)
-      return await client.audio.transcriptions.create({
-        file: await toFile(bytes, 'reviewer.wav', { type: 'audio/wav' }), model: this.settings.settings.transcriptionModel,
-        response_format: 'text', prompt: this.settings.documents.map((doc) => doc.name).join(', ').slice(0, 500)
-      }, { signal: controller.signal })
-    } catch (error) { throw asAiServiceError(error) }
-    finally { if (this.transcriptionAbort === controller) this.transcriptionAbort = undefined }
+      throwIfAborted(options.signal)
+      // The string form remains available for isolated service tests and tools.
+      // Production capture passes a validated in-memory snapshot so the bytes
+      // cannot change between WAV validation and multipart construction.
+      const bytes = typeof source === 'string'
+        ? await readFile(source, { signal: options.signal })
+        : Buffer.from(source.bytes)
+      throwIfAborted(options.signal)
+      const client = await this.client()
+      const hint = buildTerminologyHint({
+        approvedVocabulary: [
+          ...(this.settings.settings.approvedVocabulary ?? []),
+          ...(options.approvedVocabulary ?? [])
+        ],
+        documentNames: this.settings.documents.map((doc) => doc.name),
+        documentTitles: this.documentTitles()
+      })
+      requestDispatched = true
+      const raw = await client.audio.transcriptions.create({
+        file: await toFile(bytes, typeof source === 'string' ? 'reviewer.wav' : source.filename ?? 'reviewer.wav', { type: 'audio/wav' }),
+        model: requestedModel,
+        response_format: 'json',
+        ...(hint ? { prompt: hint } : {})
+      }, { signal: options.signal })
+      const metadata = parseTranscriptionMetadata(raw)
+      if (metadata) {
+        returnedModel = metadata.model
+        usage = metadata.usage
+        if (usage.type !== 'none') {
+          await this.settings.addTranscriptionUsage(usage, returnedModel ?? requestedModel).catch(() => undefined)
+        }
+      }
+      // Cancellation suppresses transcript/retrieval use, but a provider
+      // response that already arrived may be billable and its returned usage
+      // must be recorded first.
+      throwIfAborted(options.signal)
+      if (!metadata) throw invalidTranscriptResponse()
+      const parsed = parseTranscriptionResponse(raw)
+      if (!parsed) throw invalidTranscriptResponse()
+      const text = normalizeTranscript(parsed.text)
+      if (!text) throw invalidTranscriptResponse()
+      outcome = 'success'
+      return { text, ...(returnedModel ? { model: returnedModel } : {}), latencyMs: performance.now() - startedAt, usage }
+    } catch (error) {
+      const mapped = asAiServiceError(error)
+      outcome = mapped.code
+      throw mapped
+    } finally {
+      this.options.onTranscriptionMetric?.({
+        requestedModel, ...(returnedModel ? { returnedModel } : {}),
+        latencyMs: performance.now() - startedAt, usage, outcome, requestDispatched
+      })
+    }
   }
-  async ask(question: string): Promise<AssistantResponse> {
+  retrieve(question: string, options: { signal?: AbortSignal } = {}): RetrievedChunk[] {
+    const validated = questionSchema.safeParse(question)
+    if (!validated.success) throw new AiServiceError('unknown', validated.error.issues[0]?.message ?? 'Enter a valid question.', false)
+    if (options.signal) throwIfAborted(options.signal)
+    const chunks = selectEvidenceChunks(this.retrieval.search(validated.data, 5))
+    if (options.signal) throwIfAborted(options.signal)
+    return chunks
+  }
+  async ask(question: string, options: AskOptions = {}): Promise<AssistantResponse> {
+    if (this.active) throw new AiServiceError('busy', 'Another question is already being answered.', false)
+    options.onStage?.('retrieving')
+    const chunks = this.retrieve(question, { signal: options.signal })
+    options.onStage?.('generating')
+    return this.generate(question, chunks, { signal: options.signal })
+  }
+  async generate(
+    question: string,
+    chunks: RetrievedChunk[],
+    options: GenerateOptions = {}
+  ): Promise<AssistantResponse> {
     const validated = questionSchema.safeParse(question)
     if (!validated.success) throw new AiServiceError('unknown', validated.error.issues[0]?.message ?? 'Enter a valid question.', false)
     if (this.active) throw new AiServiceError('busy', 'Another question is already being answered.', false)
+    if (options.signal) throwIfAborted(options.signal)
 
-    const operation = { id: randomUUID(), controller: new AbortController() }
+    const controller = options.signal ? undefined : new AbortController()
+    const operation = { id: randomUUID(), ...(controller ? { controller } : {}), signal: options.signal ?? controller!.signal }
     this.active = operation
     const startedAt = performance.now()
     const settings = this.settings.settings
@@ -95,22 +201,24 @@ export class AiService {
     const policy = responseRequestPolicy(settings.modelMode)
     let response: OpenAIResponseLike | undefined
     let outcome: AiRequestMetric['outcome'] = 'unknown'
+    let requestDispatched = false
     try {
-      const chunks = selectEvidenceChunks(this.retrieval.search(validated.data, 5))
-      const allowed = new Map(chunks.map((chunk) => [chunk.id, chunk]))
+      const selectedChunks = selectEvidenceChunks(chunks)
+      const allowed = new Map(selectedChunks.map((chunk) => [chunk.id, chunk]))
       const client = await this.client()
+      requestDispatched = true
       response = await client.responses.create({
         model: requestedModel,
         reasoning: { effort: policy.reasoningEffort },
         instructions: presenterInstructions,
-        input: buildInput(validated.data, chunks, this.context.asPrompt(), settings.projectSummary),
+        input: buildInput(validated.data, selectedChunks, this.context.asPrompt(), settings.projectSummary),
         max_output_tokens: policy.maxOutputTokens, store: false,
         text: {
           ...(policy.verbosity ? { verbosity: policy.verbosity } : {}),
           format: { type: 'json_schema', name: 'presenter_response', strict: true, schema: responseJsonSchema }
         }
-      }, { signal: operation.controller.signal })
-      if (operation.controller.signal.aborted || this.active?.id !== operation.id) throw new AiServiceError('cancelled', 'Operation cancelled.', false)
+      }, { signal: operation.signal })
+      ensureCurrentOperation(operation, this.active)
       if (response.status === 'incomplete' && response.incomplete_details?.reason === 'max_output_tokens') throw outputLimitResponse()
       if (containsRefusal(response.output) || !response.output_text?.trim()) throw malformedResponse()
       let raw: unknown
@@ -129,7 +237,7 @@ export class AiService {
       if (parsed.evidence.length === 0 && !parsed.warning && requiresProjectEvidence(validated.data)) {
         parsed.warning = 'No project evidence was supplied for this project-specific claim.'
       }
-      if (operation.controller.signal.aborted || this.active?.id !== operation.id) throw new AiServiceError('cancelled', 'Operation cancelled.', false)
+      ensureCurrentOperation(operation, this.active)
       this.context.add(validated.data, parsed)
       outcome = 'success'
       return parsed
@@ -142,10 +250,15 @@ export class AiService {
       if (response?.usage) await this.settings.addUsage(inputTokens, outputTokens).catch(() => undefined)
       this.options.onMetric?.({
         operationId: operation.id, requestedModel, returnedModel: response?.model, latencyMs: performance.now() - startedAt,
-        inputTokens, outputTokens, reasoningTokens, outcome
+        inputTokens, outputTokens, reasoningTokens, outcome,
+        usagePresent: Boolean(response?.usage), requestDispatched
       })
       if (this.active?.id === operation.id) this.active = undefined
     }
+  }
+  private documentTitles(): readonly string[] {
+    try { return this.retrieval.documentTitles?.() ?? [] }
+    catch { return [] }
   }
   private async client(): Promise<OpenAIClientLike> {
     if (this.options.clientFactory) return this.options.clientFactory()
@@ -180,6 +293,23 @@ export function asAiServiceError(error: unknown): AiServiceError {
 function malformedResponse(): AiServiceError { return new AiServiceError('malformed_response', 'OpenAI returned an invalid structured response. Please retry.', true) }
 function outputLimitResponse(): AiServiceError {
   return new AiServiceError('output_limit', 'OpenAI used the response budget before completing the answer. Retry, shorten the question, or use Normal mode.', true)
+}
+function invalidTranscriptResponse(): AiServiceError {
+  return new AiServiceError('invalid_transcript', 'OpenAI returned an empty or invalid transcript. Try recording the question again.', true)
+}
+function emptyTranscriptionUsage(): TranscriptionUsage {
+  return { type: 'none', inputTokens: 0, outputTokens: 0, totalTokens: 0, audioTokens: 0, textTokens: 0 }
+}
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new AiServiceError('cancelled', 'Operation cancelled.', false)
+}
+function ensureCurrentOperation(
+  operation: { id: string; signal: AbortSignal },
+  active: { id: string } | undefined
+): void {
+  if (operation.signal.aborted || active?.id !== operation.id) {
+    throw new AiServiceError('cancelled', 'Operation cancelled.', false)
+  }
 }
 function containsRefusal(output: unknown[] | undefined): boolean {
   return Boolean(output?.some((item) => item && typeof item === 'object' && ((item as { type?: string }).type === 'refusal' || JSON.stringify(item).includes('"refusal"'))))
