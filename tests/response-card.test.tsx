@@ -6,7 +6,8 @@ import type { AssistantResponse } from '../src/shared/contracts'
 import { ResponseCard, evidenceSupport } from '../src/renderer/responseCard'
 
 const base: AssistantResponse = {
-  category: 'FACTUAL', say: 'A concise answer.', keyPoints: ['One', 'Two', 'Three'],
+  category: 'FACTUAL', support: 'general-technical', evidenceIssue: 'none',
+  say: 'A concise answer.', keyPoints: ['One', 'Two', 'Three'],
   ifChallenged: 'Explain the evidence boundary.', evidence: []
 }
 
@@ -14,17 +15,23 @@ afterEach(cleanup)
 
 describe('response evidence badges', () => {
   it('distinguishes supported, general, and unavailable evidence', () => {
-    expect(evidenceSupport(base)).toBe('general')
+    expect(evidenceSupport(base)).toBe('general-technical')
     const { rerender } = render(<ResponseCard response={base} />)
-    expect(screen.getByLabelText('Evidence support').textContent).toBe('General explanation')
-    const unavailable = { ...base, warning: 'No project evidence is available.' }
-    expect(evidenceSupport(unavailable)).toBe('evidence-unavailable')
+    expect(screen.getByLabelText('Evidence support').textContent).toBe('General technical explanation')
+    const unavailable: AssistantResponse = {
+      ...base, support: 'unsupported-project-claim', evidenceIssue: 'missing',
+      warning: 'No project evidence is available.'
+    }
+    expect(evidenceSupport(unavailable)).toBe('unsupported-project-claim')
     rerender(<ResponseCard response={unavailable} />)
-    expect(screen.getByLabelText('Evidence support').textContent).toBe('Evidence unavailable')
-    const supported = { ...base, evidence: [{ chunkId: 'chunk-1', documentName: 'deck.pptx', location: 'Slide 7' }] }
+    expect(screen.getByLabelText('Evidence support').textContent).toBe('Project evidence unavailable')
+    const supported: AssistantResponse = {
+      ...base, support: 'document-supported',
+      evidence: [{ chunkId: 'chunk-1', documentName: 'deck.pptx', location: 'Slide 7' }]
+    }
     expect(evidenceSupport(supported)).toBe('document-supported')
     rerender(<ResponseCard response={supported} />)
     expect(screen.getByLabelText('Evidence support').textContent).toBe('Document-supported')
-    expect(evidenceSupport({ ...supported, warning: 'The supplied evidence conflicts.' })).toBe('evidence-unavailable')
+    expect(evidenceSupport({ ...supported, warning: 'A supplemental caution.' })).toBe('document-supported')
   })
 })

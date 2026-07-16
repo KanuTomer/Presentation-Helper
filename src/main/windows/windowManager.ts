@@ -52,6 +52,14 @@ export class WindowManager {
   setOpacity(value: number): void { this.window?.setOpacity(Math.min(1, Math.max(0.45, value))) }
   focusAsk(): void { const window = this.ensureWindow(); window.show(); window.focus(); window.webContents.send(channels.focusAsk) }
   openSettings(): void { const window = this.ensureWindow(); window.show(); window.focus(); window.webContents.send(channels.openSettings) }
+  openPrivacy(): void {
+    this.emergencyUnlock()
+    const window = this.ensureWindow()
+    window.show()
+    window.focus()
+    window.webContents.send(channels.openPrivacy)
+  }
+  showTransmissionPreview(): void { this.ensureWindow().showInactive() }
   get hasTray(): boolean { return Boolean(this.tray) }
   get isClickThrough(): boolean { return this.clickThrough }
   toggleVisibility(): void { const window = this.ensureWindow(); window.isVisible() ? window.hide() : window.showInactive() }
@@ -61,14 +69,33 @@ export class WindowManager {
   prepareToQuit(): void { this.quitting = true }
 
   registerShortcuts(): boolean {
+    return this.registerShortcutSet(this.store.settings.askShortcut, this.store.settings.hideShortcut)
+  }
+
+  applyShortcutSet(
+    askShortcut: string,
+    hideShortcut: string,
+    fallback: { askShortcut: string; hideShortcut: string }
+  ): boolean {
+    if (this.registerShortcutSet(askShortcut, hideShortcut)) return true
+    const failedWarnings = [...this.shortcutWarnings]
+    const rollbackSucceeded = this.registerShortcutSet(fallback.askShortcut, fallback.hideShortcut)
+    this.shortcutWarnings = [
+      ...failedWarnings,
+      ...(rollbackSucceeded ? [] : this.shortcutWarnings.map((warning) => `Rollback: ${warning}`))
+    ]
+    return false
+  }
+
+  private registerShortcutSet(askShortcut: string, hideShortcut: string): boolean {
     for (const shortcut of this.registeredShortcuts) globalShortcut.unregister(shortcut)
     this.registeredShortcuts.clear(); this.shortcutWarnings = []
     const register = (shortcut: string, action: () => void): void => {
       if (!globalShortcut.register(shortcut, action)) this.shortcutWarnings.push(`Could not register ${shortcut}. Choose another shortcut in Settings.`)
       else this.registeredShortcuts.add(shortcut)
     }
-    register(this.store.settings.askShortcut, () => this.focusAsk())
-    register(this.store.settings.hideShortcut, () => this.toggleVisibility())
+    register(askShortcut, () => this.focusAsk())
+    register(hideShortcut, () => this.toggleVisibility())
     const emergencyShortcut = 'Control+Shift+I'
     if (!globalShortcut.register(emergencyShortcut, () => this.emergencyUnlock())) {
       this.shortcutWarnings.push(`Could not register ${emergencyShortcut}. Click-through was disabled for safety.`)

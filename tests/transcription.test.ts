@@ -230,6 +230,6 @@ describe('transcription normalization and pricing', () => {
     }
     expect(estimateTranscriptionUsd(usage, 'gpt-4o-mini-transcribe')).toBeCloseTo(0.00225, 8)
     expect(estimateTranscriptionUsd(usage, 'unpriced-model')).toBe(0)
-    expect(USAGE_PRICING_VERSION).toBe('openai-2026-07-14')
+    expect(USAGE_PRICING_VERSION).toBe('openai-2026-07-16')
   })
 })

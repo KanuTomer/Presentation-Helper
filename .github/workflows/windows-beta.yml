@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build-and-package:
@@ -59,6 +60,9 @@ jobs:
       - name: Validate Milestone 6 live-campaign budget offline
         run: npm run eval:m6:preflight
 
+      - name: Evaluate Milestone 7 grounding offline
+        run: npm run eval:m7
+
       - name: Create unsigned NSIS installer
         run: npx electron-builder --win nsis --publish never
         env:
@@ -70,14 +74,50 @@ jobs:
       - name: Verify packaged Windows helper health
         run: npm run test:packaged-helper
 
-      - name: Upload Windows installer and Milestone 4 report
+      - name: Locate previous successful main installer
+        id: previous-main
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $runs = gh run list --repo "${{ github.repository }}" --workflow windows-beta.yml --branch main --status success --limit 20 --json databaseId,headSha,createdAt | ConvertFrom-Json
+          $baseline = $runs | Where-Object {
+            $_.databaseId -ne [long]"${{ github.run_id }}" -and $_.headSha -ne "${{ github.sha }}"
+          } | Sort-Object createdAt -Descending | Select-Object -First 1
+          if (-not $baseline) { throw 'A previous successful main Windows-beta installer from a different commit/run is required for the upgrade smoke test.' }
+          "run_id=$($baseline.databaseId)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "head_sha=$($baseline.headSha)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Download previous successful main installer
+        uses: actions/download-artifact@v5
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous-main.outputs.run_id }}
+          name: PresenterAI-Windows-beta
+          path: artifacts/previous-main
+
+      - name: Verify clean install, upgrade, Delete All, persistence, and uninstall
+        shell: pwsh
+        run: |
+          $current = Get-ChildItem release -Filter 'PresenterAI-*-setup.exe' -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          $previous = Get-ChildItem artifacts/previous-main -Filter 'PresenterAI-*-setup.exe' -File -Recurse | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if (-not $current -or -not $previous) { throw 'Current or previous PresenterAI installer artifact was not found.' }
+          node scripts/installer-smoke.mjs --current $current.FullName --previous $previous.FullName --require-previous --report artifacts/installer/installer-lifecycle-report.json
+
+      - name: Upload Windows installer and validation reports
         uses: actions/upload-artifact@v4
         with:
           name: PresenterAI-Windows-beta
           path: |
             release/PresenterAI-*-setup.exe
             artifacts/m4/m4-retrieval-report.json
+            artifacts/m7/m7-offline-report.json
+            artifacts/installer/installer-lifecycle-report.json
             docs/validation/milestones-0-2.md
             docs/validation/milestone-5.md
             docs/validation/milestone-6.md
+            docs/validation/milestone-7.md
+            docs/validation/milestone-8.md
+            docs/validation/plan-alignment.md
           if-no-files-found: error

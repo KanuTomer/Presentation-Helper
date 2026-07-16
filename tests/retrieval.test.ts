@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -124,6 +124,29 @@ describe('document catalog and transactional reindexing', () => {
     index.close()
 
     const db = new DatabaseSync(databasePath)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM documents').get()).toMatchObject({ n: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS n FROM chunks').get()).toMatchObject({ n: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS n FROM chunks_fts').get()).toMatchObject({ n: 0 })
+    db.close()
+  })
+
+  it('clears the complete catalog and FTS index without deleting original source documents', async () => {
+    const { index, bytes, catalogSink, databasePath } = await harness()
+    const sourcePath = join(directory, 'user-owned-source.txt')
+    const sourceText = 'User-owned source content must survive local-index deletion.'
+    await writeFile(sourcePath, sourceText, 'utf8')
+    bytes.set(sourcePath, new TextEncoder().encode(sourceText))
+    await index.addFiles([sourcePath])
+    expect(index.search('survive')).toHaveLength(1)
+
+    await index.clearAll()
+    expect(index.listDocuments()).toEqual([])
+    expect(index.search('survive')).toEqual([])
+    expect(await readFile(sourcePath, 'utf8')).toBe(sourceText)
+    expect(catalogSink.setDocuments).toHaveBeenLastCalledWith([])
+    index.close()
+
+    const db = new DatabaseSync(databasePath, { readOnly: true })
     expect(db.prepare('SELECT COUNT(*) AS n FROM documents').get()).toMatchObject({ n: 0 })
     expect(db.prepare('SELECT COUNT(*) AS n FROM chunks').get()).toMatchObject({ n: 0 })
     expect(db.prepare('SELECT COUNT(*) AS n FROM chunks_fts').get()).toMatchObject({ n: 0 })

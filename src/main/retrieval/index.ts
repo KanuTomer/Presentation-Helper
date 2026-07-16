@@ -151,6 +151,21 @@ export class RetrievalIndex {
     })
   }
 
+  async clearAll(): Promise<void> {
+    await this.withWriteLock(async () => {
+      const db = this.requireDb()
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        db.exec('DELETE FROM chunks_fts; DELETE FROM documents;')
+        db.exec('COMMIT')
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+      await this.reconcileCatalog()
+    })
+  }
+
   search(query: string, limit = MAX_RETRIEVAL_RESULTS): RetrievedChunk[] {
     const expression = buildFtsExpression(query)
     const boundedLimit = Math.min(MAX_RETRIEVAL_RESULTS, Math.max(0, Math.trunc(limit)))

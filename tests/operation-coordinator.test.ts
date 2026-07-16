@@ -138,4 +138,32 @@ describe('operation coordinator', () => {
     await coordinator.finish(operation.id, 'error', { code: 'offline', message: 'Offline.', retryable: true })
     expect(cleanup).toHaveBeenCalledOnce()
   })
+
+  it('acknowledges only the current operation and transmission stage', async () => {
+    const { coordinator } = harness()
+    const operation = coordinator.begin('typed', 'retrieving')
+    const preview = coordinator.waitForTransmissionPreview(operation.id, 'response')
+    coordinator.acknowledgeTransmissionPreview('stale-operation', 'response')
+    coordinator.acknowledgeTransmissionPreview(operation.id, 'transcription')
+    coordinator.acknowledgeTransmissionPreview(operation.id, 'response')
+    await expect(preview).resolves.toBe(true)
+    await coordinator.finish(operation.id, 'success')
+  })
+
+  it('fails a transmission preview closed on timeout or cancellation', async () => {
+    vi.useFakeTimers()
+    const { coordinator } = harness()
+    const operation = coordinator.begin('typed', 'retrieving')
+    const timeout = coordinator.waitForTransmissionPreview(operation.id, 'response', 50)
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(timeout).resolves.toBe(false)
+    await coordinator.finish(operation.id, 'error')
+
+    const cancelled = coordinator.begin('audio', 'starting_capture')
+    const waiting = coordinator.waitForTransmissionPreview(cancelled.id, 'transcription', 500)
+    await coordinator.cancel()
+    await expect(waiting).resolves.toBe(false)
+    await coordinator.finish(cancelled.id, 'cancelled')
+    vi.useRealTimers()
+  })
 })

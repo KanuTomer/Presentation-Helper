@@ -20,6 +20,7 @@ import { RetrievalIndex } from '../src/main/retrieval/index.js'
 import { validatePresenterWav } from '../src/main/audio/wavValidation.js'
 import type { AppSettings, DocumentInfo } from '../src/shared/contracts.js'
 import type { TranscriptionUsage } from '../src/main/ai/transcription.js'
+import { USAGE_PRICING_VERSION } from '../src/main/ai/pricing.js'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const corpusPath = join(root, 'tests', 'fixtures', 'm6-live-corpus.json')
@@ -485,7 +486,7 @@ function emptyResult(testCase: M6CorpusCase): M6CaseResult {
     versions: {
       helperProtocol: 2, requestedTranscriptionModel: M6_TRANSCRIPTION_MODEL,
       ...(testCase.fullPipeline ? { requestedAnswerModel: M6_ANSWER_MODEL } : {}),
-      pricing: 'openai-2026-07-14'
+      pricing: USAGE_PRICING_VERSION
     },
     timingsMs: { capture: 0, finalization: 0, transcription: 0, total: 0 },
     usage: {

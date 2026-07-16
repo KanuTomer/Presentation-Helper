@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AiService } from '../src/main/ai/service'
+import type { TransmissionPreviewGate } from '../src/main/privacy/transmissionPreview'
 import {
   HelperClientError,
   type HelperClient,
@@ -16,7 +17,8 @@ import type { AppSettings, AssistantResponse, AudioDevice } from '../src/shared/
 vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
 
 const answer: AssistantResponse = {
-  category: 'QUESTION', say: 'A grounded answer.', keyPoints: ['One.', 'Two.', 'Three.'],
+  category: 'QUESTION', support: 'general-technical', evidenceIssue: 'none',
+  say: 'A grounded answer.', keyPoints: ['One.', 'Two.', 'Three.'],
   ifChallenged: 'Use the supplied evidence.', evidence: []
 }
 
@@ -114,11 +116,16 @@ function appSettings(): AppSettings {
   }
 }
 
-async function harness(overrides: Partial<AiService> = {}, initialSettings: Partial<AppSettings> = {}) {
+async function harness(
+  overrides: Partial<AiService> = {},
+  initialSettings: Partial<AppSettings> = {},
+  controllerOptions: { transmissionPreviewGate?: TransmissionPreviewGate; onListeningConsentRequired?: () => void } = {}
+) {
   const directory = await mkdtemp(join(tmpdir(), 'presenter-audio-test-'))
   const helper = new FakeHelper()
   const settings = {
     settings: { ...appSettings(), ...initialSettings },
+    privacyConsent: { requiredVersion: 1, acceptedVersion: 1, acceptedAt: new Date(0).toISOString(), satisfied: true },
     updates: [] as Partial<AppSettings>[],
     usage: [] as Array<[number, number, number]>,
     async updateSettings(patch: Partial<AppSettings>) {
@@ -129,6 +136,7 @@ async function harness(overrides: Partial<AiService> = {}, initialSettings: Part
     async addUsage(input: number, output: number, duration: number) { this.usage.push([input, output, duration]) }
   }
   const ai = {
+    transcriptionTerminologyHint: vi.fn(() => ''),
     transcribe: vi.fn(async () => ({ text: 'What does the project use?', model: 'gpt-4o-mini-transcribe', latencyMs: 10, usage: {} })),
     retrieve: vi.fn(() => []),
     generate: vi.fn(async () => answer),
@@ -140,7 +148,10 @@ async function harness(overrides: Partial<AiService> = {}, initialSettings: Part
   const operations = new OperationCoordinator(shortcuts)
   const controller = new AudioController(
     ai as unknown as AiService, settings as unknown as SettingsStore, operations,
-    { helper: helper as unknown as HelperClient, temporaryDirectory: () => directory, idGenerator: () => 'capture' }
+    {
+      helper: helper as unknown as HelperClient, temporaryDirectory: () => directory, idGenerator: () => 'capture',
+      ...controllerOptions
+    }
   )
   controller.devices = [...helper.devices]
   const errors: unknown[] = []
@@ -169,6 +180,71 @@ async function waitForIdle(h: Awaited<ReturnType<typeof harness>>): Promise<void
 beforeEach(() => vi.restoreAllMocks())
 
 describe('audio controller operation lifecycle', () => {
+  it('rejects user-initiated shortcut changes while the native helper is unavailable', async () => {
+    const h = await harness()
+    h.helper.setLifecycle('missing')
+    await expect(h.controller.configureShortcut('Alt+Space')).rejects.toMatchObject({ code: 'helper_unavailable' })
+    expect(h.helper.commands).toEqual([])
+    await h.cleanup()
+  })
+
+  it('blocks direct and helper-shortcut capture entry before any helper command until consent is accepted', async () => {
+    const openPrivacy = vi.fn()
+    const h = await harness({}, {}, { onListeningConsentRequired: openPrivacy })
+    h.settings.privacyConsent.satisfied = false
+
+    await expect(h.controller.startCapture()).resolves.toMatchObject({
+      ok: false, error: { code: 'listening_consent_required' }
+    })
+    expect(h.operations.isBusy).toBe(false)
+    expect(h.helper.commands.filter((item) => item.type === 'startCapture')).toEqual([])
+    expect(openPrivacy).toHaveBeenCalledOnce()
+
+    await h.controller.initialize()
+    h.helper.onShortcutDown?.()
+    await vi.waitFor(() => expect(h.errors).toContainEqual(expect.objectContaining({ code: 'listening_consent_required' })))
+    expect(h.helper.commands.filter((item) => item.type === 'startCapture')).toEqual([])
+    expect(openPrivacy).toHaveBeenCalledTimes(2)
+    await h.cleanup()
+  })
+
+  it('does not upload audio or generate until each operation-scoped preview is acknowledged', async () => {
+    const transcriptionAck = deferred<void>()
+    const responseAck = deferred<void>()
+    const previews: Array<{ stage: string; chunks: unknown[]; audio?: unknown }> = []
+    const gate = {
+      present: vi.fn(async (preview: { stage: string; chunks: unknown[]; audio?: unknown }) => {
+        previews.push(preview)
+        await (preview.stage === 'transcription' ? transcriptionAck.promise : responseAck.promise)
+      }),
+      clear: vi.fn()
+    } as unknown as TransmissionPreviewGate
+    const h = await harness({}, {}, { transmissionPreviewGate: gate })
+    h.ai.transcriptionTerminologyHint.mockReturnValue('PREVIEWED TERMINOLOGY')
+    await startListening(h)
+    await h.controller.stopAndProcess()
+
+    await vi.waitFor(() => expect(previews.map((preview) => preview.stage)).toEqual(['transcription']))
+    expect(previews[0]?.audio).toMatchObject({ durationMs: 1_000, endpointName: 'Default speakers' })
+    expect(h.ai.transcribe).not.toHaveBeenCalled()
+    h.ai.transcriptionTerminologyHint.mockReturnValue('UNPREVIEWED TERMINOLOGY')
+    transcriptionAck.resolve()
+
+    await vi.waitFor(() => expect(previews.map((preview) => preview.stage)).toEqual(['transcription', 'response']))
+    expect(h.ai.transcribe).toHaveBeenCalledOnce()
+    expect(h.ai.transcribe).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ terminologyHint: 'PREVIEWED TERMINOLOGY' })
+    )
+    expect(h.ai.generate).not.toHaveBeenCalled()
+    responseAck.resolve()
+
+    await waitForIdle(h)
+    expect(h.ai.generate).toHaveBeenCalledOnce()
+    expect(h.responses).toEqual([answer])
+    expect(gate.clear).toHaveBeenCalled()
+    await h.cleanup()
+  })
+
   it('removes only abandoned WAV files older than one hour during startup', async () => {
     const h = await harness()
     const stale = join(h.directory, 'abandoned.wav')
@@ -181,6 +257,24 @@ describe('audio controller operation lifecycle', () => {
     await h.controller.initialize()
 
     expect((await readdir(h.directory)).sort()).toEqual(['keep.txt', 'recent.wav'])
+    await h.cleanup()
+  })
+
+  it('clears PresenterAI-owned WAV files without removing unrelated files', async () => {
+    const h = await harness()
+    const ownedOne = join(h.directory, 'capture.wav')
+    const ownedTwo = join(h.directory, 'abandoned.WAV')
+    const unrelated = join(h.directory, 'review-notes.txt')
+    await Promise.all([
+      writeFile(ownedOne, pcmWave(1_000)),
+      writeFile(ownedTwo, pcmWave(1_000)),
+      writeFile(unrelated, 'keep this file')
+    ])
+
+    await h.controller.clearOwnedTemporaryAudio()
+
+    expect(await readdir(h.directory)).toEqual(['review-notes.txt'])
+    expect(await readFile(unrelated, 'utf8')).toBe('keep this file')
     await h.cleanup()
   })
 

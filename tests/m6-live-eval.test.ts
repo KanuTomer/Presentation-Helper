@@ -147,7 +147,7 @@ describe('M6 live evaluator', () => {
         ? fixtureResult(item.id).versions
         : {
             helperProtocol: 2 as const, requestedTranscriptionModel: 'gpt-4o-mini-transcribe' as const,
-            returnedTranscriptionModel: 'gpt-4o-mini-transcribe', pricing: 'openai-2026-07-14' as const
+            returnedTranscriptionModel: 'gpt-4o-mini-transcribe', pricing: 'openai-2026-07-16' as const
           },
           usage: item.fullPipeline
         ? fixtureResult(item.id).usage
@@ -194,7 +194,7 @@ function completePassingReport() {
         helperProtocol: 2 as const,
         requestedTranscriptionModel: 'gpt-4o-mini-transcribe' as const,
         returnedTranscriptionModel: 'gpt-4o-mini-transcribe',
-        pricing: 'openai-2026-07-14' as const
+        pricing: 'openai-2026-07-16' as const
       },
       timingsMs: { capture: 1_000, finalization: 50, transcription: 500, total: 500 },
       usage: {
@@ -215,7 +215,7 @@ function fixtureResult(id: string): M6CaseResult {
     flags: { audioValid: true, transcriptionValid: true, meaningCorrect: true, wavDeleted: true, pipelineValid: true, evidenceValid: true },
     versions: {
       helperProtocol: 2, requestedTranscriptionModel: 'gpt-4o-mini-transcribe', returnedTranscriptionModel: 'gpt-4o-mini-transcribe',
-      requestedAnswerModel: 'gpt-5.6-luna', returnedAnswerModel: 'gpt-5.6-luna', pricing: 'openai-2026-07-14'
+      requestedAnswerModel: 'gpt-5.6-luna', returnedAnswerModel: 'gpt-5.6-luna', pricing: 'openai-2026-07-16'
     },
     timingsMs: { capture: 1000, finalization: 50, transcription: 500, retrieval: 5, generation: 600, total: 1155 },
     usage: {
