@@ -1,0 +1,142 @@
+[
+  {
+    "id": "m6-01",
+    "expectedQuestion": "Which port does the telemetry gateway use?",
+    "meaningAnchors": ["port", "telemetry gateway"],
+    "fullPipeline": true,
+    "evidenceTitle": "Telemetry gateway",
+    "evidenceText": "The synthetic telemetry gateway accepts OpenTelemetry traffic on TCP port 4317."
+  },
+  {
+    "id": "m6-02",
+    "expectedQuestion": "How long does the local cache retain an entry?",
+    "meaningAnchors": ["local cache", "retain", "entry"],
+    "fullPipeline": true,
+    "evidenceTitle": "Local cache retention",
+    "evidenceText": "The synthetic local cache retains each entry for twelve minutes before expiration."
+  },
+  {
+    "id": "m6-03",
+    "expectedQuestion": "What database stores the audit ledger?",
+    "meaningAnchors": ["database", "audit ledger"],
+    "fullPipeline": true,
+    "evidenceTitle": "Audit ledger storage",
+    "evidenceText": "The synthetic audit ledger is stored in PostgreSQL, with one append-only row per event."
+  },
+  {
+    "id": "m6-04",
+    "expectedQuestion": "When does the nightly reconciliation job begin?",
+    "meaningAnchors": ["nightly", "reconciliation", "begin"],
+    "fullPipeline": true,
+    "evidenceTitle": "Reconciliation schedule",
+    "evidenceText": "The synthetic reconciliation job begins every night at 02:15 UTC."
+  },
+  {
+    "id": "m6-05",
+    "expectedQuestion": "Which region hosts the backup environment?",
+    "meaningAnchors": ["region", "backup environment"],
+    "fullPipeline": true,
+    "evidenceTitle": "Backup environment",
+    "evidenceText": "The synthetic backup environment is hosted in the ap-south-1 region."
+  },
+  {
+    "id": "m6-06",
+    "expectedQuestion": "How many retries does the payment worker allow?",
+    "meaningAnchors": ["retries", "payment worker", "allow"],
+    "fullPipeline": true,
+    "evidenceTitle": "Payment retry policy",
+    "evidenceText": "The synthetic payment worker allows three retries, using exponential backoff between attempts."
+  },
+  {
+    "id": "m6-07",
+    "expectedQuestion": "What format is used for exported reports?",
+    "meaningAnchors": ["format", "exported reports"],
+    "fullPipeline": true,
+    "evidenceTitle": "Report export format",
+    "evidenceText": "The synthetic reporting service exports completed reports as PDF files."
+  },
+  {
+    "id": "m6-08",
+    "expectedQuestion": "Who approves an emergency configuration change?",
+    "meaningAnchors": ["approves", "emergency", "configuration change"],
+    "fullPipeline": true,
+    "evidenceTitle": "Emergency configuration approval",
+    "evidenceText": "The synthetic change policy requires approval from the on-call incident commander."
+  },
+  {
+    "id": "m6-09",
+    "expectedQuestion": "What is the maximum upload size?",
+    "meaningAnchors": ["maximum", "upload size"],
+    "fullPipeline": true,
+    "evidenceTitle": "Upload limit",
+    "evidenceText": "The synthetic upload service rejects files larger than 18 megabytes."
+  },
+  {
+    "id": "m6-10",
+    "expectedQuestion": "Which algorithm assigns requests to shards?",
+    "meaningAnchors": ["algorithm", "requests", "shards"],
+    "fullPipeline": true,
+    "evidenceTitle": "Shard assignment",
+    "evidenceText": "The synthetic router assigns requests to shards using rendezvous hashing."
+  },
+  {
+    "id": "m6-11",
+    "expectedQuestion": "Why can eventual consistency improve availability?",
+    "meaningAnchors": ["eventual consistency", "improve", "availability"],
+    "fullPipeline": false
+  },
+  {
+    "id": "m6-12",
+    "expectedQuestion": "How is authentication different from authorization?",
+    "meaningAnchors": ["authentication", "different", "authorization"],
+    "fullPipeline": false
+  },
+  {
+    "id": "m6-13",
+    "expectedQuestion": "What does a confidence interval communicate?",
+    "meaningAnchors": ["confidence interval", "communicate"],
+    "fullPipeline": false
+  },
+  {
+    "id": "m6-14",
+    "expectedQuestion": "Why are idempotent operations useful?",
+    "meaningAnchors": ["idempotent", "operations", "useful"],
+    "fullPipeline": false
+  },
+  {
+    "id": "m6-15",
+    "expectedQuestion": "What trade-off comes with horizontal scaling?",
+    "meaningAnchors": ["trade-off", "horizontal scaling"],
+    "fullPipeline": false
+  },
+  {
+    "id": "m6-16",
+    "expectedQuestion": "Does client-side encryption complicate key recovery?",
+    "meaningAnchors": ["client-side encryption", "complicate", "key recovery"],
+    "fullPipeline": false
+  },
+  {
+    "id": "m6-17",
+    "expectedQuestion": "When should a team choose a modular monolith?",
+    "meaningAnchors": ["team", "choose", "modular monolith"],
+    "fullPipeline": false
+  },
+  {
+    "id": "m6-18",
+    "expectedQuestion": "How does rate limiting protect an API?",
+    "meaningAnchors": ["rate limiting", "protect", "API"],
+    "fullPipeline": false
+  },
+  {
+    "id": "m6-19",
+    "expectedQuestion": "Is throughput the same thing as latency?",
+    "meaningAnchors": ["throughput", "same", "latency"],
+    "fullPipeline": false
+  },
+  {
+    "id": "m6-20",
+    "expectedQuestion": "What limitation matters most for lexical search?",
+    "meaningAnchors": ["limitation", "lexical search"],
+    "fullPipeline": false
+  }
+]

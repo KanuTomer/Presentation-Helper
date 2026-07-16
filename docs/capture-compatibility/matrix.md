@@ -2,6 +2,22 @@
 
 Record Windows build, PresenterAI/Electron version, capture application version, GPU setting, monitor layout, and date for every run. First record the **protection OFF control**, then repeat with protection ON.
 
+Current campaign status: **Untested. No capture path is verified on the current build.**
+
+## Campaign environment
+
+- Campaign ID:
+- Date/time and tester:
+- Git commit / PresenterAI version:
+- Windows edition/build:
+- Electron version:
+- Chrome / Meet version:
+- OBS version and capture backend:
+- GPU / driver / graphics preference:
+- Monitor count, layout, scaling, connection types:
+
+If any environment value changes, start a new campaign block rather than silently updating completed rows.
+
 | Capture path | OFF control | ON result | Version / setup | Notes |
 |---|---|---|---|---|
 | Google Meet — entire screen | Untested | Untested | | Primary display-capture test |

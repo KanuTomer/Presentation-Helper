@@ -9,7 +9,7 @@ import type { RetrievedChunk } from '../src/main/retrieval'
 const settings: AppSettings = {
   opacity: 0.9, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
   transcriptionModel: 'gpt-4o-mini-transcribe', askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H',
-  listenShortcut: 'Control+Shift+Space', projectSummary: ''
+  listenShortcut: 'Control+Shift+Space', projectSummary: '', approvedVocabulary: []
 }
 const response: AssistantResponse = {
   category: 'FACTUAL', say: 'Use evidence that is actually available.', keyPoints: ['State what is known.', 'Name the limitation.'],
@@ -21,7 +21,10 @@ function harness(
   chunks: RetrievedChunk[] = []
 ) {
   const usage = vi.fn(async () => undefined)
-  const provider: AiSettingsProvider = { settings: { ...settings }, documents: [] as DocumentInfo[], addUsage: usage }
+  const provider: AiSettingsProvider = {
+    settings: { ...settings }, documents: [] as DocumentInfo[], addUsage: usage,
+    addTranscriptionUsage: vi.fn(async () => undefined)
+  }
   const client: OpenAIClientLike = {
     models: { list: async () => [] }, audio: { transcriptions: { create: async () => '' } }, responses: { create }
   }
@@ -71,7 +74,10 @@ describe('manual AI service', () => {
   it('classifies an exhausted output budget distinctly and records reasoning usage', async () => {
     const metrics: Array<{ reasoningTokens: number; outcome: string }> = []
     const usage = vi.fn(async () => undefined)
-    const provider: AiSettingsProvider = { settings: { ...settings, modelMode: 'strong' }, documents: [], addUsage: usage }
+    const provider: AiSettingsProvider = {
+      settings: { ...settings, modelMode: 'strong' }, documents: [], addUsage: usage,
+      addTranscriptionUsage: vi.fn(async () => undefined)
+    }
     const client = {
       models: { list: async () => [] }, audio: { transcriptions: { create: async () => '' } },
       responses: { create: async () => ({
@@ -153,6 +159,30 @@ describe('manual AI service', () => {
     await expect(first).rejects.toMatchObject({ code: 'cancelled' })
     await service.ask('Fresh question')
     expect(String(requests[1]?.input)).not.toContain('First private question')
+  })
+
+  it('supports coordinator-owned retrieval/generation stages and an external cancellation signal', async () => {
+    let resolveFirst!: (value: OpenAIResponseLike) => void
+    const requests: Record<string, unknown>[] = []
+    const create = vi.fn((body: Record<string, unknown>) => {
+      requests.push(body)
+      if (requests.length === 1) return new Promise<OpenAIResponseLike>((resolve) => { resolveFirst = resolve })
+      return Promise.resolve(apiResponse(response))
+    })
+    const { service } = harness(create)
+    const chunks = service.retrieve('Externally cancelled question')
+    const controller = new AbortController()
+    const first = service.generate('Externally cancelled question', chunks, { signal: controller.signal })
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
+    controller.abort()
+    resolveFirst(apiResponse(response))
+    await expect(first).rejects.toMatchObject({ code: 'cancelled' })
+
+    const stages: string[] = []
+    await service.ask('Fresh staged question', { onStage: (stage) => stages.push(stage) })
+    expect(stages).toEqual(['retrieving', 'generating'])
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(String(requests[1]?.input)).not.toContain('Externally cancelled question')
   })
 
   it('validates and bounds questions before making a request', async () => {

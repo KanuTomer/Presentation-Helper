@@ -24,6 +24,8 @@ const api: PresenterAPI = {
   showSettings: () => ipcRenderer.invoke(channels.showSettings),
   startListening: () => ipcRenderer.invoke(channels.startListening),
   stopListening: () => ipcRenderer.invoke(channels.stopListening),
+  ackListeningIndicator: (operationId) => ipcRenderer.invoke(channels.ackListeningIndicator, operationId),
+  ackAnswerVisible: (operationId) => ipcRenderer.invoke(channels.ackAnswerVisible, operationId),
   refreshAudioDevices: () => ipcRenderer.invoke(channels.refreshAudioDevices),
   setCaptureProtection: (enabled) => ipcRenderer.invoke(channels.setCaptureProtection, enabled),
   saveCaptureResult: (result) => ipcRenderer.invoke(channels.saveCaptureResult, result),
@@ -35,8 +37,8 @@ const api: PresenterAPI = {
   },
   onFocusAsk: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.focusAsk, listener); return () => ipcRenderer.removeListener(channels.focusAsk, listener) },
   onOpenSettings: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.openSettings, listener); return () => ipcRenderer.removeListener(channels.openSettings, listener) }
-  ,onResponse: (callback) => { const listener = (_event: Electron.IpcRendererEvent, response: Parameters<typeof callback>[0]) => callback(response); ipcRenderer.on(channels.audioResponse, listener); return () => ipcRenderer.removeListener(channels.audioResponse, listener) }
-  ,onError: (callback) => { const listener = (_event: Electron.IpcRendererEvent, message: string) => callback(message); ipcRenderer.on(channels.appError, listener); return () => ipcRenderer.removeListener(channels.appError, listener) }
+  ,onResponse: (callback) => { const listener = (_event: Electron.IpcRendererEvent, response: Parameters<typeof callback>[0], operationId: Parameters<typeof callback>[1]) => callback(response, operationId); ipcRenderer.on(channels.audioResponse, listener); return () => ipcRenderer.removeListener(channels.audioResponse, listener) }
+  ,onError: (callback) => { const listener = (_event: Electron.IpcRendererEvent, error: Parameters<typeof callback>[0]) => callback(error); ipcRenderer.on(channels.appError, listener); return () => ipcRenderer.removeListener(channels.appError, listener) }
 }
 
 contextBridge.exposeInMainWorld('presenter', api)

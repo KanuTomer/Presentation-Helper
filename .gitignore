@@ -4,6 +4,7 @@ dist/
 release/
 .tsbuild/
 coverage/
+test-results/
 artifacts/
 resources/windows-helper/
 native/**/bin/

@@ -15,9 +15,13 @@
     "test:helper": "dotnet test native/PresenterAI.WindowsHelper.Tests/PresenterAI.WindowsHelper.Tests.csproj -c Release",
     "test:helper-smoke": "node scripts/helper-smoke.mjs",
     "test:packaged-fts": "node scripts/packaged-fts-smoke.mjs",
+    "test:packaged-helper": "node scripts/packaged-helper-smoke.mjs",
+    "test:e2e": "npm run build && playwright test",
     "postinstall": "patch-package --error-on-fail",
     "eval:m3:live": "tsx scripts/m3-live-eval.ts",
     "eval:m4": "tsx scripts/m4-offline-eval.ts",
+    "eval:m6:preflight": "tsx scripts/m6-live-eval.ts --preflight",
+    "eval:m6:live": "tsx scripts/m6-live-eval.ts --live",
     "helper:build": "dotnet publish native/PresenterAI.WindowsHelper/PresenterAI.WindowsHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o resources/windows-helper",
     "verify": "npm run typecheck && npm test && npm run test:helper && npm run build",
     "package:win": "npm run helper:build && npm run build && electron-builder --win nsis --publish never"
@@ -33,6 +37,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@tailwindcss/vite": "4.3.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",

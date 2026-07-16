@@ -1,9 +1,9 @@
-import { app, dialog, globalShortcut, ipcMain, screen } from 'electron'
+import { app, dialog, ipcMain, screen } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { channels } from '../../shared/channels.js'
 import {
   documentImportResultSchema, documentInspectionPageSchema, documentSearchHitsSchema,
-  type AppSettings, type AppStatus, type AskResult, type CaptureTestInput,
+  type AiErrorInfo, type AppSettings, type AppStatus, type AskResult, type CaptureTestInput,
   type DocumentInspectionPage, type DocumentSearchHit
 } from '../../shared/contracts.js'
 import type { SettingsStore } from '../settings/store.js'
@@ -11,9 +11,11 @@ import type { SecretStore } from '../settings/secrets.js'
 import type { RetrievalIndex } from '../retrieval/index.js'
 import { toAiErrorInfo, type AiService } from '../ai/service.js'
 import type { AudioController } from '../audio/controller.js'
+import { toOperationError } from '../operations/coordinator.js'
 import type { WindowManager } from '../windows/windowManager.js'
 import type { CaptureProtection } from '../windows/captureProtection.js'
 import { parseDocumentId, parseDocumentInspectionRequest, parseDocumentSearchQuery } from './documentValidation.js'
+import { validateSettingsMutation } from '../settings/validation.js'
 
 interface Services { store: SettingsStore; secrets: SecretStore; retrieval: RetrievalIndex; ai: AiService; audio: AudioController; windows: WindowManager; capture: CaptureProtection }
 
@@ -25,22 +27,27 @@ function validate(event: Electron.IpcMainInvokeEvent): void {
 export function registerIpc(services: Services): void {
   const { store, secrets, retrieval, ai, audio, windows, capture } = services
   const handle = <T extends unknown[]>(channel: string, fn: (event: Electron.IpcMainInvokeEvent, ...args: T) => unknown) => ipcMain.handle(channel, (event, ...args) => { validate(event); return fn(event, ...(args as T)) })
-  const status = (): AppStatus => ({
-    operation: audio.operation, capture: capture.status(windows.window), listening: audio.listening,
-    audioSource: audio.devices.find((device) => device.id === store.settings.selectedAudioEndpointId)?.name ?? 'Windows default output (WASAPI loopback)',
-    temporaryAudioExists: Boolean(audio.temporaryAudio), helperAvailable: audio.helper.available, helperState: audio.helper.state,
-    helperError: audio.helper.lastError ?? audio.warning, audioDevices: audio.devices, selectedAudioEndpointId: store.settings.selectedAudioEndpointId,
-    lastCapture: audio.lastCapture, shortcutWarnings: windows.shortcutWarnings
-  })
+  const status = (): AppStatus => {
+    const { escapeWarning, ...operationStatus } = audio.operations.snapshot()
+    return {
+      ...operationStatus, capture: capture.status(windows.window), listening: audio.listening,
+      audioSource: audio.activeEndpoint?.name ?? audio.devices.find((device) => device.id === store.settings.selectedAudioEndpointId)?.name ?? 'Windows default output (WASAPI loopback)',
+      temporaryAudioExists: Boolean(audio.temporaryAudio), helperAvailable: audio.helper.available, helperState: audio.helper.state,
+      helperError: audio.helper.lastError ?? audio.warning, audioDevices: audio.devices, selectedAudioEndpointId: store.settings.selectedAudioEndpointId,
+      lastCapture: audio.lastCapture, activeAudioEndpoint: audio.activeEndpoint,
+      shortcutWarnings: [...windows.shortcutWarnings, ...(escapeWarning ? [escapeWarning] : [])]
+    }
+  }
   const broadcast = (): void => windows.window?.webContents.send(channels.status, status())
   audio.onState = broadcast
-  audio.onResponse = (response) => windows.window?.webContents.send(channels.audioResponse, response)
-  audio.onError = (message) => windows.window?.webContents.send(channels.appError, message)
+  audio.onResponse = (response, operationId) => windows.window?.webContents.send(channels.audioResponse, response, operationId)
+  audio.onError = (error) => windows.window?.webContents.send(channels.appError, error)
 
   handle(channels.getStatus, () => status())
   handle(channels.getSettings, () => store.settings)
   handle<[Partial<AppSettings>]>(channels.updateSettings, async (_event, patch) => {
     const previous = store.settings
+    validateSettingsMutation(previous, patch, audio.operations.isBusy)
     const settings = await store.updateSettings(patch)
     windows.setOpacity(settings.opacity); windows.setClickThrough(settings.clickThrough)
     const electronShortcutsChanged = patch.askShortcut !== undefined || patch.hideShortcut !== undefined
@@ -61,12 +68,21 @@ export function registerIpc(services: Services): void {
   handle(channels.deleteApiKey, () => secrets.deleteKey())
   handle(channels.testApiKey, () => ai.testKey())
   handle<[string]>(channels.ask, async (_event, question): Promise<AskResult> => {
-    if (ai.isBusy) return { ok: false, error: { code: 'busy', message: 'Another question is already being answered.', retryable: false } }
-    audio.operation = 'generating'; broadcast()
-    globalShortcut.register('Escape', () => ai.cancel())
-    try { return { ok: true, response: await ai.ask(question) } }
-    catch (error) { return { ok: false, error: toAiErrorInfo(error) } }
-    finally { globalShortcut.unregister('Escape'); audio.operation = 'idle'; broadcast() }
+    let operation
+    try { operation = audio.operations.begin('typed', 'retrieving') }
+    catch (error) { return { ok: false, error: toOperationError(error) } }
+    let terminalError: AiErrorInfo | undefined
+    try {
+      const chunks = ai.retrieve(question, { signal: operation.signal })
+      audio.operations.transition(operation.id, 'generating')
+      const response = await ai.generate(question, chunks, { signal: operation.signal })
+      return { ok: true, response }
+    } catch (error) {
+      terminalError = toAiErrorInfo(error)
+      return { ok: false, error: terminalError }
+    } finally {
+      await audio.operations.finish(operation.id, operation.signal.aborted || terminalError?.code === 'cancelled' ? 'cancelled' : terminalError ? 'error' : 'success', terminalError)
+    }
   })
   handle(channels.cancel, () => audio.cancel())
   handle(channels.clearSession, () => { ai.clearSession() })
@@ -92,7 +108,15 @@ export function registerIpc(services: Services): void {
   handle(channels.showSettings, () => windows.openSettings())
   handle(channels.startListening, () => audio.startCapture())
   handle(channels.stopListening, () => audio.stopAndProcess())
-  handle(channels.refreshAudioDevices, () => audio.refreshDevices())
+  handle(channels.refreshAudioDevices, () => audio.refreshDevices(true))
+  handle<[string]>(channels.ackListeningIndicator, (_event, operationId) => {
+    if (typeof operationId !== 'string' || operationId.length < 1 || operationId.length > 128) throw new Error('Invalid operation identifier.')
+    audio.acknowledgeListeningIndicator(operationId)
+  })
+  handle<[string]>(channels.ackAnswerVisible, (_event, operationId) => {
+    if (typeof operationId !== 'string' || operationId.length < 1 || operationId.length > 128) throw new Error('Invalid operation identifier.')
+    audio.acknowledgeAnswerVisible(operationId)
+  })
   handle<[boolean]>(channels.setCaptureProtection, (_event, enabled) => {
     if (!windows.window) throw new Error('Overlay window is unavailable.')
     capture.setEnabled(windows.window, enabled); broadcast()
