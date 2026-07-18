@@ -235,6 +235,19 @@ export class AudioController {
 
   async clearOwnedTemporaryAudio(): Promise<void> {
     if (this.operations.isBusy) throw operationError('busy', 'Wait for the active PresenterAI operation to finish before clearing local data.', false)
+    await this.deleteOwnedTemporaryAudioFiles()
+  }
+
+  /**
+   * Delete All calls this only after acquiring the application-wide
+   * maintenance reservation. The ordinary cleanup entry point above keeps its
+   * busy guard so no renderer or operation path can bypass active-work safety.
+   */
+  async clearOwnedTemporaryAudioForMaintenance(): Promise<void> {
+    await this.deleteOwnedTemporaryAudioFiles()
+  }
+
+  private async deleteOwnedTemporaryAudioFiles(): Promise<void> {
     const directory = this.tempDirectory()
     await mkdir(directory, { recursive: true })
     const failures: string[] = []

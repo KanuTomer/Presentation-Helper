@@ -13,6 +13,7 @@ import {
 } from '../src/main/audio/helperClient'
 import type { SettingsStore } from '../src/main/settings/store'
 import type { AppSettings, AssistantResponse, AudioDevice } from '../src/shared/contracts'
+import { LocalDataDeletionService } from '../src/main/settings/dataDeletion'
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
 
@@ -275,6 +276,49 @@ describe('audio controller operation lifecycle', () => {
 
     expect(await readdir(h.directory)).toEqual(['review-notes.txt'])
     expect(await readFile(unrelated, 'utf8')).toBe('keep this file')
+    await h.cleanup()
+  })
+
+  it('clears owned WAVs through Delete All maintenance without weakening the active-operation guard', async () => {
+    const h = await harness()
+    const ownedOne = join(h.directory, 'capture.wav')
+    const ownedTwo = join(h.directory, 'abandoned.WAV')
+    const unrelated = join(h.directory, 'review-notes.txt')
+    await Promise.all([
+      writeFile(ownedOne, pcmWave(1_000)),
+      writeFile(ownedTwo, pcmWave(1_000)),
+      writeFile(unrelated, 'keep this file')
+    ])
+    const scopeAction = vi.fn(async () => undefined)
+    const deletion = new LocalDataDeletionService(
+      () => h.operations.acquireMaintenance(),
+      {
+        session: scopeAction,
+        documents: scopeAction,
+        usage: scopeAction,
+        compatibility: scopeAction,
+        consent: scopeAction,
+        apiKey: scopeAction,
+        temporaryAudio: async () => {
+          expect(h.operations.isBusy).toBe(true)
+          await h.controller.clearOwnedTemporaryAudioForMaintenance()
+        },
+        settings: scopeAction
+      }
+    )
+
+    await expect(deletion.deleteAll('DELETE ALL')).resolves.toEqual({
+      ok: true,
+      results: [
+        'session', 'documents', 'usage', 'compatibility', 'consent', 'api-key', 'temporary-audio', 'settings'
+      ].map((scope) => ({ scope, ok: true }))
+    })
+    expect(await readdir(h.directory)).toEqual(['review-notes.txt'])
+    expect(await readFile(unrelated, 'utf8')).toBe('keep this file')
+
+    const operation = h.operations.begin('typed', 'retrieving')
+    await expect(h.controller.clearOwnedTemporaryAudio()).rejects.toMatchObject({ code: 'busy' })
+    await h.operations.finish(operation.id, 'success')
     await h.cleanup()
   })
 

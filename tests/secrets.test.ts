@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SecretStore, type EncryptionAdapter, type SecretFileAdapter } from '../src/main/settings/secrets'
 
 describe('SecretStore boundary', () => {
@@ -39,5 +39,28 @@ describe('SecretStore boundary', () => {
     await expect(store.saveKey(['sk', 'project-fixture-long-enough'].join('-'))).rejects.toThrow(/secure storage/i)
     expect(await store.status()).toEqual({ configured: false, masked: false, protection: 'unavailable' })
     expect(writes).toBe(0)
+  })
+
+  it('deletes corrupt ciphertext and metadata without attempting decryption', async () => {
+    const values = new Map<string, Uint8Array>([
+      ['key.bin', Uint8Array.from([0xde, 0xad, 0xbe, 0xef])],
+      ['key.bin.meta.json', Buffer.from('{invalid metadata', 'utf8')]
+    ])
+    const files: SecretFileAdapter = {
+      read: async (path) => { const value = values.get(path); if (!value) throw new Error('missing'); return value },
+      write: async (path, value) => { values.set(path, value) },
+      remove: async (path) => { values.delete(path) }
+    }
+    const decrypt = vi.fn(() => { throw new Error('corrupt ciphertext') })
+    const encryption: EncryptionAdapter = {
+      isAvailable: () => true,
+      encrypt: () => new Uint8Array(),
+      decrypt
+    }
+    const store = new SecretStore({ path: () => 'key.bin', files, encryption })
+
+    await expect(store.deleteKey()).resolves.toBeUndefined()
+    expect(decrypt).not.toHaveBeenCalled()
+    expect(values.size).toBe(0)
   })
 })

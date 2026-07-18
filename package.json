@@ -1,6 +1,6 @@
 {
   "name": "presenter-ai",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.1",
   "private": true,
   "description": "Private, local-first AI presentation copilot for Windows",
   "main": "out/main/index.js",
@@ -17,6 +17,8 @@
     "test:packaged-fts": "node scripts/packaged-fts-smoke.mjs",
     "test:packaged-helper": "node scripts/packaged-helper-smoke.mjs",
     "test:installer": "node scripts/installer-smoke.mjs",
+    "test:installer:upgrade": "node scripts/installer-smoke.mjs --require-previous",
+    "checksum:installer": "tsx scripts/generate-installer-checksums.ts",
     "test:e2e": "npm run build && playwright test",
     "eval:m3:live": "tsx scripts/m3-live-eval.ts",
     "eval:m4": "tsx scripts/m4-offline-eval.ts",
@@ -26,7 +28,7 @@
     "eval:m7:live": "tsx scripts/m7-live-eval.ts",
     "helper:build": "dotnet publish native/PresenterAI.WindowsHelper/PresenterAI.WindowsHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o resources/windows-helper",
     "verify": "npm run typecheck && npm test && npm run test:helper && npm run build",
-    "package:win": "npm run helper:build && npm run build && electron-builder --win nsis --publish never"
+    "package:win": "npm run helper:build && npm run build && electron-builder --win nsis --publish never && npm run checksum:installer"
   },
   "dependencies": {
     "@electron-toolkit/utils": "4.0.0",

@@ -1,6 +1,6 @@
 # Milestone 8 secure settings, privacy, and cost-control record
 
-Status: **SOURCE COMPLETE / OFFLINE GREEN; LOCAL CLEAN-INSTALL LIFECYCLE GREEN — formal acceptance remains dependent on Milestones 2–7 and the CI upgrade lifecycle.**
+Status: **SOURCE COMPLETE / OFFLINE GREEN; REPAIR-PR CROSS-VERSION LIFECYCLE GREEN — formal acceptance remains dependent on Milestones 2–7 and a green post-merge `main` lifecycle.**
 
 This milestone makes repeated personal use safer and more understandable. It does not add telemetry, accounts, cloud synchronization, automatic exchange-rate lookup, code signing, auto-update, or a public release. Listening still starts OFF on every launch.
 
@@ -38,33 +38,43 @@ The committed deterministic tests and test harnesses are intended to cover:
 
 The final local branch gate completed on 2026-07-16. Smart App Control intermittently rejected direct unsigned `win-unpacked` launches, so the packaged probes fail closed to a controlled temporary NSIS installation rather than disabling or bypassing Windows policy. The clean installer lifecycle uses the same upstream electron-builder NSIS output, waits for full application initialization and graceful cleanup, proves complete binary removal, and proves that PresenterAI data and the user's source document survive uninstall.
 
-The local machine does not provide a previous successful `main` installer baseline to the script. The workflow therefore remains responsible for the mandatory previous-main upgrade, packaged delete-all, post-delete persistence, and second uninstall checks. Missing baseline evidence fails CI rather than becoming a skipped pass.
+The local machine did not provide a previous successful `main` installer baseline during the 2026-07-16 branch gate. GitHub Actions later supplied the exact previous successful `main` installer, exposing a backward-compatibility defect in the harness: it launched the old build with the newly added `--presenter-installer-launch-smoke` result-file hook. The old application did not implement that hook, remained a normal tray application, and never wrote the expected result. The workflow timed out before the upgraded application, packaged Delete All, post-delete persistence, second uninstall, or artifact upload ran.
+
+PR [#3](https://github.com/KanuTomer/Presentation-Helper/pull/3) nevertheless merged at commit `986469b`; its [PR workflow](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29513275263) and the [post-merge `main` workflow](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29513301865) recorded the same harness failure. This does not prove a current-application launch defect, but it also supplies no evidence for any skipped later lifecycle assertion. The approved repair must initialize the legacy baseline through artifacts the legacy build actually supports, verify controlled shutdown, then retain the strict result-file hook for current clean and post-upgrade launches.
 
 | Gate | Result |
 |---|---|
-| TypeScript and full Vitest suite | Passed; 39 files, 259/259 tests |
+| TypeScript and full Vitest suite | Repair branch passed; 41 files, 284/284 tests |
 | M3 and M4 regression suites | Passed; M4 top-five recall 50/50 |
 | M6 offline budget preflight | Passed without network dispatch; campaign remains correctly infeasible under the immutable cap |
 | M7 50-case offline evaluator | Passed 50/50 with zero failed IDs |
 | .NET helper tests and WASAPI smoke | 29/29; protocol v2, two devices, valid 16 kHz mono WAV |
 | Playwright Electron suite | Passed 5/5 |
-| Production Electron/NSIS packaging | Passed with Electron 43.1.0 and upstream electron-builder 26.15.3 |
+| Historical production Electron/NSIS packaging | Passed with Electron 43.1.0 and upstream electron-builder 26.15.3 |
+| Repair-branch local NSIS packaging | Blocked by Windows Smart App Control rejecting electron-builder's unsigned intermediate with `spawn UNKNOWN`; security controls were not disabled or bypassed. Clean Windows CI remains mandatory. |
 | Packaged FTS5/helper probes | SQLite 3.53.1 FTS5 passed; helper protocol v2 with nine required features passed |
 | Installer clean launch/uninstall probe | Passed; full initialization, seeded-data preservation, complete payload removal |
-| Previous-main upgrade/delete-all/uninstall probe | Pending mandatory Windows CI baseline run |
-| Credential/generated-artifact/redaction scans | Pending final staged/publication scan |
+| PR #3 and post-merge installer lifecycle | Failed before upgrade validation; legacy build did not support the new result-file hook |
+| [Repair PR #4 first lifecycle run](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29640718999) | Passed clean install, legacy initialization, genuine upgrade, current launch, and data preservation; then exposed a deterministic temporary-audio Delete All self-lock. The maintenance-authorized cleanup fix and regression are included in the updated repair commit. |
+| [Repair PR #4 second lifecycle run](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29641353891) | Passed clean install/uninstall, legacy initialization, genuine upgrade, current launch, data preservation, all eight Delete All scopes, and source-document preservation. It then exposed a test-harness TOCTOU: recursive payload enumeration received `ENOENT` while NSIS was deleting a traversed directory, aborted after about three seconds instead of polling for 60 seconds, and reported the transient alphabetic tail as leftovers. The repair now ignores only vanished-path `ENOENT`, propagates other filesystem errors, and retains the strict real-deadline assertion. |
+| [Repaired previous-main upgrade/delete-all/uninstall probe](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29642064032) | Passed clean current install/uninstall, exact `e24e20d` baseline initialization, genuine upgrade, settings/index/consent/usage/key-state preservation, current packaged launch, all eight Delete All scopes, source preservation, final uninstall, and empty payload. |
+| Credential/generated-artifact/redaction scans | Passed before the focused commit; generated installers, helper output, raw responses/transcripts, and credentials remain untracked. |
 
 ## Formal acceptance blockers
 
 Milestone 8 depends on Milestones 2–7 in the original plan. The capture-protection matrix, physical-device/manual M5 campaign, budget-blocked M6 live campaign, and separately authorized M7 live model evaluation remain incomplete. Consequently this record may say **source complete/offline green** after the branch gate, but must not say that the personal beta or Milestone 8 is formally accepted.
 
-## Branch evidence
+## Evidence and repair record
 
-- Gate date: 2026-07-16; commit: the commit containing this record.
-- Final installer: `PresenterAI-0.1.0-setup.exe`, SHA-256 `86F089B077221C38FB37C7739882D4C9854A72E91FA85D76FD3B1DD630C2AF27`.
+- Local gate date: 2026-07-16; M7/M8 source merge: `986469b` through PR #3.
+- Historical local installer: `PresenterAI-0.1.0-setup.exe`, SHA-256 `86F089B077221C38FB37C7739882D4C9854A72E91FA85D76FD3B1DD630C2AF27`. This is local clean-lifecycle evidence, not an independently testable accepted-beta artifact.
 - Local installer report: clean install, fully initialized launch, seeded settings/index/key/temp state, complete uninstall, and retained application data/source document all passed.
 - `npm audit --audit-level=high`: zero vulnerabilities.
-- TypeScript/Vitest/.NET/Playwright: passed; 259/259, 29/29, and 5/5 respectively.
+- Repair-branch TypeScript/Vitest/.NET/Playwright: passed; 284/284, 29/29, and 5/5 respectively.
 - M4/M6/M7: 50/50 retrieval; zero-dispatch budget preflight; 50/50 grounding.
 - Packaged runtime: Electron 43.1.0, SQLite 3.53.1 with FTS5, helper protocol v2 with nine required features.
-- Windows CI must still prove previous-main upgrade, packaged delete-all, persistence, uninstall, and artifact upload before publication is complete.
+- PR #3 merged as `986469b`; its PR workflow and post-merge `main` workflow failed at the legacy-baseline launch step before upgrade assertions.
+- Repair target: `PresenterAI-0.2.0-beta.1` with a legacy-compatible baseline probe, strict current-build hooks, redacted lifecycle diagnostics, and a SHA-256 manifest.
+- Repair branch offline/source gate: audit, 284/284 Vitest, 29/29 .NET, M4 50/50, M7 50/50, M6 zero-network preflight, helper smoke, and 5/5 Playwright passed on 2026-07-18. A fresh local NSIS retry again stalled at the unsigned `makensis` stage under Smart App Control and was terminated without disabling or bypassing Windows security. The incomplete installer could not support fallback packaged probes, so the complete local installer gate is not passed; clean Windows CI remains authoritative.
+- Repair PR Windows workflow: **Passed** in [run 29642064032](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29642064032). Lifecycle report `ok=true`; clean and upgraded uninstalls each reached zero payload. The installer SHA-256 is `3995A2DE9AD478A1C3EEE7CC62B82AACE27B75E4AC9F5FA5ACE5BC879A9D24E6`, matching the uploaded manifest.
+- Post-merge `main` workflow and artifacts: **Pending — this is the publication gate for the closed manual-mode technical preview.**
