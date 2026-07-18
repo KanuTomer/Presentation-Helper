@@ -68,7 +68,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     compatibility: () => store.clearCaptureResults(),
     consent: () => store.clearListeningConsent(),
     apiKey: () => secrets.deleteKey(),
-    temporaryAudio: () => audio.clearOwnedTemporaryAudio(),
+    temporaryAudio: () => audio.clearOwnedTemporaryAudioForMaintenance(),
     settings: async () => {
       const defaults = await store.resetSettings()
       await store.clearWindowBounds()

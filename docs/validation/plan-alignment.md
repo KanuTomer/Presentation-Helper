@@ -16,7 +16,7 @@ PresenterAI remains on the chosen architecture: Electron 43 with React/TypeScrip
 | M5 | Source and automated gates pass; the real Meet/shortcut/device campaign is not accepted. |
 | M6 | Source and automated gates pass; billable validation is safety-blocked because its documented worst case exceeds the immutable campaign cap. No M6 API request was made. |
 | M7 | Source complete/offline green: the production SQLite FTS5/context/grounding evaluator passes 50/50. Formal live acceptance waits for M6 and separate spending authority. |
-| M8 | Source complete/offline green, with a passing local clean install/launch/uninstall lifecycle. Formal acceptance waits for M2–M7 and the mandatory CI previous-main upgrade lifecycle. |
+| M8 | Source complete/offline green. Repair PR #4 passed the full previous-main-to-current installer lifecycle and uploaded redacted evidence; formal acceptance still waits for M2–M7 and a green post-merge `main` lifecycle. |
 | M9 | Not implemented and correctly remains experimental. |
 
 No product release gate should be described as complete while M0–M2 remain unsigned. In particular, an installable source-level beta is not the same as the plan's accepted Manual Copilot MVP or personal beta.
@@ -38,21 +38,34 @@ The stored API key remains a main-process secret: the renderer can ask for statu
 | The earlier Windows-only static `app-builder-lib` uninstaller-extraction patch was removed. | Strict lifecycle testing showed the static extraction workaround was unnecessary and could yield an unreliable uninstall binary. PresenterAI now uses upstream electron-builder's intended two-pass NSIS generation; a controlled fully-initialized launch hook prevents the prior test race with late Electron/helper processes. |
 | M6 billable validation did not run despite a lower practical estimate. | The provider endpoint exposes no caller-enforced transcription output-token cap. Its documented worst-case campaign cost exceeds the immutable $0.15 authorization, so fail-closed budget enforcement correctly spent $0. |
 | Process-tree Chrome capture is unavailable rather than experimental in the product. | The original plan permits promotion only after a 19/20 isolation spike. That gate never passed, so reliable system WASAPI loopback remains the only supported source. |
+| M7 and M8 were delivered as one commit instead of the planned two intentional commits. | This reduced milestone-level history clarity but did not change the reviewed architecture or runtime behavior. Do not rewrite merged history; keep subsequent repairs focused and document milestone evidence separately. |
+| PR #3 was merged before its Windows check completed. | The post-merge workflow then reproduced the installer-harness failure. Future PRs must remain unmerged until `build-and-package` is green. Configure a required `main` status check when repository settings permit it; otherwise treat the same rule as a mandatory manual gate. |
 
 No other material architectural deviation was found. Changes that strengthen validation, privacy, cancellation, or truthful status reporting while preserving the selected data flow are treated as implementation hardening rather than a change in product direction.
 
+## Installer CI incident and recovery gate
+
+PR [#3](https://github.com/KanuTomer/Presentation-Helper/pull/3) merged at `986469b`. Its [PR workflow](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29513275263) and [post-merge `main` workflow](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29513301865) both reached the installer upgrade scenario, downloaded the previous successful `main` artifact, and then timed out because the new harness expected the older application to write a result-file protocol that did not exist in that version. The current packaged FTS5 and helper probes had already passed, but the upgraded application and later Delete All/uninstall assertions were never reached.
+
+The repair must start from remote `main`, use legacy-observable readiness for the previous build, retain strict launch-result hooks for the current build, and produce redacted diagnostics even when the lifecycle fails. The repair is complete only after the full local gate, a green repair PR workflow, and a green post-merge `main` workflow publish the installer, checksum manifest, and validation reports. Until then, no current artifact is eligible for independent testing.
+
 ## Outstanding route to the planned beta
 
-1. Complete the M0–M2 and M5 user-assisted Windows matrices; the M5/M6 automated source branch is already merged.
-2. Resolve the M6 campaign budget with separate authority, then run its immutable live evidence set without retaining audio/transcripts/answers.
-3. Keep M7 source/offline status separate from its later paid live gate; require follow-up resolution, unsupported-warning, contradiction, citation, and zero-invention thresholds unchanged.
-4. Keep M8 source/offline status separate from formal acceptance until every M2–M7 predecessor is accepted.
-5. Leave M9 disabled unless its independent privacy, reliability, cost, and promotion criteria are later authorized and met.
+1. Repair and pass the cross-version installer lifecycle on the repair PR and post-merge `main`; publish checksums and redacted evidence.
+2. Permit only the closed manual-mode technical preview described in `docs/manual/manual-mode-technical-preview.md`; exclude independent audio and capture claims.
+3. Complete the M0–M2 and M5 user-assisted Windows matrices; the M5/M6 automated source branch is already merged.
+4. Resolve the M6 campaign budget with separate authority, then run its immutable live evidence set without retaining audio/transcripts/answers.
+5. Keep M7 source/offline status separate from its later paid live gate; require follow-up resolution, unsupported-warning, contradiction, citation, and zero-invention thresholds unchanged.
+6. Keep M8 source/offline status separate from formal acceptance until every M2–M7 predecessor is accepted.
+7. Leave M9 disabled unless its independent privacy, reliability, cost, and promotion criteria are later authorized and met.
 
 ## Branch evidence
 
 - M7 offline: 50/50 cases, 20/20 contextual follow-ups, 50/50 production FTS selections, zero failed IDs.
-- Full regression: Vitest 259/259, .NET 29/29, Playwright 5/5, M4 50/50, audit zero vulnerabilities.
+- Current repair-branch regression: Vitest 284/284, .NET 29/29, Playwright 5/5, M4 50/50, M7 50/50, audit zero vulnerabilities.
 - Packaged runtime: Electron 43.1.0, SQLite 3.53.1 FTS5, helper protocol v2 with nine required features.
 - Local clean installer lifecycle: passed against SHA-256 `86F089B077221C38FB37C7739882D4C9854A72E91FA85D76FD3B1DD630C2AF27`.
-- M7/M8 PR, mandatory previous-main upgrade lifecycle, post-merge workflow, and uploaded artifacts remain the publication gate.
+- M7/M8 PR #3 merged at `986469b`, but its PR and post-merge installer gates failed before upgrade validation because the legacy build lacked the new launch-result hook.
+- Repair PR workflow [29642064032](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29642064032): green, with lifecycle `ok=true`, exact previous-baseline provenance, installer/checksum match, M7/M8 records, and clean/upgraded payload removal. The post-merge `main` workflow remains pending and no independent-testing eligibility should be inferred before it passes.
+
+Repair PR #4 has supplied two useful failing-gate results without changing milestone acceptance. The first proved legacy-compatible initialization and genuine upgrade before exposing a Delete All maintenance self-lock; the second proved the corrected eight-scope Delete All path before a recursive file-enumeration race aborted the NSIS cleanup poll roughly three seconds into its 60-second allowance. The harness now treats only `ENOENT` for a concurrently vanished root or subtree as empty, continues polling any actual residual payload, propagates access and other filesystem errors, and records bounded uninstall progress. This is test hardening, not a product-architecture deviation.

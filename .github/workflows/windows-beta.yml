@@ -68,6 +68,21 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      - name: Resolve exact current installer artifact
+        id: current-installer
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^[0-9A-Za-z][0-9A-Za-z.+-]*$') { throw 'package.json contains an unsafe version.' }
+          $filename = "PresenterAI-$version-setup.exe"
+          $path = "release/$filename"
+          if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "The exact current installer was not found: $path" }
+          "filename=$filename" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Generate installer checksum manifest
+        run: npm run checksum:installer
+
       - name: Verify packaged Electron SQLite FTS5
         run: npm run test:packaged-fts
 
@@ -100,17 +115,48 @@ jobs:
       - name: Verify clean install, upgrade, Delete All, persistence, and uninstall
         shell: pwsh
         run: |
-          $current = Get-ChildItem release -Filter 'PresenterAI-*-setup.exe' -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-          $previous = Get-ChildItem artifacts/previous-main -Filter 'PresenterAI-*-setup.exe' -File -Recurse | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-          if (-not $current -or -not $previous) { throw 'Current or previous PresenterAI installer artifact was not found.' }
-          node scripts/installer-smoke.mjs --current $current.FullName --previous $previous.FullName --require-previous --report artifacts/installer/installer-lifecycle-report.json
+          $current = Get-Item -LiteralPath '${{ steps.current-installer.outputs.path }}'
+          $previousInstallers = @(Get-ChildItem artifacts/previous-main -Filter 'PresenterAI-*-setup.exe' -File -Recurse)
+          if ($previousInstallers.Count -ne 1) { throw "Expected exactly one previous PresenterAI installer; found $($previousInstallers.Count)." }
+          $previous = $previousInstallers[0]
+          npm run test:installer:upgrade -- --current $current.FullName --previous $previous.FullName --previous-run-id '${{ steps.previous-main.outputs.run_id }}' --previous-head-sha '${{ steps.previous-main.outputs.head_sha }}' --report artifacts/installer/installer-lifecycle-report.json
+
+      - name: Ensure redacted installer diagnostics exist
+        if: always()
+        shell: pwsh
+        run: |
+          $report = 'artifacts/installer/installer-lifecycle-report.json'
+          New-Item -ItemType Directory -Force -Path (Split-Path $report) | Out-Null
+          if (-not (Test-Path $report)) {
+            [ordered]@{
+              schemaVersion = 3
+              generatedAt = [DateTimeOffset]::UtcNow.ToString('o')
+              ok = $false
+              lifecycleReportAvailable = $false
+              workflowRunId = '${{ github.run_id }}'
+              commitSha = '${{ github.sha }}'
+              previousBaseline = [ordered]@{
+                workflowRunId = '${{ steps.previous-main.outputs.run_id }}'
+                headSha = '${{ steps.previous-main.outputs.head_sha }}'
+              }
+            } | ConvertTo-Json | Set-Content -Path $report -Encoding utf8
+          }
+
+      - name: Upload redacted installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PresenterAI-installer-diagnostics-${{ github.run_id }}
+          path: artifacts/installer/installer-lifecycle-report.json
+          if-no-files-found: error
 
       - name: Upload Windows installer and validation reports
         uses: actions/upload-artifact@v4
         with:
           name: PresenterAI-Windows-beta
           path: |
-            release/PresenterAI-*-setup.exe
+            ${{ steps.current-installer.outputs.path }}
+            release/SHA256SUMS.txt
             artifacts/m4/m4-retrieval-report.json
             artifacts/m7/m7-offline-report.json
             artifacts/installer/installer-lifecycle-report.json

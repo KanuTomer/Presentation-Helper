@@ -13,7 +13,7 @@ Milestones 3 and 4 are already accepted in their respective reports. Do not spen
 
 Milestones 5 and 6 are **not accepted**. The current non-billable gate passes 196 Vitest tests in 28 files, 29/29 .NET tests, 5/5 Playwright Electron tests, an audit with zero high-severity findings, and the 50/50 M4 corpus. Those results do not replace the fullscreen, capture-path, Meet, physical-device, or installed-app rows below.
 
-> **M6 paid campaign safety stop:** the zero-network preflight estimates $0.145567, but its documented worst-case bound is $0.641867. Because that exceeds the immutable $0.15 cap, it reports `strictCampaignFeasible=false`, sets `billableExecutionEnabled=false`, and refuses live execution. M6 has spent $0. Do not supply the API key or run billable cases until the user separately revises the case count or cap.
+> **M6 paid campaign safety stop:** the current zero-network preflight estimates $0.148247, but its documented worst-case bound is $0.644547. Because that exceeds the immutable $0.15 cap, it reports `strictCampaignFeasible=false`, sets `billableExecutionEnabled=false`, and refuses live execution. M6 has spent $0. Do not supply the API key or run billable cases until the user separately revises the case count or cap.
 
 ## Environment
 
