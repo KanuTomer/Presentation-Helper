@@ -89,6 +89,32 @@ describe('Windows helper client protocol', () => {
     expect(client.state).toBe('failed')
   })
 
+  it('forwards explicit process arguments and environment only when configured', async () => {
+    const child = responder((command, process) => {
+      if (command.type === 'hello') send(process, {
+        type: 'ready', requestId: command.requestId, protocolVersion: 2, shortcutReady: true, features
+      })
+      if (command.type === 'shutdown') {
+        send(process, { type: 'shutdownComplete', requestId: command.requestId })
+        queueMicrotask(() => process.emit('exit', 0, null))
+      }
+    })
+    const spawnProcess = vi.fn(() => child)
+    const { HelperClient } = await import('../src/main/audio/helperClient')
+    const client = new HelperClient({
+      executablePath: () => process.execPath,
+      spawnProcess: spawnProcess as never,
+      processArgs: ['--test-argument'],
+      processEnvironment: { TEST_ONLY: '1' }
+    })
+
+    await expect(client.start()).resolves.toBe(true)
+    expect(spawnProcess).toHaveBeenCalledWith(process.execPath, ['--test-argument'], expect.objectContaining({
+      env: { TEST_ONLY: '1' }
+    }))
+    await client.stopProcess()
+  })
+
   it('rejects a handshake whose keyboard hook is not ready and catches synchronous spawn failures', async () => {
     const hookChild = responder((command, process) => {
       send(process, { type: 'ready', requestId: command.requestId, protocolVersion: 2, shortcutReady: false, features })

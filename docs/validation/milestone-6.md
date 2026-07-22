@@ -43,7 +43,7 @@ Bounded audio is transmitted to the transcription endpoint and selected M4 conte
 | M6-AUTO-09 | Only selected M4 chunks are sent; citations remain validated | Pass | Cross-reference accepted `milestone-4.md`; context/citation tests remain green |
 | M6-AUTO-10 | Stage timings/usage contain no audio, transcript, prompt, or answer | Pass | Timing/usage/redaction tests and offline report scan |
 
-Aggregate beta.2 non-billable evidence: 352 Vitest tests in 50 files, 33/33 .NET tests in the latest isolated run, 9/9 Playwright Electron tests, zero dependency vulnerabilities, accepted 50/50 M4 retrieval, and a zero-network M6 preflight. Code Integrity has blocked unsigned local payloads and the local installer lifecycle. GitHub CI uses a dual-gated deterministic helper backend for two complete process/protocol cycles and reports that this does not validate WASAPI; physical system-audio and live transcription acceptance remain pending. No live M6 API request was made.
+Aggregate beta.2 non-billable evidence: 353 Vitest tests in 50 files, 33/33 .NET tests in the latest isolated run, 9/9 Playwright Electron tests, zero dependency vulnerabilities, accepted 50/50 M4 retrieval, and a zero-network M6 preflight. Code Integrity has blocked unsigned local payloads and the local installer lifecycle. GitHub CI uses a dual-gated deterministic helper backend for two complete process/protocol cycles and reports that this does not validate WASAPI; physical system-audio and live transcription acceptance remain pending. No live M6 API request was made.
 
 ## Renderer-visible latency evidence
 

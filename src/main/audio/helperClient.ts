@@ -37,6 +37,10 @@ export interface HelperClientOptions {
   executablePath?: () => string
   spawnProcess?: typeof spawn
   startupTimeoutMs?: number
+  processArgs?: string[]
+  processEnvironment?: NodeJS.ProcessEnv
+  requiredCaptureFeature?: 'wasapi-system-loopback' | 'synthetic-test-audio'
+  expectedCaptureBackend?: 'wasapi-system-loopback' | 'synthetic-test'
 }
 
 export class HelperClient {
@@ -80,7 +84,10 @@ export class HelperClient {
     this.stopping = false
     let child: ChildProcessWithoutNullStreams
     try {
-      child = (this.options.spawnProcess ?? spawn)(executable, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+      child = (this.options.spawnProcess ?? spawn)(executable, this.options.processArgs ?? [], {
+        stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+        ...(this.options.processEnvironment ? { env: this.options.processEnvironment } : {})
+      })
     } catch (error) {
       this.setState('failed', helperLaunchFailureMessage(error))
       return false
@@ -110,7 +117,14 @@ export class HelperClient {
         throw new HelperClientError('shortcut_hook_unavailable', 'The Windows helper keyboard hook is not ready.')
       }
       this.features = Array.isArray(hello.features) ? hello.features.map(String) : []
-      const missing = REQUIRED_FEATURES.filter((feature) => !this.features.includes(feature))
+      if (this.options.expectedCaptureBackend && hello.captureBackend !== this.options.expectedCaptureBackend) {
+        throw new HelperClientError('feature_mismatch', `Windows helper reported the unexpected ${String(hello.captureBackend ?? 'unknown')} capture backend.`)
+      }
+      const requiredCaptureFeature = this.options.requiredCaptureFeature ?? 'wasapi-system-loopback'
+      const requiredFeatures = REQUIRED_FEATURES.map((feature) => (
+        feature === 'wasapi-system-loopback' ? requiredCaptureFeature : feature
+      ))
+      const missing = requiredFeatures.filter((feature) => !this.features.includes(feature))
       if (missing.length) throw new HelperClientError('feature_mismatch', `Windows helper is missing required features: ${missing.join(', ')}.`)
       this.setState('ready')
       return true

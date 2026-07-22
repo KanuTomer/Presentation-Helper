@@ -44,7 +44,7 @@ PR [#3](https://github.com/KanuTomer/Presentation-Helper/pull/3) nevertheless me
 
 | Gate | Result |
 |---|---|
-| TypeScript and full Vitest suite | Current beta.2 tree passed; 50 files, 352/352 tests |
+| TypeScript and full Vitest suite | Current beta.2 tree passed; 50 files, 353/353 tests |
 | M3 and M4 regression suites | Passed; M4 top-five recall 50/50 |
 | M6 offline budget preflight | Passed without network dispatch; campaign remains correctly infeasible under the immutable cap |
 | M7 50-case offline evaluator | Passed 50/50 with zero failed IDs |
@@ -71,11 +71,11 @@ Milestone 8 depends on Milestones 2–7 in the original plan. The capture-protec
 - Historical local installer: `PresenterAI-0.1.0-setup.exe`, SHA-256 `86F089B077221C38FB37C7739882D4C9854A72E91FA85D76FD3B1DD630C2AF27`. This is local clean-lifecycle evidence, not an independently testable accepted-beta artifact.
 - Local installer report: clean install, fully initialized launch, seeded settings/index/key/temp state, complete uninstall, and retained application data/source document all passed.
 - `npm audit --audit-level=high`: zero vulnerabilities.
-- Current local TypeScript/Vitest/Playwright: passed; 352/352 and 9/9 respectively. The latest isolated .NET run reached 33/33; the strict wrapper still treats any Code Integrity zero-test outcome as `blocked-by-smart-app-control`, never as a pass.
+- Current local TypeScript/Vitest/Playwright: passed; 353/353 and 9/9 respectively. The latest isolated .NET run reached 33/33; the strict wrapper still treats any Code Integrity zero-test outcome as `blocked-by-smart-app-control`, never as a pass.
 - M4/M6/M7: 50/50 retrieval; zero-dispatch budget preflight; 50/50 grounding.
 - Packaged runtime: Electron 43.1.0, SQLite 3.53.1 with FTS5, helper protocol v2 with nine required features.
 - PR #3 merged as `986469b`; its PR workflow and post-merge `main` workflow failed at the legacy-baseline launch step before upgrade assertions.
 - Delivery target: `PresenterAI-0.2.0-beta.2`, upgrading from the `0.2.0-beta.1` baseline with strict current-build hooks, redacted lifecycle and Code Integrity diagnostics, and a SHA-256 manifest.
-- Current offline/source gate: audit, 352/352 Vitest, 33/33 .NET tests in the latest isolated run, M4 50/50, M7 50/50, M6 zero-network preflight, two-cycle helper smoke, 9/9 Playwright, production build, NSIS packaging, and packaged FTS/helper probes completed on 2026-07-22. Enterprise Code Integrity has blocked unsigned local payloads, and the local clean-install lifecycle timed out; both remain fail-closed without disabling or bypassing Windows security. Clean Windows CI is authoritative for beta.2 delivery.
+- Current offline/source gate: audit, 353/353 Vitest, 33/33 .NET tests in the latest isolated run, M4 50/50, M7 50/50, M6 zero-network preflight, two-cycle helper smoke, 9/9 Playwright, production build, NSIS packaging, and packaged FTS/helper probes completed on 2026-07-22. Enterprise Code Integrity has blocked unsigned local payloads, and the local clean-install lifecycle timed out; both remain fail-closed without disabling or bypassing Windows security. Clean Windows CI is authoritative for beta.2 delivery.
 - Repair PR Windows workflow: **Passed** in [run 29642064032](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29642064032). Lifecycle report `ok=true`; clean and upgraded uninstalls each reached zero payload. The installer SHA-256 is `3995A2DE9AD478A1C3EEE7CC62B82AACE27B75E4AC9F5FA5ACE5BC879A9D24E6`, matching the uploaded manifest.
 - Post-merge `main` workflow and artifacts: **Passed** in [run 29642541009](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29642541009) for `dc1b609`. That baseline is eligible for the closed manual-mode technical preview; later source changes require a new green workflow.

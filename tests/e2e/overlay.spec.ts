@@ -19,6 +19,7 @@ test.beforeAll(async () => {
     env: {
       ...childEnvironment,
       PRESENTERAI_E2E: '1',
+      PRESENTERAI_E2E_AUDIO_BACKEND: 'synthetic-test',
       PRESENTERAI_E2E_USER_DATA: userData,
       PRESENTERAI_E2E_HELPER_START_DELAY_MS: '4000'
     }

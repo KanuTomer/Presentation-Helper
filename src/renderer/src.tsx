@@ -167,7 +167,7 @@ function App(): React.JSX.Element {
       {(['copilot', 'documents', 'settings', 'privacy'] as View[]).map((item) => <button key={item} className={view === item ? 'active' : ''} onClick={() => setView(item)}>{item}</button>)}
     </nav>
 
-    <section className="content no-drag" tabIndex={0} aria-label={`${view} content`}>
+    <section className="content no-drag" tabIndex={0} aria-label={`${view} content`} onKeyDown={handleContentScrollKey}>
       {status.settingsRecoveryWarning && <Notice tone="warning"><strong>Settings were recovered safely.</strong> The prior file was {status.settingsRecoveryWarning.code.replaceAll('_', ' ')}. <button onClick={async () => { await window.presenter.dismissSettingsRecoveryWarning(); await refresh() }}>Dismiss</button></Notice>}
       {view === 'copilot' && <Copilot question={question} setQuestion={setQuestionFromUser} transcriptDraft={transcriptDraft} resolveTranscript={(choice) => {
         if (!transcriptDraft) return
@@ -259,6 +259,18 @@ function Privacy({ status, recordingMs, documents, usage, settings, onNewSession
       deleteAllData: () => window.presenter.deleteAllLocalData('DELETE ALL')
     }} />
   </div>
+}
+
+function handleContentScrollKey(event: React.KeyboardEvent<HTMLElement>): void {
+  if (event.target !== event.currentTarget) return
+  const viewport = event.currentTarget
+  const page = Math.max(1, Math.floor(viewport.clientHeight * 0.85))
+  if (event.key === 'Home') viewport.scrollTop = 0
+  else if (event.key === 'End') viewport.scrollTop = viewport.scrollHeight
+  else if (event.key === 'PageDown') viewport.scrollTop += page
+  else if (event.key === 'PageUp') viewport.scrollTop -= page
+  else return
+  event.preventDefault()
 }
 
 function CaptureStatus({ status, onChange }: { status: AppStatus; onChange(): Promise<void> }) {
