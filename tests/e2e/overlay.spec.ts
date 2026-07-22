@@ -106,17 +106,16 @@ test('creates a protected overlay with hardened web preferences and clamped boun
     ))
     return {
       alwaysOnTop: window.isAlwaysOnTop(), movable: window.isMovable(), resizable: window.isResizable(),
-      protected: window.isContentProtected(), contained, bounds, contentBounds, workAreas,
+      protected: window.isContentProtected(), hasShadow: window.hasShadow(), contained, bounds, contentBounds, workAreas,
       preferences: window.webContents.getLastWebPreferences()
     }
   })
   expect(state).toMatchObject({
-    alwaysOnTop: true, movable: true, resizable: true, protected: true,
+    alwaysOnTop: true, movable: true, resizable: true, protected: true, hasShadow: false,
     preferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
   })
   expect(state.contained, `bounds ${JSON.stringify(state.bounds)} (content ${JSON.stringify(state.contentBounds)}) were outside work areas ${JSON.stringify(state.workAreas)}`).toBe(true)
-  // DWM can add a small native shadow outside a transparent frameless
-  // window. Validate the requested content width and bound the decoration.
+  // The renderer owns the rounded glass edge; native shadowing is disabled.
   expect(state.contentBounds.width).toBeGreaterThanOrEqual(680)
   expect(state.contentBounds.width).toBeLessThanOrEqual(1116)
   expect(Math.abs(state.bounds.width - state.contentBounds.width)).toBeLessThanOrEqual(16)
@@ -132,6 +131,61 @@ test('shows the wide glass composer and supports a per-request Code override', a
   await expect(auto).toHaveAttribute('aria-pressed', 'false')
   const shell = page.locator('.shell')
   await expect(shell).toHaveCSS('border-radius', '24px')
+})
+
+test('scrolls every long tab by wheel and keyboard at wide and minimum sizes', async () => {
+  for (const [width, height] of [[1100, 720], [680, 420]] as const) {
+    await application.evaluate(({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0]?.setContentSize(size.width, size.height)
+    }, { width, height })
+    for (const tab of ['copilot', 'documents', 'settings', 'privacy', 'capture'] as const) {
+      if (tab === 'capture') await page.getByTitle('Capture protection status').click()
+      else await page.getByRole('button', { name: tab, exact: true }).click()
+      const content = page.locator('.content')
+      await content.evaluate((element) => {
+        const fixture = document.createElement('div')
+        fixture.className = 'e2e-scroll-fixture'
+        fixture.setAttribute('aria-hidden', 'true')
+        fixture.style.height = '1400px'
+        fixture.style.minHeight = '1400px'
+        element.append(fixture)
+      })
+      await expect.poll(async () => content.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+      await content.evaluate((element) => { element.scrollTop = 0 })
+      await content.hover()
+      await page.mouse.wheel(0, 360)
+      await expect.poll(async () => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+
+      await content.focus()
+      await page.keyboard.press('Home')
+      await expect.poll(async () => content.evaluate((element) => element.scrollTop)).toBe(0)
+      await page.keyboard.press('PageDown')
+      await expect.poll(async () => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+      await content.locator('.e2e-scroll-fixture').evaluate((element) => element.remove())
+    }
+  }
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1100, 720))
+})
+
+test('keeps wheel and touchpad-style deltas inside nested code scrolling surfaces', async () => {
+  await page.getByRole('button', { name: 'copilot', exact: true }).click()
+  const code = page.locator('.content').evaluate((content) => {
+    const card = document.createElement('article')
+    card.className = 'code-block-card e2e-code-card'
+    const pre = document.createElement('pre')
+    pre.className = 'code-scroll'
+    pre.tabIndex = 0
+    pre.textContent = Array.from({ length: 80 }, (_, index) => `${index}: ${'nested-scroll-content '.repeat(12)}`).join('\n')
+    card.append(pre)
+    content.firstElementChild?.append(card)
+  })
+  await code
+  const scroller = page.locator('.e2e-code-card .code-scroll')
+  await scroller.hover()
+  await page.mouse.wheel(300, 320)
+  await expect.poll(async () => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+  await expect.poll(async () => scroller.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0)
+  await page.locator('.e2e-code-card').evaluate((element) => element.remove())
 })
 
 test('provides tray recovery, hide/show, and emergency click-through escape', async () => {

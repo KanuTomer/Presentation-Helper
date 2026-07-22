@@ -29,7 +29,7 @@ Do not edit completed evidence in place. Correct a mistake by appending a dated 
 - OBS: not installed, so its manual capture rows are blocked until it is available.
 - Installer SHA-256: `3AF464BAF6F5843517C9A4861C3A2F6D7DBC08C257D3D371DEF1F2A35ACF5F0D`.
 - Fresh Electron extraction was repeatedly locked by local Windows Application Control/real-time scanning. The final local package therefore copied the already trusted, pinned Electron 43.1.0 distribution. The resulting unpacked `PresenterAI.exe` launched directly and passed both the FTS5 and bundled-helper probes. Clean NSIS install, upgrade, uninstall, and installed interactive launch remain manual rows.
-- Current non-billable regression evidence: 323 Vitest tests in 44 files, 30/30 .NET tests, 7/7 Playwright Electron tests, zero dependency vulnerabilities, and 50/50 M4 retrieval cases.
+- Current beta.2 non-billable regression evidence: 351 Vitest tests in 50 files, 9/9 Playwright Electron tests, zero dependency vulnerabilities, and 50/50 M4 retrieval cases. Local .NET discovery is blocked by enforced Smart App Control; the strict wrapper fails instead of accepting zero tests, and clean Windows CI must execute at least 29 helper tests.
 - The complete regression, audit, M4, and zero-network M6 preflight set was reverified on 2026-07-16; package/helper-smoke measurements below remain the immutable 2026-07-14 records.
 - The latest helper smoke produced a 12,910 ms, 413,166-byte, 16 kHz mono WAV on the Realtek default endpoint and deleted it. A preceding stale Bluetooth-endpoint attempt was invalidated by Windows; enumeration exposed the new default and a retry passed. This is diagnostic only, not M0 Meet intelligibility or M5 device-switch acceptance.
 
@@ -52,7 +52,7 @@ Process-tree Chrome capture is **not promoted**. PresenterAI supports system WAS
 
 | Case ID | Gate | Result | Evidence / notes |
 |---|---|---|---|
-| M1-AUTO-01 | Production security configuration has no Electron warning | Pass | Playwright production bundle: strict CSP, sandbox, context isolation, no Node integration; complete suite 7/7 passes |
+| M1-AUTO-01 | Production security configuration has no Electron warning | Pass | Playwright production bundle: strict CSP, sandbox, context isolation, no Node integration; complete beta.2 suite 9/9 passes |
 | M1-AUTO-02 | Hide/show, click-through escape, tray Show/Settings/Quit | Partial | Playwright exercises close-to-tray, hide/show, emergency recovery, and the actual tray Show/Settings callbacks; tray Quit and installed-app availability remain manual |
 | M1-DSP-01 | Saved bounds clamp to each currently connected monitor | Partial | Invalid saved bounds are fully contained on the current display, including DWM shadow; monitor removal/scaling change remains manual |
 | M1-FS-01 | Overlay remains above Chrome presentation/fullscreen | Untested | |

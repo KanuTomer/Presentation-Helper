@@ -2,7 +2,7 @@
 
 Status: **NOT ACCEPTED — automated gate passed; live validation is safety-blocked by the strict budget and Milestone 5/manual prerequisites.**
 
-This gate reuses the immutable 20 audio captures designated in the M5 campaign. It validates bounded transcription, M4 retrieval, one M3-compatible Responses request, cancellation, privacy, and latency. It does not evaluate Terra, Realtime transcription, diarization, continuous listening, or process-specific capture.
+This gate reuses the immutable 20 audio captures designated in the M5 campaign. It validates bounded transcription into an editable, acknowledged renderer draft, followed by explicit user submission through M4 retrieval and one M3-compatible Responses request. No retrieval or Responses dispatch occurs before that submission. It does not evaluate Terra, Realtime transcription, diarization, continuous listening, or process-specific capture.
 
 ## Budget and privacy controls
 
@@ -11,6 +11,7 @@ This gate reuses the immutable 20 audio captures designated in the M5 campaign. 
 - The paid validation corpus uses short reviewer questions and rejects clips over **20 seconds before upload**. That reduces the practical estimate but cannot create a strict provider-token ceiling; the product's separate M5 capture bound remains 90 seconds.
 - M3's historical evaluation report recorded **$0.206648**. This M6 campaign has made **zero network requests and spent $0**; PresenterAI does not inspect or claim the provider account's current balance, which may reflect unrelated usage.
 - Stop before each request if conservative projected spend would exceed the cap.
+- Product sessions additionally default to a persistent `$0.25` cap. A conservative reservation is written before dispatch; missing usage or an unpriced returned model retains the full hold. That product control does not authorize this separate live campaign.
 - Stop on authentication, quota, rate-limit, timeout, network, or budget failure; do not rerun automatically.
 - Persist only case IDs, pass/fail flags, model IDs, timings, token usage, price-version metadata, estimated cost, and failed IDs.
 - Never persist credentials, audio, transcripts, prompts, answers, or reasoning content.
@@ -37,12 +38,12 @@ Bounded audio is transmitted to the transcription endpoint and selected M4 conte
 | M6-AUTO-04 | Upload accepts only owned, bounded, valid 16 kHz mono PCM WAVs | Pass | Byte-level ownership/RIFF/format/duration/size tests |
 | M6-AUTO-05 | Transcript normalization rejects empty/control-only/>4,000 characters | Pass | Transcription validation tests |
 | M6-AUTO-06 | Hint is deduplicated and bounded from approved vocabulary/doc titles | Pass | Vocabulary/settings/transcription tests |
-| M6-AUTO-07 | WAV is deleted in transcription `finally`, before retrieval | Pass | Pipeline cleanup-order and failure tests |
-| M6-AUTO-08 | Exactly one Responses request performs classification and answering | Pass | Mocked pipeline/request-shape tests; `store:false` preserved |
+| M6-AUTO-07 | WAV is deleted in transcription `finally`, before transcript display | Pass | Pipeline cleanup-order and failure tests |
+| M6-AUTO-08 | No retrieval/Responses request occurs until the reviewed draft is submitted; then exactly one Responses request classifies and answers | Pass | Controller, composer, and request-shape tests; `store:false` preserved |
 | M6-AUTO-09 | Only selected M4 chunks are sent; citations remain validated | Pass | Cross-reference accepted `milestone-4.md`; context/citation tests remain green |
 | M6-AUTO-10 | Stage timings/usage contain no audio, transcript, prompt, or answer | Pass | Timing/usage/redaction tests and offline report scan |
 
-Aggregate non-billable evidence: 323 Vitest tests in 44 files, 30/30 .NET tests, 7/7 Playwright Electron tests, zero dependency vulnerabilities, and the accepted 50/50 M4 corpus.
+Aggregate beta.2 non-billable evidence: 351 Vitest tests in 50 files, 9/9 Playwright Electron tests, zero dependency vulnerabilities, accepted 50/50 M4 retrieval, and a zero-network M6 preflight. Enforced Smart App Control blocks the unsigned local .NET test assembly and local installer lifecycle, so clean Windows CI must supply those gates. No live M6 API request was made.
 
 ## Renderer-visible latency evidence
 

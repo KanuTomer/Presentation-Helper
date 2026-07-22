@@ -81,8 +81,8 @@ export class HelperClient {
     let child: ChildProcessWithoutNullStreams
     try {
       child = (this.options.spawnProcess ?? spawn)(executable, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
-    } catch {
-      this.setState('failed', 'Windows helper could not be launched.')
+    } catch (error) {
+      this.setState('failed', helperLaunchFailureMessage(error))
       return false
     }
     this.process = child
@@ -216,7 +216,7 @@ export class HelperClient {
     this.process = undefined
     this.resolveExit?.(); this.resolveExit = undefined
     const message = this.fatalError ?? (spawnError
-      ? 'Windows helper could not be launched.'
+      ? helperLaunchFailureMessage(spawnError)
       : `Windows helper exited${code === null || code === undefined ? '' : ` with code ${code}`}${signal ? ` (${signal})` : ''}.`)
     this.fatalError = undefined
     for (const pending of this.callbacks.values()) pending.complete({ type: 'error', code: 'helper_exited', message })
@@ -240,4 +240,14 @@ function safeProtocolMessage(message: unknown): string {
 
 function safeMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message.slice(0, 600) : fallback
+}
+
+export function helperLaunchFailureMessage(error: unknown): string {
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code ?? '')
+    : ''
+  const policyHint = ['UNKNOWN', 'EACCES', 'EPERM'].includes(code.toUpperCase())
+    ? ' Windows Smart App Control or App Control may have blocked the unsigned helper.'
+    : ' Windows security policy may have blocked the helper.'
+  return `Windows could not launch the audio helper.${policyHint} Use a trusted-signed build or an authorized development environment; PresenterAI did not change Windows security settings.`
 }

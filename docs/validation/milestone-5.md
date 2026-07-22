@@ -2,7 +2,7 @@
 
 Status: **NOT ACCEPTED — automated gate passed; M0–M2 and physical-device validation remain pending.**
 
-M5 may be accepted only after M0–M2 are signed off in `milestones-0-2.md`. This record validates bounded system WASAPI loopback and a restricted toggle shortcut; it does not validate process-specific capture, microphone fallback, or continuous listening. Toggle behavior intentionally replaces the original hold/release interaction at the user's direction: one press starts capture and the next press stops and submits it.
+M5 may be accepted only after M0–M2 are signed off in `milestones-0-2.md`. This record validates bounded system WASAPI loopback and a restricted toggle shortcut; it does not validate process-specific capture, microphone fallback, or continuous listening. Toggle behavior intentionally replaces the original hold/release interaction at the user's direction: one press starts capture and the next press stops capture and requests transcription. The transcript must be reviewed and submitted separately before an answer is requested.
 
 ## Build and environment
 
@@ -16,7 +16,7 @@ M5 may be accepted only after M0–M2 are signed off in `milestones-0-2.md`. Thi
 - Available endpoint classes: speakers / wired / Bluetooth / USB
 - Unavailable endpoint classes and reason:
 
-Latest full regression run: 2026-07-18 on Windows 11 build 26200, Electron 43.1.0. The complete non-billable gate passed 323 Vitest tests in 44 files, 30/30 .NET tests, 7/7 Playwright Electron tests, an audit with zero vulnerabilities, and the accepted 50/50 M4 retrieval corpus. The Electron suite proves two sequential system-audio toggle operations in one application session. The packaged probes and physical helper smoke described below remain separate evidence.
+Latest beta.2 local regression run: 2026-07-22 on Windows 11 build 26200, Electron 43.1.0. It passed 351 Vitest tests in 50 files, 9/9 Playwright Electron tests, an audit with zero vulnerabilities, and the accepted 50/50 M4 retrieval corpus. A two-cycle helper smoke produced valid 16 kHz mono captures through the selected render endpoint, and packaged FTS/helper probes passed after reputation evaluation. Smart App Control still blocks the unsigned .NET test assembly, so the strict local test gate is recorded as blocked and clean Windows CI remains authoritative. Physical Meet acceptance remains separate evidence.
 
 The latest helper smoke enumerated the available render endpoints and produced a 12,910 ms, 413,166-byte, 16 kHz mono PCM recording from the current Realtek default endpoint, then removed the WAV. An initial attempt against a previously selected Bluetooth endpoint failed when Windows invalidated that endpoint; subsequent visible enumeration identified the Realtek default and allowed a successful retry. This is useful device-change diagnostic evidence only. It does **not** pass the required in-app endpoint-removal/default-switch recovery row or prove Meet intelligibility.
 
@@ -24,7 +24,7 @@ The latest helper smoke enumerated the available render endpoints and produced a
 
 | Case ID | Gate | Result | Evidence / notes |
 |---|---|---|---|
-| M5-AUTO-01 | Audit, typecheck, Vitest, helper tests, Playwright, M4 regression, production build | Pass | Audit: 0 vulnerabilities; Vitest: 44 files / 323 tests; .NET: 30/30; Playwright: 7/7; M4: 50/50; typecheck and production build pass |
+| M5-AUTO-01 | Audit, typecheck, Vitest, helper tests, Playwright, M4 regression, production build | Pending clean CI | Local audit: 0 vulnerabilities; Vitest: 50 files / 351 tests; Playwright: 9/9; M4: 50/50; typecheck and production build pass. Local .NET assembly load is blocked by Smart App Control; zero discovered tests is now a hard failure. |
 | M5-AUTO-02 | Packaged helper v2 handshake and required features | Pass | The final unpacked PresenterAI executable launched and reported protocol v2 plus all 9 required features from its bundled helper |
 | M5-AUTO-03 | A second toggle during startup is latched exactly once | Pass | Deterministic controller race tests |
 | M5-AUTO-04 | Cancel during startup/finalization reaches one terminal cleanup | Pass | Coordinator/controller cleanup and cancellation-boundary tests |

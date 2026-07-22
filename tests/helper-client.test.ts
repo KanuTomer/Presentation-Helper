@@ -82,12 +82,14 @@ describe('Windows helper client protocol', () => {
     await expect(hook.start()).resolves.toBe(false)
     expect(hook.lastError).toMatch(/keyboard hook is not ready/i)
 
+    const blocked = Object.assign(new Error('sensitive provider detail'), { code: 'UNKNOWN' })
     const spawnFailure = new HelperClient({
       executablePath: () => process.execPath,
-      spawnProcess: (() => { throw new Error('sensitive provider detail') }) as never
+      spawnProcess: (() => { throw blocked }) as never
     })
     await expect(spawnFailure.start()).resolves.toBe(false)
-    expect(spawnFailure.lastError).toBe('Windows helper could not be launched.')
+    expect(spawnFailure.lastError).toMatch(/Smart App Control or App Control may have blocked the unsigned helper/i)
+    expect(spawnFailure.lastError).not.toContain('sensitive provider detail')
   })
 
   it('preserves an unsolicited fatal keyboard-hook startup error without treating it as an idle crash', async () => {
@@ -229,7 +231,7 @@ describe('Windows helper client protocol', () => {
     await expect(first).rejects.toMatchObject({ code: 'helper_exited' })
     await expect(second).rejects.toMatchObject({ code: 'helper_exited' })
     expect(crashed).toHaveBeenCalledTimes(1)
-    expect(client.lastError).toBe('Windows helper could not be launched.')
+    expect(client.lastError).toMatch(/Windows security policy may have blocked the helper/i)
   })
 
   it('drains bounded stderr and rejects commands after an intentional shutdown', async () => {
