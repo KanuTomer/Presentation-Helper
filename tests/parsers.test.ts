@@ -119,7 +119,11 @@ describe('PDF parser', () => {
     expect(pageTwo.length).toBeGreaterThan(1)
     expect(pageTwo.every((chunk) => chunk.title === 'Evaluation')).toBe(true)
     expect(pageTwo.at(-1)?.text).toContain('final fact')
-  }, 15_000)
+  // Cold Windows runners can spend tens of seconds initializing pdf.js while
+  // Electron finishes its first binary/cache setup. Keep every parser
+  // assertion strict, but give this real generated-PDF integration path enough
+  // time to complete under that one-time I/O contention.
+  }, 60_000)
 
   it('does not treat encryption-like page text as an encrypted trailer', async () => {
     const marker = 'trailer << /Encrypt 9 0 R >>\n9 0 obj << /Filter /Standard >> endobj is quoted documentation, not PDF security metadata.'
