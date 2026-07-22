@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { channels } from '../shared/channels.js'
 import type { PresenterAPI } from '../shared/contracts.js'
+import { parseTranscriptDraft } from './transcriptValidation.js'
 
 const api: PresenterAPI = {
   getStatus: () => ipcRenderer.invoke(channels.getStatus),
@@ -18,6 +19,7 @@ const api: PresenterAPI = {
   searchDocuments: (query) => ipcRenderer.invoke(channels.searchDocuments, query),
   inspectDocument: (documentId, offset = 0, limit = 50) => ipcRenderer.invoke(channels.inspectDocument, { documentId, offset, limit }),
   clearSession: () => ipcRenderer.invoke(channels.clearSession),
+  startNewSession: () => ipcRenderer.invoke(channels.startNewSession),
   getUsage: () => ipcRenderer.invoke(channels.getUsage),
   clearUsage: () => ipcRenderer.invoke(channels.clearUsage),
   clearCaptureResults: () => ipcRenderer.invoke(channels.clearCaptureResults),
@@ -27,12 +29,13 @@ const api: PresenterAPI = {
   deleteAllLocalData: (confirmation) => ipcRenderer.invoke(channels.deleteAllLocalData, confirmation),
   dismissSettingsRecoveryWarning: () => ipcRenderer.invoke(channels.dismissSettingsRecoveryWarning),
   setClickThrough: (enabled) => ipcRenderer.invoke(channels.clickThrough, enabled),
-  setOpacity: (value) => ipcRenderer.invoke(channels.opacity, value),
+  setGlassTint: (value) => ipcRenderer.invoke(channels.glassTint, value),
   showSettings: () => ipcRenderer.invoke(channels.showSettings),
   toggleListening: () => ipcRenderer.invoke(channels.toggleListening),
   copyCode: (code) => ipcRenderer.invoke(channels.copyCode, code),
   ackListeningIndicator: (operationId) => ipcRenderer.invoke(channels.ackListeningIndicator, operationId),
   ackAnswerVisible: (operationId) => ipcRenderer.invoke(channels.ackAnswerVisible, operationId),
+  ackTranscriptVisible: (operationId) => ipcRenderer.invoke(channels.ackTranscriptVisible, operationId),
   refreshAudioDevices: () => ipcRenderer.invoke(channels.refreshAudioDevices),
   setCaptureProtection: (enabled) => ipcRenderer.invoke(channels.setCaptureProtection, enabled),
   saveCaptureResult: (result) => ipcRenderer.invoke(channels.saveCaptureResult, result),
@@ -45,7 +48,7 @@ const api: PresenterAPI = {
   onFocusAsk: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.focusAsk, listener); return () => ipcRenderer.removeListener(channels.focusAsk, listener) },
   onOpenSettings: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.openSettings, listener); return () => ipcRenderer.removeListener(channels.openSettings, listener) }
   ,onOpenPrivacy: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.openPrivacy, listener); return () => ipcRenderer.removeListener(channels.openPrivacy, listener) }
-  ,onResponse: (callback) => { const listener = (_event: Electron.IpcRendererEvent, response: Parameters<typeof callback>[0], operationId: Parameters<typeof callback>[1]) => callback(response, operationId); ipcRenderer.on(channels.audioResponse, listener); return () => ipcRenderer.removeListener(channels.audioResponse, listener) }
+  ,onTranscriptDraft: (callback) => { const listener = (_event: Electron.IpcRendererEvent, draft: unknown) => { const parsed = parseTranscriptDraft(draft); if (parsed) callback(parsed) }; ipcRenderer.on(channels.transcriptDraft, listener); return () => ipcRenderer.removeListener(channels.transcriptDraft, listener) }
   ,onError: (callback) => { const listener = (_event: Electron.IpcRendererEvent, error: Parameters<typeof callback>[0]) => callback(error); ipcRenderer.on(channels.appError, listener); return () => ipcRenderer.removeListener(channels.appError, listener) }
 }
 

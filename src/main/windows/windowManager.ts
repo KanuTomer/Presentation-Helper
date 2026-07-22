@@ -23,9 +23,9 @@ export class WindowManager {
   private boundsTimer?: NodeJS.Timeout
   private clickThrough = false
   private quitting = false
-  private surfaceOpacity = 0.92
-  private opacityCssKey?: string
-  private opacityCssRevision = 0
+  private glassTint = 0.42
+  private glassTintCssKey?: string
+  private glassTintCssRevision = 0
   constructor(private store: SettingsStore, private capture: CaptureProtection) {}
 
   create(): BrowserWindow {
@@ -38,16 +38,15 @@ export class WindowManager {
       ...initialBounds,
       minWidth: OVERLAY_MIN_WIDTH, minHeight: OVERLAY_MIN_HEIGHT, frame: false, transparent: true, alwaysOnTop: true,
       skipTaskbar: true, resizable: true, movable: true, show: false, backgroundColor: '#00000000',
-      ...(process.platform === 'win32' ? { backgroundMaterial: 'acrylic' as const } : {}),
+      hasShadow: false, roundedCorners: true,
+      ...(process.platform === 'win32' ? { backgroundMaterial: 'none' as const } : {}),
       webPreferences: { preload: join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false }
     })
-    // On Windows, acrylic-backed transparent windows can silently lose the
-    // default "floating" always-on-top level. Electron exposes the Windows-
-    // supported screen-saver level explicitly, and applying it after native
-    // window creation keeps the overlay topmost without changing focus.
+    // Applying the Electron-supported screen-saver level after native window
+    // creation keeps the transparent overlay topmost without changing focus.
     this.window.setAlwaysOnTop(true, 'screen-saver')
-    this.surfaceOpacity = this.clampSurfaceOpacity(this.store.settings.opacity)
-    this.window.webContents.once('did-finish-load', () => this.applySurfaceOpacity())
+    this.glassTint = this.clampGlassTint(this.store.settings.glassTint)
+    this.window.webContents.once('did-finish-load', () => this.applyGlassTint())
     if (requiresLayoutMigration) void this.store.setWindowLayout(initialBounds, WINDOW_LAYOUT_REVISION)
     this.clickThrough = this.store.settings.clickThrough
     this.window.setIgnoreMouseEvents(this.clickThrough, { forward: true })
@@ -73,9 +72,9 @@ export class WindowManager {
   }
 
   setClickThrough(enabled: boolean): void { this.clickThrough = enabled; this.window?.setIgnoreMouseEvents(enabled, { forward: true }) }
-  setOpacity(value: number): void {
-    this.surfaceOpacity = this.clampSurfaceOpacity(value)
-    this.applySurfaceOpacity()
+  setGlassTint(value: number): void {
+    this.glassTint = this.clampGlassTint(value)
+    this.applyGlassTint()
   }
   focusAsk(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); window.webContents.send(channels.focusAsk) }
   openSettings(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); window.webContents.send(channels.openSettings) }
@@ -168,20 +167,20 @@ export class WindowManager {
 
   private defaultBounds(): OverlayBounds { return defaultOverlayBounds(screen.getPrimaryDisplay().workArea) }
 
-  private clampSurfaceOpacity(value: number): number { return Math.min(1, Math.max(0.45, value)) }
+  private clampGlassTint(value: number): number { return Math.min(0.78, Math.max(0.18, value)) }
 
-  private applySurfaceOpacity(): void {
+  private applyGlassTint(): void {
     const window = this.window
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
-    const revision = ++this.opacityCssRevision
-    const previousKey = this.opacityCssKey
-    const css = `:root { --glass-opacity: ${this.surfaceOpacity.toFixed(2)}; }`
+    const revision = ++this.glassTintCssRevision
+    const previousKey = this.glassTintCssKey
+    const css = `:root { --glass-tint: ${this.glassTint.toFixed(2)}; }`
     void window.webContents.insertCSS(css).then(async (key) => {
-      if (!this.window || this.window.isDestroyed() || revision !== this.opacityCssRevision) {
+      if (!this.window || this.window.isDestroyed() || revision !== this.glassTintCssRevision) {
         await window.webContents.removeInsertedCSS(key).catch(() => undefined)
         return
       }
-      this.opacityCssKey = key
+      this.glassTintCssKey = key
       if (previousKey && previousKey !== key) {
         await window.webContents.removeInsertedCSS(previousKey).catch(() => undefined)
       }
@@ -190,9 +189,8 @@ export class WindowManager {
 
   private showInactiveTopmost(window: BrowserWindow): void {
     window.showInactive()
-    // Windows 11 acrylic can demote the ordinary floating level after DWM
-    // attaches the backdrop. The screen-saver level is the Electron-supported
-    // topmost tier that remains effective over fullscreen presentation windows.
+    // The screen-saver level is the Electron-supported topmost tier that
+    // remains effective over fullscreen presentation windows.
     window.setAlwaysOnTop(true, 'screen-saver')
   }
 

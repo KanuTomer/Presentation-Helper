@@ -61,7 +61,7 @@ describe('window recovery shortcuts', () => {
     expect(fakeWindow.webContents.send).toHaveBeenCalledWith('ui:open-privacy')
   })
 
-  it('applies opacity to renderer glass surfaces instead of fading the native window', async () => {
+  it('applies bounded tint to renderer glass surfaces instead of fading the native window', async () => {
     const insertCSS = vi.fn(async () => 'glass-css')
     const fakeWindow = {
       isDestroyed: () => false,
@@ -75,10 +75,13 @@ describe('window recovery shortcuts', () => {
     const windows = new WindowManager({} as never, {} as never)
     windows.window = fakeWindow as never
 
-    windows.setOpacity(0.1)
+    windows.setGlassTint(0.1)
 
-    await vi.waitFor(() => expect(insertCSS).toHaveBeenCalledWith(':root { --glass-opacity: 0.45; }'))
+    await vi.waitFor(() => expect(insertCSS).toHaveBeenCalledWith(':root { --glass-tint: 0.18; }'))
     expect(fakeWindow).not.toHaveProperty('setOpacity')
+
+    windows.setGlassTint(1)
+    await vi.waitFor(() => expect(insertCSS).toHaveBeenLastCalledWith(':root { --glass-tint: 0.78; }'))
   })
 
 })

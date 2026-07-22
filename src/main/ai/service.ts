@@ -18,6 +18,11 @@ import {
   buildTerminologyHint, normalizeTranscript, parseTranscriptionMetadata, parseTranscriptionResponse,
   type TranscriptionResult, type TranscriptionUsage
 } from './transcription.js'
+import {
+  estimateKnownModelTokens, maximumKnownModelCost,
+  TRANSCRIPTION_RESERVATION_INPUT_TOKENS, TRANSCRIPTION_RESERVATION_OUTPUT_TOKENS,
+  type BillableEndpoint
+} from './pricing.js'
 
 export interface OpenAIResponseLike {
   output_text?: string
@@ -52,6 +57,10 @@ export interface AiSettingsProvider {
     audioTokens?: number
     durationMs?: number
   }): Promise<unknown>
+  reserveSessionBudget?(endpoint: BillableEndpoint, requestedModel: string, maximumUsd: number): Promise<{ id: string }>
+  settleSessionBudget?(reservationId: string, actualUsd: number, keepReservation?: boolean): Promise<unknown>
+  releaseSessionBudget?(reservationId: string): Promise<unknown>
+  retainSessionBudget?(reservationId: string): unknown
 }
 export interface RetrievalProvider {
   search(query: string, limit?: number): RetrievedChunk[]
@@ -139,6 +148,7 @@ export class AiService {
     let usage: TranscriptionUsage = emptyTranscriptionUsage()
     let outcome: TranscriptionMetric['outcome'] = 'unknown'
     let requestDispatched = false
+    let budgetReservationId: string | undefined
     try {
       throwIfAborted(options.signal)
       // The string form remains available for isolated service tests and tools.
@@ -148,11 +158,17 @@ export class AiService {
         ? await readFile(source, { signal: options.signal })
         : Buffer.from(source.bytes)
       throwIfAborted(options.signal)
+      budgetReservationId = await this.reserveBudget(
+        'transcription', requestedModel,
+        TRANSCRIPTION_RESERVATION_INPUT_TOKENS, TRANSCRIPTION_RESERVATION_OUTPUT_TOKENS
+      )
       const client = await this.client()
       const hint = options.terminologyHint ?? this.transcriptionTerminologyHint(options.approvedVocabulary)
+      const file = await toFile(bytes, typeof source === 'string' ? 'reviewer.wav' : source.filename ?? 'reviewer.wav', { type: 'audio/wav' })
+      throwIfAborted(options.signal)
       requestDispatched = true
       const raw = await client.audio.transcriptions.create({
-        file: await toFile(bytes, typeof source === 'string' ? 'reviewer.wav' : source.filename ?? 'reviewer.wav', { type: 'audio/wav' }),
+        file,
         model: requestedModel,
         response_format: 'json',
         ...(hint ? { prompt: hint } : {})
@@ -163,6 +179,11 @@ export class AiService {
         usage = metadata.usage
       }
       await this.recordTranscriptionUsage(requestedModel, returnedModel, usage, options.durationMs)
+      await this.settleBudgetFromUsage(
+        budgetReservationId, 'transcription', returnedModel,
+        usage.inputTokens, usage.outputTokens, usage.type === 'tokens'
+      )
+      budgetReservationId = undefined
       // Cancellation suppresses transcript/retrieval use, but a provider
       // response that already arrived may be billable and its returned usage
       // must be recorded first.
@@ -175,6 +196,8 @@ export class AiService {
       outcome = 'success'
       return { text, ...(returnedModel ? { model: returnedModel } : {}), latencyMs: performance.now() - startedAt, usage }
     } catch (error) {
+      await this.finishUnsettledBudget(budgetReservationId, requestDispatched)
+      budgetReservationId = undefined
       const mapped = asAiServiceError(error)
       outcome = mapped.code
       throw mapped
@@ -225,13 +248,12 @@ export class AiService {
     let response: OpenAIResponseLike | undefined
     let outcome: AiRequestMetric['outcome'] = 'unknown'
     let requestDispatched = false
+    let budgetReservationId: string | undefined
     try {
       const prepared = this.resolvePrepared(validated.data, chunks, operation.signal)
       const selectedChunks = [...prepared.chunks]
       const allowed = new Map(selectedChunks.map((chunk) => [chunk.id, chunk]))
-      const client = await this.client()
-      requestDispatched = true
-      response = await client.responses.create({
+      const requestBody = {
         model: requestedModel,
         reasoning: { effort: policy.reasoningEffort },
         instructions: codeAnswer ? codePresenterInstructions : presenterInstructions,
@@ -244,7 +266,12 @@ export class AiService {
             schema: codeAnswer ? codeResponseJsonSchema : responseJsonSchema
           }
         }
-      }, { signal: operation.signal })
+      }
+      const inputTokenUpperBound = Buffer.byteLength(JSON.stringify(requestBody), 'utf8')
+      budgetReservationId = await this.reserveBudget('responses', requestedModel, inputTokenUpperBound, policy.maxOutputTokens)
+      const client = await this.client()
+      requestDispatched = true
+      response = await client.responses.create(requestBody, { signal: operation.signal })
       ensureCurrentOperation(operation, this.active)
       if (response.status === 'incomplete' && response.incomplete_details?.reason === 'max_output_tokens') throw outputLimitResponse()
       if (containsRefusal(response.output) || !response.output_text?.trim()) throw malformedResponse()
@@ -272,6 +299,13 @@ export class AiService {
       const inputTokens = response?.usage?.input_tokens ?? 0
       const outputTokens = response?.usage?.output_tokens ?? 0
       const reasoningTokens = response?.usage?.output_tokens_details?.reasoning_tokens ?? 0
+      if (budgetReservationId) {
+        if (!requestDispatched) await this.finishUnsettledBudget(budgetReservationId, false)
+        else await this.settleBudgetFromUsage(
+          budgetReservationId, 'responses', response?.model, inputTokens, outputTokens, Boolean(response?.usage)
+        )
+        budgetReservationId = undefined
+      }
       if (response?.usage) {
         if (this.settings.recordUsage) {
           await this.settings.recordUsage({
@@ -311,6 +345,53 @@ export class AiService {
     }
     await this.settings.addTranscriptionUsage(usage, returnedModel ?? requestedModel).catch(() => undefined)
   }
+  private async reserveBudget(
+    endpoint: BillableEndpoint,
+    requestedModel: string,
+    inputTokenUpperBound: number,
+    outputTokenUpperBound: number
+  ): Promise<string | undefined> {
+    if (!this.settings.reserveSessionBudget) return undefined
+    const estimate = maximumKnownModelCost(endpoint, requestedModel, inputTokenUpperBound, outputTokenUpperBound)
+    if (!estimate.priced) {
+      throw new AiServiceError('unpriced_model', 'The selected model is not in PresenterAI’s reviewed price table, so the session cap cannot authorize this request.', false)
+    }
+    try {
+      return (await this.settings.reserveSessionBudget(endpoint, requestedModel, estimate.estimatedUsd)).id
+    } catch (error) {
+      const value = error as { code?: string; message?: string }
+      if (value.code === 'session_budget_exceeded') {
+        throw new AiServiceError('session_budget_exceeded', value.message ?? 'This request could exceed the remaining PresenterAI session budget.', false)
+      }
+      throw error
+    }
+  }
+  private async settleBudgetFromUsage(
+    reservationId: string | undefined,
+    endpoint: BillableEndpoint,
+    returnedModel: string | undefined,
+    inputTokens: number,
+    outputTokens: number,
+    usagePresent: boolean
+  ): Promise<void> {
+    if (!reservationId || !this.settings.settleSessionBudget) return
+    const estimate = returnedModel && usagePresent
+      ? estimateKnownModelTokens(endpoint, returnedModel, inputTokens, outputTokens)
+      : undefined
+    if (!estimate?.priced) {
+      this.settings.retainSessionBudget?.(reservationId)
+      return
+    }
+    await this.settings.settleSessionBudget(reservationId, estimate.estimatedUsd, false).catch(() => undefined)
+  }
+  private async finishUnsettledBudget(reservationId: string | undefined, requestDispatched: boolean): Promise<void> {
+    if (!reservationId) return
+    if (!requestDispatched && this.settings.releaseSessionBudget) {
+      await this.settings.releaseSessionBudget(reservationId).catch(() => undefined)
+      return
+    }
+    this.settings.retainSessionBudget?.(reservationId)
+  }
   private prepare(question: string, signal?: AbortSignal): PreparedAnswer {
     return prepareAnswer({
       question,
@@ -343,7 +424,7 @@ export class AiService {
 }
 
 export function openAIClientOptions(apiKey: string): ConstructorParameters<typeof OpenAI>[0] {
-  return { apiKey, maxRetries: 1, timeout: 30_000 }
+  return { apiKey, maxRetries: 0, timeout: 30_000 }
 }
 export function toAiErrorInfo(error: unknown): AiErrorInfo {
   const mapped = asAiServiceError(error)
@@ -360,6 +441,8 @@ export function asAiServiceError(error: unknown): AiServiceError {
   if (value.status === 429 || value.code === 'rate_limit_exceeded') {
     return new AiServiceError('rate_limit', 'OpenAI is temporarily rate limiting requests. Wait for the limit to reset.', true)
   }
+  if (value.code === 'session_budget_exceeded') return new AiServiceError('session_budget_exceeded', value.message ?? 'The PresenterAI session budget has been reached.', false)
+  if (value.code === 'unpriced_model') return new AiServiceError('unpriced_model', value.message ?? 'The selected model cannot be priced safely.', false)
   if (value.code === 'ETIMEDOUT' || value.name === 'APIConnectionTimeoutError') return new AiServiceError('timeout', 'The OpenAI request timed out.', true)
   if (['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'EAI_AGAIN'].includes(value.code ?? '') || value.name === 'APIConnectionError') {
     return new AiServiceError('offline', 'PresenterAI could not reach OpenAI. Check the network connection.', true)

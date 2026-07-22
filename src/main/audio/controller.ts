@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { HelperClient, HelperClientError, type HelperEvent } from './helperClient.js'
 import type {
-  AiErrorInfo, AssistantResponse, AudioCaptureResult, AudioDevice, OperationActionResult
+  AiErrorInfo, AudioCaptureResult, AudioDevice, OperationActionResult, TranscriptionDraft
 } from '../../shared/contracts.js'
 import type { SettingsStore } from '../settings/store.js'
 import type { AiService } from '../ai/service.js'
@@ -13,8 +13,7 @@ import {
 } from '../operations/coordinator.js'
 import { validatePresenterWav } from './wavValidation.js'
 import {
-  buildResponseTransmissionPreview, buildTranscriptionTransmissionPreview,
-  type TransmissionPreviewGate
+  buildTranscriptionTransmissionPreview, type TransmissionPreviewGate
 } from '../privacy/transmissionPreview.js'
 
 interface CaptureSession {
@@ -47,7 +46,7 @@ export class AudioController {
   activeEndpoint?: AudioDevice
   warning?: string
   onState?: () => void
-  onResponse?: (response: AssistantResponse, operationId: string) => void
+  onTranscriptDraft?: (draft: TranscriptionDraft) => void
   onError?: (error: AiErrorInfo) => void
   private session?: CaptureSession
   private restartUsed = false
@@ -245,6 +244,10 @@ export class AudioController {
     this.operations.acknowledgeAnswerVisible(operationId)
   }
 
+  acknowledgeTranscriptVisible(operationId: string): void {
+    this.operations.acknowledgeTranscriptVisible(operationId)
+  }
+
   async dispose(): Promise<void> {
     this.disposed = true
     await this.operations.cancel()
@@ -324,21 +327,23 @@ export class AudioController {
       }
       if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
 
-      this.operations.transition(operation.id, 'retrieving')
-      const chunks = this.ai.retrieve(transcription.text, { signal: operation.signal })
-      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
-
-      await this.options.transmissionPreviewGate?.present(buildResponseTransmissionPreview(operation.id, chunks))
-      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
-
-      this.operations.transition(operation.id, 'generating')
-      const response = await this.ai.generate(transcription.text, chunks, { signal: operation.signal })
-      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
       this.operations.completeCurrentStage(operation.id)
-      this.onResponse?.(response, operation.id)
-      const answerVisible = await this.operations.waitForAnswerVisible(operation.id)
-      if (!answerVisible && !operation.signal.aborted) {
-        throw operationError('timeout', 'The answer was generated, but PresenterAI could not confirm that it became visible.', true)
+      const draft: TranscriptionDraft = {
+        operationId: operation.id,
+        text: transcription.text,
+        durationMs: validatedAudio.durationMs,
+        endpointId: capture.endpointId,
+        endpointName: capture.endpointName,
+        createdAt: new Date().toISOString()
+      }
+      const transcriptVisible = this.operations.waitForTranscriptVisible(operation.id)
+      this.onTranscriptDraft?.(draft)
+      if (!await transcriptVisible && !operation.signal.aborted) {
+        throw operationError(
+          'transcript_display_unavailable',
+          'The audio was transcribed, but PresenterAI could not confirm that the editable draft became visible. No answer request was sent.',
+          true
+        )
       }
     } catch (error) {
       terminalError = mapPipelineError(error)

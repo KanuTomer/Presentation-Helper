@@ -1,6 +1,8 @@
-export const USAGE_PRICING_VERSION = 'openai-2026-07-16'
+export const USAGE_PRICING_VERSION = 'openai-2026-07-22'
 export const MINI_TRANSCRIBE_INPUT_USD_PER_MILLION = 1.25
 export const MINI_TRANSCRIBE_OUTPUT_USD_PER_MILLION = 5
+export const TRANSCRIPTION_RESERVATION_INPUT_TOKENS = 16_000
+export const TRANSCRIPTION_RESERVATION_OUTPUT_TOKENS = 2_000
 
 export type BillableEndpoint = 'responses' | 'transcription'
 
@@ -57,4 +59,13 @@ export function estimateKnownModelTokens(
     ) / 1_000_000,
     pricingVersion: USAGE_PRICING_VERSION
   }
+}
+
+export function maximumKnownModelCost(
+  endpoint: BillableEndpoint,
+  model: string,
+  inputTokenUpperBound: number,
+  outputTokenUpperBound: number
+): TokenPriceResult {
+  return estimateKnownModelTokens(endpoint, model, inputTokenUpperBound, outputTokenUpperBound)
 }

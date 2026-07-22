@@ -82,6 +82,45 @@ describe('operation coordinator', () => {
     expect(coordinator.snapshot().operationTimings).toMatchObject({ generationMs: 50, stopToAnswerMs: 485 })
   })
 
+  it('records stop-to-transcript and transcript render acknowledgement timing', async () => {
+    const { coordinator, tick } = harness()
+    const operation = coordinator.begin('audio', 'starting_capture')
+    tick(10); coordinator.transition(operation.id, 'listening')
+    tick(100); coordinator.transition(operation.id, 'finalizing')
+    tick(20); coordinator.transition(operation.id, 'transcribing')
+    tick(80); coordinator.completeCurrentStage(operation.id)
+    const visible = coordinator.waitForTranscriptVisible(operation.id)
+    tick(25); coordinator.acknowledgeTranscriptVisible(operation.id)
+    await expect(visible).resolves.toBe(true)
+    await coordinator.finish(operation.id, 'success')
+    expect(coordinator.snapshot()).toMatchObject({
+      operation: 'idle', transcriptRenderConfirmed: true, transcriptRenderLatencyMs: 25,
+      operationTimings: { transcriptionMs: 80, stopToTranscriptMs: 125, totalMs: 235 }
+    })
+  })
+
+  it('fails transcript visibility closed and ignores late or stale acknowledgements', async () => {
+    vi.useFakeTimers()
+    const { coordinator, tick } = harness()
+    const operation = coordinator.begin('audio', 'starting_capture')
+    tick(10); coordinator.transition(operation.id, 'listening')
+    tick(100); coordinator.transition(operation.id, 'finalizing')
+    tick(20); coordinator.transition(operation.id, 'transcribing')
+    const visible = coordinator.waitForTranscriptVisible(operation.id, 50)
+    coordinator.acknowledgeTranscriptVisible('stale-operation')
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(visible).resolves.toBe(false)
+    coordinator.acknowledgeTranscriptVisible(operation.id)
+    await coordinator.finish(operation.id, 'error', {
+      code: 'transcript_display_unavailable', message: 'Draft not visible.', retryable: true
+    })
+    expect(coordinator.snapshot()).toMatchObject({
+      operation: 'error', transcriptRenderConfirmed: false, transcriptRenderLatencyMs: undefined
+    })
+    expect(coordinator.snapshot().operationTimings.stopToTranscriptMs).toBeUndefined()
+    vi.useRealTimers()
+  })
+
   it('rejects overlap and aborts through one cancellation handler', async () => {
     const { coordinator, escape } = harness()
     const operation = coordinator.begin('typed', 'retrieving')

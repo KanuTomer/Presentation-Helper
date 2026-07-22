@@ -20,6 +20,8 @@ export interface OperationSnapshot {
   operationTimings: OperationTimings
   indicatorLatencyMs?: number
   answerRenderConfirmed?: boolean
+  transcriptRenderConfirmed?: boolean
+  transcriptRenderLatencyMs?: number
   operationError?: AiErrorInfo
   escapeWarning?: string
 }
@@ -55,6 +57,10 @@ interface ActiveOperation {
   answerRenderConfirmed?: boolean
   answerVisibleAt?: number
   answerVisibility?: { promise: Promise<boolean>; confirm(): void }
+  transcriptReadyAt?: number
+  transcriptRenderConfirmed?: boolean
+  transcriptVisibleAt?: number
+  transcriptVisibility?: { promise: Promise<boolean>; confirm(): boolean }
   transmissionVisibility?: {
     stage: TransmissionStage
     promise: Promise<boolean>
@@ -92,6 +98,8 @@ export class OperationCoordinator {
   private lastTimings: OperationTimings = {}
   private lastIndicatorLatencyMs?: number
   private lastAnswerRenderConfirmed?: boolean
+  private lastTranscriptRenderConfirmed?: boolean
+  private lastTranscriptRenderLatencyMs?: number
   private lastError?: AiErrorInfo
   private lastKind?: OperationKind
   private escapeWarning?: string
@@ -124,6 +132,8 @@ export class OperationCoordinator {
     this.lastTimings = {}
     this.lastIndicatorLatencyMs = undefined
     this.lastAnswerRenderConfirmed = undefined
+    this.lastTranscriptRenderConfirmed = undefined
+    this.lastTranscriptRenderLatencyMs = undefined
     this.escapeWarning = this.shortcuts.register('Escape', () => { void this.cancel() })
       ? undefined
       : 'Esc could not be registered globally; use Cancel in PresenterAI.'
@@ -195,6 +205,9 @@ export class OperationCoordinator {
         if (operation.answerRenderConfirmed && operation.answerVisibleAt !== undefined) {
           operation.timings.stopToAnswerMs = Math.max(0, operation.answerVisibleAt - operation.stoppedAt)
         }
+        if (operation.transcriptRenderConfirmed && operation.transcriptVisibleAt !== undefined) {
+          operation.timings.stopToTranscriptMs = Math.max(0, operation.transcriptVisibleAt - operation.stoppedAt)
+        }
       }
       for (const cleanup of [...operation.cleanups].reverse()) {
         try { await cleanup() } catch { /* terminal cleanup is best effort and each resource is independently owned */ }
@@ -204,6 +217,10 @@ export class OperationCoordinator {
       this.lastTimings = { ...operation.timings }
       this.lastIndicatorLatencyMs = operation.indicatorLatencyMs
       this.lastAnswerRenderConfirmed = operation.answerRenderConfirmed
+      this.lastTranscriptRenderConfirmed = operation.transcriptRenderConfirmed
+      this.lastTranscriptRenderLatencyMs = operation.transcriptReadyAt !== undefined && operation.transcriptVisibleAt !== undefined
+        ? Math.max(0, operation.transcriptVisibleAt - operation.transcriptReadyAt)
+        : undefined
       this.active = undefined
       this.lastError = outcome === 'error' ? error ?? operationError('unknown', 'The operation failed.', false) : undefined
       this.displayState = outcome === 'error' ? 'error' : 'idle'
@@ -252,6 +269,41 @@ export class OperationCoordinator {
     operation.answerVisibleAt = this.clock.now()
     operation.answerVisibility?.confirm()
     this.emit()
+  }
+
+  waitForTranscriptVisible(id: string, timeoutMs = 2_000): Promise<boolean> {
+    const operation = this.active
+    if (!operation || operation.id !== id || operation.terminal) return Promise.resolve(false)
+    if (operation.transcriptRenderConfirmed) return Promise.resolve(true)
+    if (operation.transcriptVisibility) return operation.transcriptVisibility.promise
+    operation.transcriptReadyAt = this.clock.now()
+    let confirm!: () => boolean
+    const promise = new Promise<boolean>((resolve) => {
+      let settled = false
+      const finish = (confirmed: boolean): boolean => {
+        if (settled) return false
+        settled = true
+        clearTimeout(timer)
+        operation.controller.signal.removeEventListener('abort', abort)
+        operation.transcriptRenderConfirmed = confirmed
+        if (confirmed) operation.transcriptVisibleAt = this.clock.now()
+        resolve(confirmed)
+        return true
+      }
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      const abort = (): void => { finish(false) }
+      confirm = () => finish(true)
+      if (operation.controller.signal.aborted) abort()
+      else operation.controller.signal.addEventListener('abort', abort, { once: true })
+    })
+    operation.transcriptVisibility = { promise, confirm }
+    return promise
+  }
+
+  acknowledgeTranscriptVisible(id: string): void {
+    const operation = this.active
+    if (!operation || operation.id !== id || operation.terminal || operation.transcriptRenderConfirmed) return
+    if (operation.transcriptVisibility?.confirm()) this.emit()
   }
 
   acquireMaintenance(): () => void {
@@ -313,6 +365,10 @@ export class OperationCoordinator {
       operationTimings: { ...(operation?.timings ?? this.lastTimings) },
       indicatorLatencyMs: operation?.indicatorLatencyMs ?? this.lastIndicatorLatencyMs,
       answerRenderConfirmed: operation?.answerRenderConfirmed ?? this.lastAnswerRenderConfirmed,
+      transcriptRenderConfirmed: operation?.transcriptRenderConfirmed ?? this.lastTranscriptRenderConfirmed,
+      transcriptRenderLatencyMs: operation?.transcriptReadyAt !== undefined && operation.transcriptVisibleAt !== undefined
+        ? Math.max(0, operation.transcriptVisibleAt - operation.transcriptReadyAt)
+        : this.lastTranscriptRenderLatencyMs,
       operationError: this.lastError,
       escapeWarning: this.escapeWarning
     }
@@ -345,6 +401,7 @@ function isOperationCode(code: string): code is AiErrorInfo['code'] {
   return [
     'invalid_key', 'quota', 'rate_limit', 'timeout', 'offline', 'cancelled', 'output_limit', 'malformed_response',
     'busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio', 'invalid_transcript', 'capture_timeout',
-    'listening_consent_required', 'privacy_preview_unavailable', 'unknown'
+    'listening_consent_required', 'privacy_preview_unavailable', 'session_budget_exceeded', 'unpriced_model',
+    'transcript_display_unavailable', 'unknown'
   ].includes(code)
 }

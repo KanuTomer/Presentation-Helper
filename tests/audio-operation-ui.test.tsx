@@ -60,7 +60,7 @@ describe('audio operation UI', () => {
     fireEvent.click(screen.getByRole('button', { name: '◉ Start listening' }))
     await waitFor(() => expect(toggle).toHaveBeenCalledTimes(1))
     rerender(<ToggleListenButton status={status({ operation: 'listening', operationKind: 'audio', operationId: 'audio-1' })} onError={() => undefined} />)
-    fireEvent.click(screen.getByRole('button', { name: '■ Stop & answer' }))
+    fireEvent.click(screen.getByRole('button', { name: '■ Stop & transcribe' }))
     await waitFor(() => expect(toggle).toHaveBeenCalledTimes(2))
   })
 
@@ -95,9 +95,10 @@ describe('audio operation UI', () => {
   })
 
   it('renders bounded stage and first-frame latency measurements', () => {
-    render(<StageTimingSummary timings={{ captureStartMs: 84, transcriptionMs: 1_250, totalMs: 3_800 }} indicatorLatencyMs={112} />)
+    render(<StageTimingSummary timings={{ captureStartMs: 84, transcriptionMs: 1_250, totalMs: 3_800 }} indicatorLatencyMs={112} transcriptRenderLatencyMs={28} />)
     expect(screen.getByText('84 ms')).toBeTruthy()
     expect(screen.getByText('112 ms')).toBeTruthy()
+    expect(screen.getByText('28 ms')).toBeTruthy()
     expect(screen.getByText('1.25 s')).toBeTruthy()
     expect(screen.getByText('3.80 s')).toBeTruthy()
   })

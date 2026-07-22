@@ -29,7 +29,8 @@ export const aiErrorCodes = [
   'invalid_key', 'quota', 'rate_limit', 'timeout', 'offline', 'cancelled', 'output_limit',
   'malformed_response', 'busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio',
   'invalid_transcript', 'capture_timeout', 'listening_consent_required',
-  'privacy_preview_unavailable', 'unknown'
+  'privacy_preview_unavailable', 'session_budget_exceeded', 'unpriced_model',
+  'transcript_display_unavailable', 'unknown'
 ] as const
 export type AiErrorCode = (typeof aiErrorCodes)[number]
 
@@ -51,6 +52,7 @@ export interface OperationTimings {
   listeningMs?: number
   finalizationMs?: number
   transcriptionMs?: number
+  stopToTranscriptMs?: number
   retrievalMs?: number
   generationMs?: number
   stopToAnswerMs?: number
@@ -65,6 +67,24 @@ export interface CodeBlock {
   title?: string
   code: string
 }
+
+export interface TranscriptionDraft {
+  operationId: string
+  text: string
+  durationMs: number
+  endpointId: string
+  endpointName: string
+  createdAt: string
+}
+
+export const transcriptionDraftSchema: z.ZodType<TranscriptionDraft> = z.object({
+  operationId: z.string().min(1).max(128),
+  text: unicodeBoundedString(1, 4_000),
+  durationMs: z.number().int().min(250).max(90_000),
+  endpointId: z.string().min(1).max(2_048),
+  endpointName: unicodeBoundedString(1, 512),
+  createdAt: z.string().datetime()
+}).strict()
 export interface AssistantResponse {
   category: QuestionCategory
   support: SupportLevel
@@ -246,7 +266,7 @@ export interface CaptureProtectionStatus {
 }
 
 export interface AppSettings {
-  opacity: number
+  glassTint: number
   clickThrough: boolean
   modelMode: ModelMode
   normalModel: string
@@ -258,7 +278,18 @@ export interface AppSettings {
   projectSummary: string
   approvedVocabulary: string[]
   selectedAudioEndpointId?: string
-  inrPerUsd?: number
+  sessionBudgetUsd: number
+}
+
+export interface SessionBudgetStatus {
+  sessionId: string
+  startedAt: string
+  capUsd: number
+  actualUsd: number
+  heldUsd: number
+  remainingUsd: number
+  pricingVersion: string
+  blocked: boolean
 }
 
 export interface ApiKeyStatus {
@@ -274,10 +305,10 @@ export interface PrivacyConsentStatus {
   acceptedAt?: string
   satisfied: boolean
 }
-// Version 3 records the material change from hold/release capture to a
-// persistent press-on/press-off toggle. Earlier consent remains visible as
-// history but must not authorize the new interaction silently.
-export const LISTENING_CONSENT_VERSION = 3
+// Version 4 records that stopping capture produces an editable, memory-only
+// transcript draft. Retrieval and response generation require a separate,
+// explicit submission from the composer.
+export const LISTENING_CONSENT_VERSION = 4
 
 export interface OutboundTransmissionPreview {
   operationId: string
@@ -309,6 +340,8 @@ export interface AppStatus {
   operationTimings: OperationTimings
   indicatorLatencyMs?: number
   answerRenderConfirmed?: boolean
+  transcriptRenderConfirmed?: boolean
+  transcriptRenderLatencyMs?: number
   capture: CaptureProtectionStatus
   listening: boolean
   audioSource: string
@@ -325,6 +358,7 @@ export interface AppStatus {
   privacyConsent: PrivacyConsentStatus
   outboundPreview?: OutboundTransmissionPreview
   settingsRecoveryWarning?: SettingsRecoveryWarning
+  sessionBudget: SessionBudgetStatus
 }
 
 export interface CaptureTestInput {
@@ -404,6 +438,7 @@ export interface PresenterAPI {
   searchDocuments(query: string): Promise<DocumentSearchHit[]>
   inspectDocument(documentId: string, offset?: number, limit?: number): Promise<DocumentInspectionPage>
   clearSession(): Promise<void>
+  startNewSession(): Promise<SessionBudgetStatus>
   getUsage(): Promise<UsageLedger>
   clearUsage(): Promise<void>
   clearCaptureResults(): Promise<void>
@@ -413,12 +448,13 @@ export interface PresenterAPI {
   deleteAllLocalData(confirmation: string): Promise<DeleteAllLocalDataResult>
   dismissSettingsRecoveryWarning(): Promise<void>
   setClickThrough(enabled: boolean): Promise<void>
-  setOpacity(value: number): Promise<void>
+  setGlassTint(value: number): Promise<void>
   showSettings(): Promise<void>
   toggleListening(): Promise<OperationActionResult>
   copyCode(code: string): Promise<void>
   ackListeningIndicator(operationId: string): Promise<void>
   ackAnswerVisible(operationId: string): Promise<void>
+  ackTranscriptVisible(operationId: string): Promise<void>
   refreshAudioDevices(): Promise<AudioDevice[]>
   setCaptureProtection(enabled: boolean): Promise<void>
   saveCaptureResult(result: CaptureTestInput): Promise<CaptureCompatibilityResult>
@@ -427,6 +463,6 @@ export interface PresenterAPI {
   onFocusAsk(callback: () => void): () => void
   onOpenSettings(callback: () => void): () => void
   onOpenPrivacy(callback: () => void): () => void
-  onResponse(callback: (response: AssistantResponse, operationId: string) => void): () => void
+  onTranscriptDraft(callback: (draft: TranscriptionDraft) => void): () => void
   onError(callback: (error: AiErrorInfo) => void): () => void
 }

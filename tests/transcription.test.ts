@@ -13,7 +13,8 @@ import {
 import { estimateTranscriptionUsd, USAGE_PRICING_VERSION } from '../src/main/settings/store'
 
 const settings: AppSettings = {
-  opacity: 0.9,
+  glassTint: 0.42,
+  sessionBudgetUsd: 0.25,
   clickThrough: false,
   modelMode: 'normal',
   normalModel: 'gpt-5.6-luna',
@@ -230,6 +231,6 @@ describe('transcription normalization and pricing', () => {
     }
     expect(estimateTranscriptionUsd(usage, 'gpt-4o-mini-transcribe')).toBeCloseTo(0.00225, 8)
     expect(estimateTranscriptionUsd(usage, 'unpriced-model')).toBe(0)
-    expect(USAGE_PRICING_VERSION).toBe('openai-2026-07-16')
+    expect(USAGE_PRICING_VERSION).toBe('openai-2026-07-22')
   })
 })

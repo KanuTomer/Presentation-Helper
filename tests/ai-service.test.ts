@@ -7,7 +7,7 @@ import {
 import type { RetrievedChunk } from '../src/main/retrieval'
 
 const settings: AppSettings = {
-  opacity: 0.9, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
+  glassTint: 0.42, sessionBudgetUsd: 0.25, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
   transcriptionModel: 'gpt-4o-mini-transcribe', askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H',
   listenShortcut: 'Control+Shift+Space', projectSummary: '', approvedVocabulary: []
 }
@@ -345,8 +345,8 @@ describe('AI error and retry contract', () => {
   ] as const)('maps API failures without leaking provider details', (input, code, retryable) => {
     expect(toAiErrorInfo(input)).toMatchObject({ code, retryable })
   })
-  it('preserves typed errors and configures exactly one SDK retry', () => {
+  it('preserves typed errors and disables SDK retries while the session cap is active', () => {
     expect(toAiErrorInfo(new AiServiceError('busy', 'Busy.', false))).toEqual({ code: 'busy', message: 'Busy.', retryable: false })
-    expect(openAIClientOptions('secret')).toMatchObject({ maxRetries: 1, timeout: 30_000 })
+    expect(openAIClientOptions('secret')).toMatchObject({ maxRetries: 0, timeout: 30_000 })
   })
 })

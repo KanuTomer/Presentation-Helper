@@ -12,7 +12,7 @@ import {
   type HelperEvent
 } from '../src/main/audio/helperClient'
 import type { SettingsStore } from '../src/main/settings/store'
-import type { AppSettings, AssistantResponse, AudioDevice } from '../src/shared/contracts'
+import type { AppSettings, AssistantResponse, AudioDevice, TranscriptionDraft } from '../src/shared/contracts'
 import { LocalDataDeletionService } from '../src/main/settings/dataDeletion'
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
@@ -111,7 +111,7 @@ function pcmWave(durationMs: number): Buffer {
 
 function appSettings(): AppSettings {
   return {
-    opacity: 0.9, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
+    glassTint: 0.42, sessionBudgetUsd: 0.25, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
     transcriptionModel: 'gpt-4o-mini-transcribe', askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H',
     listenShortcut: 'Control+Shift+Space', projectSummary: '', approvedVocabulary: []
   }
@@ -126,7 +126,7 @@ async function harness(
   const helper = new FakeHelper()
   const settings = {
     settings: { ...appSettings(), ...initialSettings },
-    privacyConsent: { requiredVersion: 1, acceptedVersion: 1, acceptedAt: new Date(0).toISOString(), satisfied: true },
+    privacyConsent: { requiredVersion: 4, acceptedVersion: 4, acceptedAt: new Date(0).toISOString(), satisfied: true },
     updates: [] as Partial<AppSettings>[],
     usage: [] as Array<[number, number, number]>,
     async updateSettings(patch: Partial<AppSettings>) {
@@ -156,14 +156,14 @@ async function harness(
   )
   controller.devices = [...helper.devices]
   const errors: unknown[] = []
-  const responses: AssistantResponse[] = []
+  const drafts: TranscriptionDraft[] = []
   controller.onError = (error) => errors.push(error)
-  controller.onResponse = (response, operationId) => {
-    responses.push(response)
-    queueMicrotask(() => controller.acknowledgeAnswerVisible(operationId))
+  controller.onTranscriptDraft = (draft) => {
+    drafts.push(draft)
+    queueMicrotask(() => controller.acknowledgeTranscriptVisible(draft.operationId))
   }
   return {
-    controller, operations, helper, ai, settings, errors, responses, shortcuts, directory,
+    controller, operations, helper, ai, settings, errors, drafts, shortcuts, directory,
     cleanup: () => rm(directory, { recursive: true, force: true })
   }
 }
@@ -209,14 +209,13 @@ describe('audio controller operation lifecycle', () => {
     await h.cleanup()
   })
 
-  it('does not upload audio or generate until each operation-scoped preview is acknowledged', async () => {
+  it('does not upload audio until the transcription preview is acknowledged and never answers automatically', async () => {
     const transcriptionAck = deferred<void>()
-    const responseAck = deferred<void>()
     const previews: Array<{ stage: string; chunks: unknown[]; audio?: unknown }> = []
     const gate = {
       present: vi.fn(async (preview: { stage: string; chunks: unknown[]; audio?: unknown }) => {
         previews.push(preview)
-        await (preview.stage === 'transcription' ? transcriptionAck.promise : responseAck.promise)
+        await transcriptionAck.promise
       }),
       clear: vi.fn()
     } as unknown as TransmissionPreviewGate
@@ -231,17 +230,17 @@ describe('audio controller operation lifecycle', () => {
     h.ai.transcriptionTerminologyHint.mockReturnValue('UNPREVIEWED TERMINOLOGY')
     transcriptionAck.resolve()
 
-    await vi.waitFor(() => expect(previews.map((preview) => preview.stage)).toEqual(['transcription', 'response']))
-    expect(h.ai.transcribe).toHaveBeenCalledOnce()
+    await waitForIdle(h)
+    expect(previews.map((preview) => preview.stage)).toEqual(['transcription'])
     expect(h.ai.transcribe).toHaveBeenCalledWith(
       expect.anything(), expect.objectContaining({ terminologyHint: 'PREVIEWED TERMINOLOGY' })
     )
+    expect(h.ai.retrieve).not.toHaveBeenCalled()
     expect(h.ai.generate).not.toHaveBeenCalled()
-    responseAck.resolve()
-
-    await waitForIdle(h)
-    expect(h.ai.generate).toHaveBeenCalledOnce()
-    expect(h.responses).toEqual([answer])
+    expect(h.drafts).toEqual([expect.objectContaining({
+      text: 'What does the project use?', durationMs: 1_000,
+      endpointId: 'default', endpointName: 'Default speakers'
+    })])
     expect(gate.clear).toHaveBeenCalled()
     await h.cleanup()
   })
@@ -335,8 +334,9 @@ describe('audio controller operation lifecycle', () => {
     await waitForIdle(h)
     expect(h.helper.commands.filter((item) => item.type === 'stopCapture')).toHaveLength(1)
     expect(h.ai.transcribe).toHaveBeenCalledTimes(1)
-    expect(h.ai.generate).toHaveBeenCalledTimes(1)
-    expect(h.responses).toEqual([answer])
+    expect(h.ai.retrieve).not.toHaveBeenCalled()
+    expect(h.ai.generate).not.toHaveBeenCalled()
+    expect(h.drafts).toHaveLength(1)
     await expect(readFile(join(h.directory, 'capture.wav'))).rejects.toThrow()
     await h.cleanup()
   })
@@ -354,7 +354,7 @@ describe('audio controller operation lifecycle', () => {
 
     h.helper.onShortcutDown?.()
     await waitForIdle(h)
-    expect(h.responses).toHaveLength(1)
+    expect(h.drafts).toHaveLength(1)
 
     h.helper.onShortcutDown?.()
     await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('listening'))
@@ -365,7 +365,8 @@ describe('audio controller operation lifecycle', () => {
     h.helper.onShortcutDown?.()
     await waitForIdle(h)
 
-    expect(h.responses).toEqual([answer, answer])
+    expect(h.drafts).toHaveLength(2)
+    expect(h.drafts[1]?.operationId).not.toBe(h.drafts[0]?.operationId)
     expect(h.helper.commands.filter((item) => item.type === 'startCapture')).toHaveLength(2)
     expect(h.helper.commands.filter((item) => item.type === 'stopCapture')).toHaveLength(2)
     expect(h.helper.commands.filter((item) => item.type === 'stopCapture')).toEqual([
@@ -395,7 +396,7 @@ describe('audio controller operation lifecycle', () => {
     expect(h.operations.snapshot()).toMatchObject({ operation: 'listening', operationError: undefined })
     await expect(h.controller.toggleListening()).resolves.toEqual({ ok: true })
     await waitForIdle(h)
-    expect(h.responses).toEqual([answer])
+    expect(h.drafts).toHaveLength(1)
     expect(h.helper.commands.filter((item) => item.type === 'startCapture')).toHaveLength(2)
     await h.cleanup()
   })
@@ -429,7 +430,7 @@ describe('audio controller operation lifecycle', () => {
     await h.controller.toggleListening()
     await waitForIdle(h)
     expect(h.controller.lastCapture?.terminalReason).toBe('released')
-    expect(h.responses).toEqual([answer])
+    expect(h.drafts).toHaveLength(1)
     await h.cleanup()
   })
 
@@ -463,7 +464,7 @@ describe('audio controller operation lifecycle', () => {
     stop.resolve(stopped(operationId, join(h.directory, 'capture.wav')))
     await vi.waitFor(() => expect(h.ai.transcribe).not.toHaveBeenCalled())
     expect(h.errors).toEqual([])
-    expect(h.responses).toEqual([])
+    expect(h.drafts).toEqual([])
     expect(h.shortcuts.unregister).toHaveBeenCalledTimes(1)
     await h.cleanup()
   })
@@ -503,52 +504,86 @@ describe('audio controller operation lifecycle', () => {
     transcription.resolve({ text: 'late transcript', model: 'gpt-4o-mini-transcribe', latencyMs: 1, usage: {} })
     await vi.waitFor(() => expect(h.ai.retrieve).not.toHaveBeenCalled())
     expect(h.errors).toEqual([])
-    expect(h.responses).toEqual([])
+    expect(h.drafts).toEqual([])
     await h.cleanup()
   })
 
-  it('observes cancellation initiated during synchronous retrieval before generation', async () => {
+  it('emits an editable draft without retrieving chunks or generating an answer', async () => {
     const h = await harness()
-    h.ai.retrieve.mockImplementation(() => {
-      void h.controller.cancel()
-      return []
-    })
     await startListening(h)
     await h.controller.stopAndProcess()
     await waitForIdle(h)
-    expect(h.ai.retrieve).toHaveBeenCalledTimes(1)
+    expect(h.drafts).toEqual([expect.objectContaining({ text: 'What does the project use?' })])
+    expect(h.ai.retrieve).not.toHaveBeenCalled()
     expect(h.ai.generate).not.toHaveBeenCalled()
-    expect(h.responses).toEqual([])
     expect(h.errors).toEqual([])
     await h.cleanup()
   })
 
-  it('cancels during generation and suppresses the late response', async () => {
-    const generation = deferred<AssistantResponse>()
-    const h = await harness({ generate: vi.fn(() => generation.promise) as never })
+  it('cancels while waiting for draft visibility and ignores a stale acknowledgement', async () => {
+    const h = await harness()
+    const draftSeen = deferred<TranscriptionDraft>()
+    h.controller.onTranscriptDraft = (draft) => draftSeen.resolve(draft)
     await startListening(h)
     await h.controller.stopAndProcess()
-    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('generating'))
+    const draft = await draftSeen.promise
+    expect(h.operations.snapshot().operation).toBe('transcribing')
     await h.controller.cancel()
     await waitForIdle(h)
-    generation.resolve(answer)
-    await vi.waitFor(() => expect(h.responses).toEqual([]))
+    h.controller.acknowledgeTranscriptVisible(draft.operationId)
+    expect(h.operations.snapshot()).toMatchObject({ operation: 'idle', transcriptRenderConfirmed: false })
+    expect(h.ai.retrieve).not.toHaveBeenCalled()
+    expect(h.ai.generate).not.toHaveBeenCalled()
     expect(h.errors).toEqual([])
     await h.cleanup()
   })
 
-  it('deletes audio immediately after transcription, before retrieval', async () => {
+  it('deletes audio immediately after transcription, before exposing the draft', async () => {
     const h = await harness()
-    h.ai.retrieve.mockImplementation(() => {
+    const drafts: TranscriptionDraft[] = []
+    h.controller.onTranscriptDraft = (draft) => {
       expect(existsSync(join(h.directory, 'capture.wav'))).toBe(false)
       expect(h.controller.temporaryAudio).toBeUndefined()
-      return []
-    })
+      drafts.push(draft)
+      h.controller.acknowledgeTranscriptVisible(draft.operationId)
+    }
     await startListening(h)
     await h.controller.stopAndProcess()
     await waitForIdle(h)
-    expect(h.ai.retrieve).toHaveBeenCalledTimes(1)
+    expect(drafts).toHaveLength(1)
+    expect(h.ai.retrieve).not.toHaveBeenCalled()
+    expect(h.ai.generate).not.toHaveBeenCalled()
     expect(await readdir(h.directory)).toEqual([])
+    await h.cleanup()
+  })
+
+  it('fails closed when the renderer cannot confirm that the transcript draft is visible', async () => {
+    vi.useFakeTimers()
+    const h = await harness()
+    const draftSeen = deferred<TranscriptionDraft>()
+    h.controller.onTranscriptDraft = (draft) => draftSeen.resolve(draft)
+    await startListening(h)
+    await h.controller.stopAndProcess()
+    await draftSeen.promise
+    await vi.advanceTimersByTimeAsync(2_000)
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('error'))
+    expect(h.errors).toEqual([expect.objectContaining({
+      code: 'transcript_display_unavailable', retryable: true
+    })])
+    expect(h.ai.retrieve).not.toHaveBeenCalled()
+    expect(h.ai.generate).not.toHaveBeenCalled()
+    vi.useRealTimers()
+
+    const retryDrafts: TranscriptionDraft[] = []
+    h.controller.onTranscriptDraft = (draft) => {
+      retryDrafts.push(draft)
+      h.controller.acknowledgeTranscriptVisible(draft.operationId)
+    }
+    await expect(h.controller.toggleListening()).resolves.toEqual({ ok: true })
+    expect(h.operations.snapshot()).toMatchObject({ operation: 'listening', operationError: undefined })
+    await expect(h.controller.toggleListening()).resolves.toEqual({ ok: true })
+    await waitForIdle(h)
+    expect(retryDrafts).toHaveLength(1)
     await h.cleanup()
   })
 
@@ -575,7 +610,7 @@ describe('audio controller operation lifecycle', () => {
     await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('error'))
     expect(h.errors).toHaveLength(1)
     expect(h.errors[0]).toMatchObject({ code: 'invalid_audio' })
-    expect(h.responses).toEqual([])
+    expect(h.drafts).toEqual([])
     expect(h.shortcuts.unregister).toHaveBeenCalledTimes(1)
     expect(existsSync(join(h.directory, 'capture.wav'))).toBe(false)
     await h.cleanup()
@@ -592,7 +627,7 @@ describe('audio controller operation lifecycle', () => {
     await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('error'))
     expect(h.errors).toEqual([expect.objectContaining({ code: 'capture_timeout', retryable: true })])
     expect(h.helper.commands.filter((item) => item.type === 'cancel')).toHaveLength(1)
-    expect(h.responses).toEqual([])
+    expect(h.drafts).toEqual([])
     await h.cleanup()
   })
 
@@ -660,7 +695,7 @@ describe('audio controller operation lifecycle', () => {
     await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('error'))
     expect(h.errors).toEqual([expect.objectContaining({ code: 'helper_unavailable' })])
     expect(h.helper.startCalls).toBe(1)
-    expect(h.responses).toEqual([])
+    expect(h.drafts).toEqual([])
     expect(h.controller.temporaryAudio).toBeUndefined()
     expect(await readdir(h.directory)).toEqual([])
     await h.cleanup()
@@ -681,7 +716,7 @@ describe('audio controller operation lifecycle', () => {
 
     await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('error'))
     expect(h.errors).toEqual([expect.objectContaining({ code: 'helper_unavailable' })])
-    expect(h.responses).toEqual([])
+    expect(h.drafts).toEqual([])
     await h.cleanup()
   })
 
@@ -743,7 +778,7 @@ describe('audio controller operation lifecycle', () => {
     await waitForIdle(h)
     expect(h.helper.commands.filter((item) => item.type === 'stopCapture')).toHaveLength(1)
     expect(h.ai.transcribe).toHaveBeenCalledTimes(1)
-    expect(h.responses).toEqual([answer])
+    expect(h.drafts).toHaveLength(1)
     expect(h.controller.lastCapture?.terminalReason).toBe('maximum_duration')
     await h.cleanup()
   })

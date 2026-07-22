@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import type {
-  AppSettings, CaptureCompatibilityResult, DocumentInfo, SettingsRecoveryWarning, UsageSummary
+  AppSettings, CaptureCompatibilityResult, DocumentInfo, SessionBudgetStatus, SettingsRecoveryWarning, UsageSummary
 } from '../../shared/contracts.js'
 import { LISTENING_CONSENT_VERSION } from '../../shared/contracts.js'
 import type { TranscriptionUsage } from '../ai/transcription.js'
@@ -18,7 +18,7 @@ import { appSettingsSchema, parseSettingsPatch, validateSettingsMutation, valida
 export { USAGE_PRICING_VERSION } from '../ai/pricing.js'
 export type { SettingsRecoveryWarning } from '../../shared/contracts.js'
 
-export const SETTINGS_SCHEMA_VERSION = 3
+export const SETTINGS_SCHEMA_VERSION = 4
 export const WINDOW_LAYOUT_REVISION = 1
 export { LISTENING_CONSENT_VERSION } from '../../shared/contracts.js'
 export const MAX_RECENT_USAGE_RECORDS = 100
@@ -75,6 +75,35 @@ export interface UsageLedger {
   rollups: UsageRollup[]
 }
 
+export interface SessionBudgetReservation {
+  id: string
+  endpoint: BillableEndpoint
+  requestedModel: string
+  maximumUsd: number
+  reservedAt: string
+}
+
+export interface SessionBudgetReservationInput {
+  endpoint: BillableEndpoint
+  requestedModel: string
+  maximumUsd: number
+}
+
+export class SessionBudgetExceededError extends Error {
+  readonly code = 'session_budget_exceeded'
+  constructor(readonly requestedUsd: number, readonly remainingUsd: number) {
+    super('This request could exceed the remaining PresenterAI session budget. Start a new session or increase the cap.')
+    this.name = 'SessionBudgetExceededError'
+  }
+}
+
+interface StoredSessionBudget {
+  sessionId: string
+  startedAt: string
+  actualUsd: number
+  reservations: SessionBudgetReservation[]
+}
+
 interface StoredData {
   schemaVersion: typeof SETTINGS_SCHEMA_VERSION
   windowLayoutRevision: number
@@ -85,6 +114,7 @@ interface StoredData {
   usage: UsageSummary
   usageRecords: UsageRecord[]
   usageRollups: UsageRollup[]
+  sessionBudget: StoredSessionBudget
   privacyConsent?: StoredPrivacyConsent
   recoveryWarning?: SettingsRecoveryWarning
 }
@@ -143,8 +173,40 @@ const consentSchema: z.ZodType<StoredPrivacyConsent> = z.object({
 const recoveryWarningSchema: z.ZodType<SettingsRecoveryWarning> = z.object({
   code: z.enum(['invalid_json', 'invalid_shape', 'unsupported_schema']), recoveredAt: isoTimestamp
 }).strict()
-const storedDataShape = {
-  settings: appSettingsSchema,
+
+// Versions 2 and 3 stored the native-window opacity and an optional INR
+// display preference. Keep these schemas independent from the current
+// renderer contract so future settings changes cannot silently invalidate a
+// supported migration path.
+const legacySettingsSchema = z.object({
+  opacity: z.number().finite().min(0.45).max(1),
+  clickThrough: z.boolean(),
+  modelMode: z.enum(['normal', 'strong']),
+  normalModel: z.string().trim().min(1).max(128),
+  strongModel: z.string().trim().min(1).max(128),
+  transcriptionModel: z.string().trim().min(1).max(128),
+  askShortcut: z.string().trim().min(1).max(128),
+  hideShortcut: z.string().trim().min(1).max(128),
+  listenShortcut: z.string().trim().min(1).max(128),
+  projectSummary: z.string(),
+  approvedVocabulary: z.array(z.string()).max(30),
+  selectedAudioEndpointId: z.string().min(1).max(2_048).optional(),
+  inrPerUsd: z.number().finite().min(1).max(1_000).optional()
+}).strict()
+const sessionBudgetReservationSchema = z.object({
+  id: z.string().min(1).max(128),
+  endpoint: z.enum(['responses', 'transcription']),
+  requestedModel: z.string().trim().min(1).max(128),
+  maximumUsd: z.number().finite().positive().max(100),
+  reservedAt: isoTimestamp
+}).strict()
+const sessionBudgetSchema: z.ZodType<StoredSessionBudget> = z.object({
+  sessionId: z.string().min(1).max(128),
+  startedAt: isoTimestamp,
+  actualUsd: z.number().finite().nonnegative().max(100),
+  reservations: z.array(sessionBudgetReservationSchema).max(10_000)
+}).strict()
+const historicalStoredShape = {
   windowBounds: boundsSchema.optional(),
   documents: z.array(documentSchema),
   captureResults: z.array(captureResultSchema),
@@ -153,6 +215,11 @@ const storedDataShape = {
   usageRollups: z.array(usageRollupSchema),
   privacyConsent: consentSchema.optional(),
   recoveryWarning: recoveryWarningSchema.optional()
+}
+const storedDataShape = {
+  settings: appSettingsSchema,
+  ...historicalStoredShape,
+  sessionBudget: sessionBudgetSchema
 }
 const storedDataSchema: z.ZodType<StoredData> = z.object({
   schemaVersion: z.literal(SETTINGS_SCHEMA_VERSION),
@@ -164,10 +231,17 @@ const storedDataV2Schema = z.object({
   // A synthetic installer fixture can downgrade a freshly initialized file.
   // Ignore the future marker and still exercise the real v2 migration path.
   windowLayoutRevision: z.number().int().optional(),
-  ...storedDataShape
+  settings: legacySettingsSchema,
+  ...historicalStoredShape
+}).strict()
+const storedDataV3Schema = z.object({
+  schemaVersion: z.literal(3),
+  windowLayoutRevision: z.number().int().min(0).max(WINDOW_LAYOUT_REVISION),
+  settings: legacySettingsSchema,
+  ...historicalStoredShape
 }).strict()
 const legacyStoredDataSchema = z.object({
-  settings: appSettingsSchema, windowBounds: boundsSchema.optional(), documents: z.array(documentSchema),
+  settings: legacySettingsSchema, windowBounds: boundsSchema.optional(), documents: z.array(documentSchema),
   captureResults: z.array(captureResultSchema), usage: usageSummarySchema
 }).strict()
 const usageRecordInputSchema: z.ZodType<UsageRecordInput> = z.object({
@@ -180,24 +254,28 @@ const usageRecordInputSchema: z.ZodType<UsageRecordInput> = z.object({
 })
 
 const defaultSettings: AppSettings = {
-  opacity: 0.92, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna',
+  glassTint: 0.42, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna',
   strongModel: 'gpt-5.6-terra', transcriptionModel: 'gpt-4o-mini-transcribe',
   askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', listenShortcut: 'Control+Shift+Space',
-  projectSummary: '', approvedVocabulary: []
+  projectSummary: '', approvedVocabulary: [], sessionBudgetUsd: 0.25
 }
 const defaultUsage = (): UsageSummary => ({
   inputTokens: 0, outputTokens: 0, audioMinutes: 0,
   transcriptionInputTokens: 0, transcriptionAudioTokens: 0, transcriptionOutputTokens: 0,
   estimatedUsd: 0, pricingVersion: USAGE_PRICING_VERSION
 })
-const defaultData = (): StoredData => ({
+const defaultSessionBudget = (clock: () => Date, idGenerator: () => string): StoredSessionBudget => ({
+  sessionId: idGenerator(), startedAt: clock().toISOString(), actualUsd: 0, reservations: []
+})
+const defaultData = (clock: () => Date, idGenerator: () => string): StoredData => ({
   schemaVersion: SETTINGS_SCHEMA_VERSION, windowLayoutRevision: WINDOW_LAYOUT_REVISION,
   settings: structuredClone(defaultSettings), documents: [], captureResults: [],
-  usage: defaultUsage(), usageRecords: [], usageRollups: []
+  usage: defaultUsage(), usageRecords: [], usageRollups: [],
+  sessionBudget: defaultSessionBudget(clock, idGenerator)
 })
 
 export class SettingsStore {
-  private data: StoredData = defaultData()
+  private data: StoredData
   private readonly pathProvider: () => string
   private readonly clock: () => Date
   private readonly idGenerator: () => string
@@ -208,6 +286,7 @@ export class SettingsStore {
     this.pathProvider = options.path ?? (() => join(app.getPath('userData'), 'presenterai.json'))
     this.clock = options.clock ?? (() => new Date())
     this.idGenerator = options.idGenerator ?? randomUUID
+    this.data = defaultData(this.clock, this.idGenerator)
   }
 
   async initialize(): Promise<void> {
@@ -238,7 +317,15 @@ export class SettingsStore {
     if (rawVersion === 2) {
       const versionTwo = storedDataV2Schema.safeParse(raw)
       if (versionTwo.success) {
-        this.data = this.migrateVersionTwo(versionTwo.data)
+        this.data = this.migrateHistorical(versionTwo.data)
+        await this.flush()
+        return
+      }
+    }
+    if (rawVersion === 3) {
+      const versionThree = storedDataV3Schema.safeParse(raw)
+      if (versionThree.success) {
+        this.data = this.migrateHistorical(versionThree.data)
         await this.flush()
         return
       }
@@ -251,7 +338,7 @@ export class SettingsStore {
         return
       }
     }
-    const warningCode: RecoveryReason = rawVersion !== undefined && rawVersion !== 2 && rawVersion !== SETTINGS_SCHEMA_VERSION
+    const warningCode: RecoveryReason = rawVersion !== undefined && rawVersion !== 2 && rawVersion !== 3 && rawVersion !== SETTINGS_SCHEMA_VERSION
       ? 'unsupported_schema'
       : 'invalid_shape'
     this.data = this.migrateOrRecover(raw, warningCode)
@@ -267,6 +354,11 @@ export class SettingsStore {
   get usageLedger(): UsageLedger {
     return { summary: this.usage, recent: this.usageRecords, rollups: this.usageRollups }
   }
+  get sessionBudgetStatus(): SessionBudgetStatus {
+    return buildSessionBudgetStatus(this.data.sessionBudget, this.data.settings.sessionBudgetUsd)
+  }
+  /** Backward-compatible internal alias while callers move to the explicit status name. */
+  get sessionBudget(): SessionBudgetStatus { return this.sessionBudgetStatus }
   get recoveryWarning(): SettingsRecoveryWarning | undefined {
     return this.data.recoveryWarning && { ...this.data.recoveryWarning }
   }
@@ -312,14 +404,85 @@ export class SettingsStore {
     await this.flush()
   }
 
+  /** Persist a worst-case cost before a provider request can be dispatched. */
+  async reserveSessionBudget(
+    endpoint: BillableEndpoint,
+    requestedModel: string,
+    maximumUsd: number
+  ): Promise<SessionBudgetReservation> {
+    const parsed = sessionBudgetReservationSchema.omit({ id: true, reservedAt: true }).parse({
+      endpoint, requestedModel, maximumUsd
+    })
+    const status = this.sessionBudgetStatus
+    if (parsed.maximumUsd > status.remainingUsd + 1e-12) {
+      throw new SessionBudgetExceededError(parsed.maximumUsd, status.remainingUsd)
+    }
+    const reservation: SessionBudgetReservation = {
+      ...parsed, id: this.idGenerator(), reservedAt: this.clock().toISOString()
+    }
+    if (this.data.sessionBudget.reservations.some((candidate) => candidate.id === reservation.id)) {
+      throw new Error('The session budget reservation ID already exists.')
+    }
+    this.data.sessionBudget.reservations.push(reservation)
+    await this.flush()
+    return structuredClone(reservation)
+  }
+
+  /**
+   * Replace a conservative hold with exact priced usage. Callers intentionally
+   * leave a reservation unsettled when usage is absent or the returned model
+   * is not in the exact local price table.
+   */
+  async settleSessionBudget(
+    reservationId: string,
+    actualUsd: number,
+    keepReservation = false
+  ): Promise<SessionBudgetStatus> {
+    const actual = z.number().finite().nonnegative().max(100).parse(actualUsd)
+    const index = this.data.sessionBudget.reservations.findIndex((candidate) => candidate.id === reservationId)
+    if (index < 0) throw new Error('The session budget reservation is no longer active.')
+    const reservation = this.data.sessionBudget.reservations[index]!
+    if (keepReservation) return this.sessionBudgetStatus
+    if (actual > reservation.maximumUsd + 1e-12) {
+      throw new Error('Actual request cost exceeded its conservative reservation; the hold was retained.')
+    }
+    this.data.sessionBudget.reservations.splice(index, 1)
+    this.data.sessionBudget.actualUsd = addUsd(this.data.sessionBudget.actualUsd, actual)
+    await this.flush()
+    return this.sessionBudgetStatus
+  }
+
+  /** Release a reservation only when dispatch is known not to have occurred. */
+  async releaseSessionBudget(reservationId: string): Promise<SessionBudgetStatus> {
+    const index = this.data.sessionBudget.reservations.findIndex((candidate) => candidate.id === reservationId)
+    if (index < 0) throw new Error('The session budget reservation is no longer active.')
+    this.data.sessionBudget.reservations.splice(index, 1)
+    await this.flush()
+    return this.sessionBudgetStatus
+  }
+
+  /** Confirm that a missing-usage or unpriced request remains fully held. */
+  retainSessionBudget(reservationId: string): SessionBudgetStatus {
+    if (!this.data.sessionBudget.reservations.some((candidate) => candidate.id === reservationId)) {
+      throw new Error('The session budget reservation is no longer active.')
+    }
+    return this.sessionBudgetStatus
+  }
+
+  async startNewSession(): Promise<SessionBudgetStatus> {
+    this.data.sessionBudget = defaultSessionBudget(this.clock, this.idGenerator)
+    await this.flush()
+    return this.sessionBudgetStatus
+  }
+
   async recordUsage(value: UsageRecordInput): Promise<UsageRecord> {
     const input = usageRecordInputSchema.parse(value)
-    const effectiveModel = input.returnedModel ?? input.requestedModel
-    // A zero-token transcription usage object (for example a duration-only
-    // provider shape) cannot be priced from the token table.
-    const price = input.endpoint === 'transcription' && input.inputTokens === 0 && input.outputTokens === 0
+    // Provider provenance is required for exact pricing. A missing returned
+    // model or zero-token transcription usage stays visibly unpriced instead
+    // of assuming the requested model was served.
+    const price = !input.returnedModel || (input.endpoint === 'transcription' && input.inputTokens === 0 && input.outputTokens === 0)
       ? { priced: false, estimatedUsd: 0, pricingVersion: USAGE_PRICING_VERSION as typeof USAGE_PRICING_VERSION }
-      : estimateKnownModelTokens(input.endpoint, effectiveModel, input.inputTokens, input.outputTokens)
+      : estimateKnownModelTokens(input.endpoint, input.returnedModel, input.inputTokens, input.outputTokens)
     const record: UsageRecord = {
       ...input, id: this.idGenerator(), timestamp: this.clock().toISOString(),
       pricingVersion: price.pricingVersion, priced: price.priced, estimatedUsd: price.estimatedUsd
@@ -392,6 +555,7 @@ export class SettingsStore {
     this.data.windowLayoutRevision = WINDOW_LAYOUT_REVISION
     delete this.data.privacyConsent
     delete this.data.recoveryWarning
+    this.data.sessionBudget = defaultSessionBudget(this.clock, this.idGenerator)
     await this.flush()
   }
 
@@ -415,41 +579,50 @@ export class SettingsStore {
   }
 
   private recoveredDefaults(reason: RecoveryReason): StoredData {
-    return { ...defaultData(), recoveryWarning: recoveryWarning(reason, this.clock()) }
+    return { ...defaultData(this.clock, this.idGenerator), recoveryWarning: recoveryWarning(reason, this.clock()) }
   }
 
   private migrateLegacy(legacy: z.infer<typeof legacyStoredDataSchema>): StoredData {
     const data: StoredData = {
       schemaVersion: SETTINGS_SCHEMA_VERSION,
       windowLayoutRevision: legacy.windowBounds ? 0 : WINDOW_LAYOUT_REVISION,
-      settings: legacy.settings,
+      settings: migrateLegacySettings(legacy.settings),
       ...(legacy.windowBounds ? { windowBounds: legacy.windowBounds } : {}),
       documents: legacy.documents,
       captureResults: legacy.captureResults,
       usage: legacy.usage,
       usageRecords: [],
-      usageRollups: []
+      usageRollups: [],
+      sessionBudget: defaultSessionBudget(this.clock, this.idGenerator)
     }
     if (hasUsage(data.usage)) data.usageRollups.push(legacyUsageRollup(data.usage))
     return data
   }
 
-  private migrateVersionTwo(versionTwo: z.infer<typeof storedDataV2Schema>): StoredData {
-    const { schemaVersion: _schemaVersion, windowLayoutRevision: _ignoredLayoutRevision, ...preserved } = versionTwo
+  private migrateHistorical(
+    historical: z.infer<typeof storedDataV2Schema> | z.infer<typeof storedDataV3Schema>
+  ): StoredData {
+    const {
+      schemaVersion, windowLayoutRevision: historicalLayoutRevision, settings, ...preserved
+    } = historical
     return {
       ...preserved,
+      settings: migrateLegacySettings(settings),
       schemaVersion: SETTINGS_SCHEMA_VERSION,
-      windowLayoutRevision: versionTwo.windowBounds ? 0 : WINDOW_LAYOUT_REVISION
+      windowLayoutRevision: schemaVersion === 2
+        ? (historical.windowBounds ? 0 : WINDOW_LAYOUT_REVISION)
+        : historicalLayoutRevision,
+      sessionBudget: defaultSessionBudget(this.clock, this.idGenerator)
     }
   }
 
   private migrateOrRecover(raw: unknown, reason: RecoveryReason): StoredData {
     if (!isRecord(raw)) return this.recoveredDefaults(reason)
-    if (raw.schemaVersion !== undefined && raw.schemaVersion !== 2 && raw.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
+    if (raw.schemaVersion !== undefined && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
       return this.recoveredDefaults(reason)
     }
 
-    const data = defaultData()
+    const data = defaultData(this.clock, this.idGenerator)
     const recoveredBounds = parseOptional(boundsSchema, raw.windowBounds)
     data.windowLayoutRevision = (raw.schemaVersion === undefined || raw.schemaVersion === 2) && recoveredBounds
       ? 0
@@ -463,6 +636,7 @@ export class SettingsStore {
       : defaultUsage()
     data.usageRecords = parseArrayItems(usageRecordSchema, raw.usageRecords).slice(-MAX_RECENT_USAGE_RECORDS)
     data.usageRollups = parseArrayItems(usageRollupSchema, raw.usageRollups)
+    data.sessionBudget = parseOptional(sessionBudgetSchema, raw.sessionBudget) ?? data.sessionBudget
     data.privacyConsent = parseOptional(consentSchema, raw.privacyConsent)
     data.recoveryWarning = recoveryWarning(reason, this.clock())
 
@@ -493,6 +667,17 @@ export function estimateTranscriptionUsd(usage: TranscriptionUsage, model: strin
 
 export const validateVocabulary = validateVocabularyTerms
 
+function migrateLegacySettings(value: z.infer<typeof legacySettingsSchema>): AppSettings {
+  // Native opacity and INR conversion represented concepts that no longer
+  // exist. All request, shortcut, audio, and project fields are recovered;
+  // the new glass tint and USD cap start from their documented defaults.
+  return recoverSettings({
+    ...value,
+    glassTint: defaultSettings.glassTint,
+    sessionBudgetUsd: defaultSettings.sessionBudgetUsd
+  })
+}
+
 function recoverSettings(value: unknown): AppSettings {
   if (!isRecord(value)) return structuredClone(defaultSettings)
   const recovered: Record<string, unknown> = { ...defaultSettings }
@@ -502,7 +687,7 @@ function recoverSettings(value: unknown): AppSettings {
     if (parsed) Object.assign(recovered, parsed)
   }
   // Optional fields are not enumerable on defaults and must be recovered explicitly.
-  for (const key of ['selectedAudioEndpointId', 'inrPerUsd'] as const) {
+  for (const key of ['selectedAudioEndpointId'] as const) {
     if (!(key in value)) continue
     const parsed = parseSettingsPatchSafely({ [key]: value[key] })
     if (parsed) Object.assign(recovered, parsed)
@@ -523,6 +708,25 @@ function parseOptional<T>(schema: z.ZodType<T>, value: unknown): T | undefined {
   if (value === undefined) return undefined
   const parsed = schema.safeParse(value)
   return parsed.success ? parsed.data : undefined
+}
+
+function buildSessionBudgetStatus(session: StoredSessionBudget, capUsd: number): SessionBudgetStatus {
+  const heldUsd = session.reservations.reduce((total, reservation) => addUsd(total, reservation.maximumUsd), 0)
+  const remainingUsd = Math.max(0, addUsd(capUsd, -session.actualUsd, -heldUsd))
+  return {
+    sessionId: session.sessionId,
+    startedAt: session.startedAt,
+    capUsd,
+    actualUsd: session.actualUsd,
+    heldUsd,
+    remainingUsd,
+    pricingVersion: USAGE_PRICING_VERSION,
+    blocked: remainingUsd <= 1e-12
+  }
+}
+
+function addUsd(...values: number[]): number {
+  return Number(values.reduce((total, value) => total + value, 0).toFixed(12))
 }
 
 function parseLayoutRevision(value: unknown): number {

@@ -15,6 +15,7 @@ const timingLabels: Array<[keyof OperationTimings, string]> = [
   ['listeningMs', 'Listening'],
   ['finalizationMs', 'Finalization'],
   ['transcriptionMs', 'Transcription'],
+  ['stopToTranscriptMs', 'Stop to transcript'],
   ['retrievalMs', 'Retrieval'],
   ['generationMs', 'Generation'],
   ['stopToAnswerMs', 'Stop to answer'],
@@ -104,12 +105,13 @@ export function AnswerRenderAcknowledger({
   return null
 }
 
-export function StageTimingSummary({ timings, indicatorLatencyMs }: { timings: OperationTimings; indicatorLatencyMs?: number }): React.JSX.Element | null {
+export function StageTimingSummary({ timings, indicatorLatencyMs, transcriptRenderLatencyMs }: { timings: OperationTimings; indicatorLatencyMs?: number; transcriptRenderLatencyMs?: number }): React.JSX.Element | null {
   const rows: Array<{ key: string; label: string; value: number }> = timingLabels.flatMap(([key, label]) => {
     const value = timings[key]
     return value === undefined ? [] : [{ key, label, value }]
   })
   if (indicatorLatencyMs !== undefined) rows.splice(1, 0, { key: 'indicatorLatencyMs', label: 'Listening indicator', value: indicatorLatencyMs })
+  if (transcriptRenderLatencyMs !== undefined) rows.push({ key: 'transcriptRenderLatencyMs', label: 'Transcript render', value: transcriptRenderLatencyMs })
   if (rows.length === 0) return null
 
   return <section className="stage-timings" aria-label="Last operation timings">
@@ -126,7 +128,7 @@ export function ToggleListenButton({ status, onError }: { status: AppStatus; onE
     ? 'The Windows audio helper is unavailable. Open Settings for recovery details.'
     : blocked
       ? 'Another operation is active.'
-      : activeAudio ? 'Stop system-audio capture and answer' : 'Start capturing the selected Windows system-output device'
+      : activeAudio ? 'Stop system-audio capture and create an editable transcript' : 'Start capturing the selected Windows system-output device'
 
   return <button
     disabled={blocked}
@@ -140,5 +142,5 @@ export function ToggleListenButton({ status, onError }: { status: AppStatus; onE
         onError({ code: 'helper_unavailable', message: 'The Windows system-audio helper could not toggle capture.', retryable: true })
       })
     }}
-  >{activeAudio ? '■ Stop & answer' : '◉ Start listening'}</button>
+  >{activeAudio ? '■ Stop & transcribe' : '◉ Start listening'}</button>
 }
