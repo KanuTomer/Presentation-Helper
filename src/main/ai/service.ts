@@ -2,15 +2,18 @@ import OpenAI, { toFile } from 'openai'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import {
-  assistantResponseSchema, questionSchema, type AiErrorCode, type AiErrorInfo, type AppSettings,
-  type AssistantResponse, type DocumentInfo
+  assistantResponseSchema, codeAssistantResponseSchema, questionSchema, type AiErrorCode, type AiErrorInfo,
+  type AnswerFormat, type AppSettings, type AssistantResponse, type DocumentInfo
 } from '../../shared/contracts.js'
 import type { RetrievedChunk } from '../retrieval/index.js'
 import { ConversationContext } from './conversation.js'
 import { validateGroundingResponse } from './grounding.js'
 import { attachPreparedAnswer, prepareAnswer, preparedAnswerFromChunks, type PreparedAnswer } from './preparedAnswer.js'
-import { buildInput, presenterInstructions, responseJsonSchema } from './prompts.js'
-import { responseRequestPolicy } from './requestPolicy.js'
+import { resolveAnswerFormat } from './answerFormat.js'
+import {
+  buildInput, codePresenterInstructions, codeResponseJsonSchema, presenterInstructions, responseJsonSchema
+} from './prompts.js'
+import { codeResponseRequestPolicy, responseRequestPolicy } from './requestPolicy.js'
 import {
   buildTerminologyHint, normalizeTranscript, parseTranscriptionMetadata, parseTranscriptionResponse,
   type TranscriptionResult, type TranscriptionUsage
@@ -94,9 +97,11 @@ export interface TranscriptionAudioSource {
 export interface AskOptions {
   signal?: AbortSignal
   onStage?: (stage: 'retrieving' | 'generating') => void
+  answerFormat?: AnswerFormat
 }
 export interface GenerateOptions {
   signal?: AbortSignal
+  answerFormat?: AnswerFormat
 }
 
 export class AiServiceError extends Error {
@@ -193,7 +198,10 @@ export class AiService {
     options.onStage?.('retrieving')
     const chunks = this.retrieve(question, { signal: options.signal })
     options.onStage?.('generating')
-    return this.generate(question, chunks, { signal: options.signal })
+    return this.generate(question, chunks, {
+      signal: options.signal,
+      ...(options.answerFormat ? { answerFormat: options.answerFormat } : {})
+    })
   }
   async generate(
     question: string,
@@ -211,7 +219,9 @@ export class AiService {
     const startedAt = performance.now()
     const settings = this.settings.settings
     const requestedModel = settings.modelMode === 'strong' ? settings.strongModel : settings.normalModel
-    const policy = responseRequestPolicy(settings.modelMode)
+    const answerFormat = resolveAnswerFormat(validated.data, options.answerFormat)
+    const codeAnswer = answerFormat === 'code'
+    const policy = codeAnswer ? codeResponseRequestPolicy(settings.modelMode) : responseRequestPolicy(settings.modelMode)
     let response: OpenAIResponseLike | undefined
     let outcome: AiRequestMetric['outcome'] = 'unknown'
     let requestDispatched = false
@@ -224,12 +234,15 @@ export class AiService {
       response = await client.responses.create({
         model: requestedModel,
         reasoning: { effort: policy.reasoningEffort },
-        instructions: presenterInstructions,
+        instructions: codeAnswer ? codePresenterInstructions : presenterInstructions,
         input: buildInput(prepared.question, selectedChunks, prepared.conversationPrompt, prepared.projectSummary),
         max_output_tokens: policy.maxOutputTokens, store: false,
         text: {
           ...(policy.verbosity ? { verbosity: policy.verbosity } : {}),
-          format: { type: 'json_schema', name: 'presenter_response', strict: true, schema: responseJsonSchema }
+          format: {
+            type: 'json_schema', name: codeAnswer ? 'presenter_code_response' : 'presenter_response', strict: true,
+            schema: codeAnswer ? codeResponseJsonSchema : responseJsonSchema
+          }
         }
       }, { signal: operation.signal })
       ensureCurrentOperation(operation, this.active)
@@ -237,8 +250,8 @@ export class AiService {
       if (containsRefusal(response.output) || !response.output_text?.trim()) throw malformedResponse()
       let raw: unknown
       try { raw = JSON.parse(response.output_text) } catch { throw malformedResponse() }
-      if (raw && typeof raw === 'object' && 'warning' in raw && (raw as { warning: unknown }).warning === null) delete (raw as { warning?: unknown }).warning
-      const validation = assistantResponseSchema.safeParse(raw)
+      normalizeProviderNulls(raw)
+      const validation = (codeAnswer ? codeAssistantResponseSchema : assistantResponseSchema).safeParse(raw)
       if (!validation.success) throw malformedResponse()
       const parsed = validation.data
       const citedIds = parsed.evidence.map((item) => item.chunkId)
@@ -372,6 +385,17 @@ function ensureCurrentOperation(
 ): void {
   if (operation.signal.aborted || active?.id !== operation.id) {
     throw new AiServiceError('cancelled', 'Operation cancelled.', false)
+  }
+}
+function normalizeProviderNulls(raw: unknown): void {
+  if (!raw || typeof raw !== 'object') return
+  const value = raw as { warning?: unknown; codeBlocks?: unknown }
+  if (value.warning === null) delete value.warning
+  if (!Array.isArray(value.codeBlocks)) return
+  for (const block of value.codeBlocks) {
+    if (block && typeof block === 'object' && (block as { title?: unknown }).title === null) {
+      delete (block as { title?: unknown }).title
+    }
   }
 }
 function containsRefusal(output: unknown[] | undefined): boolean {

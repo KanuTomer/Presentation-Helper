@@ -10,6 +10,7 @@ import {
   UsageEstimatePanel,
   type RetentionActions
 } from '../src/renderer/privacyControls'
+import { LISTENING_CONSENT_VERSION } from '../src/shared/contracts'
 
 let frames: FrameRequestCallback[]
 beforeEach(() => {
@@ -22,9 +23,9 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 describe('privacy controls', () => {
   it('persists only the required listening disclosure version', async () => {
     const accept = vi.fn()
-    render(<ListeningConsentPanel consent={{ requiredVersion: 2, satisfied: false }} onAccept={accept} />)
-    fireEvent.click(screen.getByRole('button', { name: /enable hold-to-listen/i }))
-    await waitFor(() => expect(accept).toHaveBeenCalledWith(2))
+    render(<ListeningConsentPanel consent={{ requiredVersion: LISTENING_CONSENT_VERSION, satisfied: false }} onAccept={accept} />)
+    fireEvent.click(screen.getByRole('button', { name: /enable toggle listening/i }))
+    await waitFor(() => expect(accept).toHaveBeenCalledWith(LISTENING_CONSENT_VERSION))
   })
 
   it('acknowledges a visible operation-scoped preview after two frames', async () => {

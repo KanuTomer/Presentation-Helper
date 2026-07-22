@@ -95,7 +95,7 @@ function stopped(operationId: string, path: string, overrides: Partial<HelperEve
   return {
     type: 'captureStopped', operationId, path, durationMs: 1_000, bytes: 32_044,
     sampleRate: 16_000, channels: 1, endpointId: 'default', endpointName: 'Default speakers',
-    terminalReason: 'released', ...overrides
+    terminalReason: 'stopped', ...overrides
   }
 }
 
@@ -322,13 +322,13 @@ describe('audio controller operation lifecycle', () => {
     await h.cleanup()
   })
 
-  it('latches a rapid release and processes exactly one finalized segment', async () => {
+  it('latches a rapid second toggle and processes exactly one finalized segment', async () => {
     const h = await harness()
     const start = deferred<HelperEvent>()
     h.helper.startCaptureReply = start.promise
-    const starting = h.controller.startCapture()
+    const starting = h.controller.toggleListening()
     await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('starting_capture'))
-    await expect(h.controller.stopAndProcess()).resolves.toEqual({ ok: true })
+    await expect(h.controller.toggleListening()).resolves.toEqual({ ok: true })
     const operationId = h.operations.snapshot().operationId!
     start.resolve({ type: 'captureStarted', operationId, endpointId: 'default', endpointName: 'Default speakers' })
     await starting
@@ -338,6 +338,98 @@ describe('audio controller operation lifecycle', () => {
     expect(h.ai.generate).toHaveBeenCalledTimes(1)
     expect(h.responses).toEqual([answer])
     await expect(readFile(join(h.directory, 'capture.wav'))).rejects.toThrow()
+    await h.cleanup()
+  })
+
+  it('toggles two complete shortcut-driven capture cycles and ignores key-up', async () => {
+    const h = await harness()
+    await h.controller.initialize()
+
+    h.helper.onShortcutDown?.()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('listening'))
+    const firstOperationId = h.operations.snapshot().operationId
+    h.helper.onShortcutUp?.()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('listening'))
+    expect(h.helper.commands.filter((item) => item.type === 'stopCapture')).toHaveLength(0)
+
+    h.helper.onShortcutDown?.()
+    await waitForIdle(h)
+    expect(h.responses).toHaveLength(1)
+
+    h.helper.onShortcutDown?.()
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('listening'))
+    const secondOperationId = h.operations.snapshot().operationId
+    expect(secondOperationId).not.toBe(firstOperationId)
+    h.helper.onShortcutUp?.()
+    expect(h.operations.snapshot().operation).toBe('listening')
+    h.helper.onShortcutDown?.()
+    await waitForIdle(h)
+
+    expect(h.responses).toEqual([answer, answer])
+    expect(h.helper.commands.filter((item) => item.type === 'startCapture')).toHaveLength(2)
+    expect(h.helper.commands.filter((item) => item.type === 'stopCapture')).toHaveLength(2)
+    expect(h.helper.commands.filter((item) => item.type === 'stopCapture')).toEqual([
+      expect.objectContaining({ operationId: firstOperationId, terminalReason: 'stopped' }),
+      expect.objectContaining({ operationId: secondOperationId, terminalReason: 'stopped' })
+    ])
+    await h.cleanup()
+  })
+
+  it('starts a new capture from the terminal error display after a failed toggle', async () => {
+    const h = await harness()
+    let failFirstStart = true
+    h.helper.commandOverride = async (command) => {
+      if (command.type === 'startCapture' && failFirstStart) {
+        failFirstStart = false
+        throw new HelperClientError('device_unavailable', 'The default endpoint is unavailable.')
+      }
+      return undefined
+    }
+
+    await expect(h.controller.toggleListening()).resolves.toMatchObject({
+      ok: false, error: { code: 'device_unavailable' }
+    })
+    expect(h.operations.snapshot().operation).toBe('error')
+
+    await expect(h.controller.toggleListening()).resolves.toEqual({ ok: true })
+    expect(h.operations.snapshot()).toMatchObject({ operation: 'listening', operationError: undefined })
+    await expect(h.controller.toggleListening()).resolves.toEqual({ ok: true })
+    await waitForIdle(h)
+    expect(h.responses).toEqual([answer])
+    expect(h.helper.commands.filter((item) => item.type === 'startCapture')).toHaveLength(2)
+    await h.cleanup()
+  })
+
+  it('returns Busy when toggled during downstream audio processing or a typed operation', async () => {
+    const transcription = deferred<Awaited<ReturnType<AiService['transcribe']>>>()
+    const h = await harness({ transcribe: vi.fn(() => transcription.promise) as never })
+    await expect(h.controller.toggleListening()).resolves.toEqual({ ok: true })
+    await expect(h.controller.toggleListening()).resolves.toEqual({ ok: true })
+    await vi.waitFor(() => expect(h.operations.snapshot().operation).toBe('transcribing'))
+    await expect(h.controller.toggleListening()).resolves.toMatchObject({ ok: false, error: { code: 'busy' } })
+    expect(h.helper.commands.filter((item) => item.type === 'startCapture')).toHaveLength(1)
+    await h.controller.cancel()
+    transcription.resolve({ text: 'late', model: 'gpt-4o-mini-transcribe', latencyMs: 1, usage: {} })
+    await waitForIdle(h)
+
+    const typed = h.operations.begin('typed', 'retrieving')
+    await expect(h.controller.toggleListening()).resolves.toMatchObject({ ok: false, error: { code: 'busy' } })
+    await h.operations.finish(typed.id, 'success')
+    await h.cleanup()
+  })
+
+  it('accepts the legacy released terminal reason from an older helper', async () => {
+    const h = await harness()
+    const operationId = await startListening(h)
+    h.helper.commandOverride = async (command) => {
+      if (command.type !== 'stopCapture') return undefined
+      await writeFile(h.helper.capturePath, pcmWave(1_000))
+      return stopped(operationId, h.helper.capturePath, { terminalReason: 'released' })
+    }
+    await h.controller.toggleListening()
+    await waitForIdle(h)
+    expect(h.controller.lastCapture?.terminalReason).toBe('released')
+    expect(h.responses).toEqual([answer])
     await h.cleanup()
   })
 

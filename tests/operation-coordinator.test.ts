@@ -35,12 +35,12 @@ describe('operation coordinator', () => {
     expect(coordinator.snapshot()).toMatchObject({
       operation: 'idle', answerRenderConfirmed: true, operationTimings: {
         captureStartMs: 20, listeningMs: 300, finalizationMs: 40, transcriptionMs: 100,
-        releaseToAnswerMs: 140, totalMs: 460
+        stopToAnswerMs: 140, totalMs: 460
       }
     })
   })
 
-  it('does not claim release-to-visible timing when the renderer never acknowledges the answer', async () => {
+  it('does not claim stop-to-visible timing when the renderer never acknowledges the answer', async () => {
     vi.useFakeTimers()
     const { coordinator, tick } = harness()
     const operation = coordinator.begin('audio', 'starting_capture')
@@ -51,7 +51,7 @@ describe('operation coordinator', () => {
     await expect(visible).resolves.toBe(false)
     await coordinator.finish(operation.id, 'error', { code: 'timeout', message: 'Not visible.', retryable: true })
     expect(coordinator.snapshot()).toMatchObject({ answerRenderConfirmed: false })
-    expect(coordinator.snapshot().operationTimings.releaseToAnswerMs).toBeUndefined()
+    expect(coordinator.snapshot().operationTimings.stopToAnswerMs).toBeUndefined()
     vi.useRealTimers()
   })
 
@@ -63,7 +63,7 @@ describe('operation coordinator', () => {
     tick(25); coordinator.acknowledgeAnswerVisible(operation.id)
     await expect(coordinator.waitForAnswerVisible(operation.id)).resolves.toBe(true)
     tick(500); await coordinator.finish(operation.id, 'success')
-    expect(coordinator.snapshot().operationTimings.releaseToAnswerMs).toBe(25)
+    expect(coordinator.snapshot().operationTimings.stopToAnswerMs).toBe(25)
   })
 
   it('keeps API generation timing separate from renderer acknowledgement latency', async () => {
@@ -79,7 +79,7 @@ describe('operation coordinator', () => {
     tick(400); coordinator.acknowledgeAnswerVisible(operation.id)
     await visible
     await coordinator.finish(operation.id, 'success')
-    expect(coordinator.snapshot().operationTimings).toMatchObject({ generationMs: 50, releaseToAnswerMs: 485 })
+    expect(coordinator.snapshot().operationTimings).toMatchObject({ generationMs: 50, stopToAnswerMs: 485 })
   })
 
   it('rejects overlap and aborts through one cancellation handler', async () => {

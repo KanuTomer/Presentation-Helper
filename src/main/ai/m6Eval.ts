@@ -34,10 +34,11 @@ export const M6_ANSWER_MODEL = 'gpt-5.6-luna'
 export const M6_REPORT_SCHEMA_VERSION = 3
 export const M6_ANSWER_INPUT_USD_PER_MILLION = 1
 export const M6_ANSWER_OUTPUT_USD_PER_MILLION = 6
-export const M6_EVALUATOR_REVISION = 'm6-live-evaluator-2026-07-14.4'
+export const M6_EVALUATOR_REVISION = 'm6-live-evaluator-2026-07-18.5'
 export const M6_REQUEST_CONFIG_FINGERPRINT = createHash('sha256').update(JSON.stringify({
   evaluatorRevision: M6_EVALUATOR_REVISION,
   helperProtocol: 2,
+  capture: { interaction: 'toggle', terminalReason: 'stopped', latencyOrigin: 'second-toggle' },
   transcription: {
     model: M6_TRANSCRIPTION_MODEL, responseFormat: 'json', sdkRetries: 0,
     evaluationMaxCaptureSeconds: M6_EVALUATION_MAX_CAPTURE_SECONDS,
@@ -97,8 +98,8 @@ export interface M6CaseResult {
     transcription: number
     retrieval?: number
     generation?: number
-    /** Renderer-confirmed release-to-visible-answer time; never inferred from generation completion. */
-    releaseToVisibleAnswer?: number
+    /** Renderer-confirmed stop-to-visible-answer time; never inferred from generation completion. */
+    stopToVisibleAnswer?: number
     total: number
   }
   usage: {
@@ -145,8 +146,8 @@ export interface M6RedactedReport {
     transcriptionValidCount: number
     meaningCorrectCount: number
     fullPipelineValidCount: number
-    releaseToAnswerP50Ms: number
-    releaseToAnswerP95Ms: number
+    stopToAnswerP50Ms: number
+    stopToAnswerP95Ms: number
     flags: {
       transcription: boolean
       meaning: boolean
@@ -178,7 +179,7 @@ const m6CaseResultSchema = z.object({
   timingsMs: z.object({
     capture: nonnegativeFinite, finalization: nonnegativeFinite, transcription: nonnegativeFinite,
     retrieval: nonnegativeFinite.optional(), generation: nonnegativeFinite.optional(),
-    releaseToVisibleAnswer: nonnegativeFinite.optional(), total: nonnegativeFinite
+    stopToVisibleAnswer: nonnegativeFinite.optional(), total: nonnegativeFinite
   }).strict(),
   usage: z.object({
     transcriptionInputTokens: tokenCount, transcriptionAudioTokens: tokenCount, transcriptionOutputTokens: tokenCount,
@@ -194,8 +195,8 @@ const aggregateGateSchema = z.object({
   transcriptionValidCount: z.number().int().nonnegative().max(M6_CORPUS_SIZE),
   meaningCorrectCount: z.number().int().nonnegative().max(M6_CORPUS_SIZE),
   fullPipelineValidCount: z.number().int().nonnegative().max(M6_FULL_PIPELINE_SIZE),
-  releaseToAnswerP50Ms: nonnegativeFinite,
-  releaseToAnswerP95Ms: nonnegativeFinite,
+  stopToAnswerP50Ms: nonnegativeFinite,
+  stopToAnswerP95Ms: nonnegativeFinite,
   flags: z.object({
     transcription: z.boolean(), meaning: z.boolean(), pipeline: z.boolean(), latency: z.boolean(), budget: z.boolean()
   }).strict()
@@ -386,7 +387,7 @@ export function newM6Report(corpus: readonly M6CorpusCase[], now = new Date()): 
 
 export function validateM6ResumeReport(value: unknown, corpus: readonly M6CorpusCase[]): M6RedactedReport {
   assertRedactedM6Report(value)
-  const parsedReport = m6RedactedReportSchema.safeParse(value)
+  const parsedReport = m6RedactedReportSchema.safeParse(normalizeLegacyM6TimingNames(value))
   if (!parsedReport.success) throw new Error('The saved M6 report has an invalid or non-redacted shape.')
   const report = parsedReport.data as M6RedactedReport
   const expectedMaximum = maximumM6CampaignCostUsd(corpus)
@@ -474,23 +475,23 @@ export function evaluateM6AggregateGate(report: M6RedactedReport): NonNullable<M
   const transcriptionValidCount = report.results.filter((item) => item.flags.transcriptionValid).length
   const meaningCorrectCount = report.results.filter((item) => item.flags.meaningCorrect).length
   const fullPipeline = report.results.filter((item) => item.fullPipeline && item.flags.pipelineValid && item.flags.evidenceValid)
-  const releaseToAnswer = fullPipeline.flatMap((item) => item.timingsMs.releaseToVisibleAnswer === undefined
+  const stopToAnswer = fullPipeline.flatMap((item) => item.timingsMs.stopToVisibleAnswer === undefined
     ? []
-    : [item.timingsMs.releaseToVisibleAnswer]
+    : [item.timingsMs.stopToVisibleAnswer]
   ).sort((left, right) => left - right)
-  const releaseToAnswerP50Ms = nearestRankPercentile(releaseToAnswer, 0.5)
-  const releaseToAnswerP95Ms = nearestRankPercentile(releaseToAnswer, 0.95)
+  const stopToAnswerP50Ms = nearestRankPercentile(stopToAnswer, 0.5)
+  const stopToAnswerP95Ms = nearestRankPercentile(stopToAnswer, 0.95)
   const flags = {
     transcription: report.results.length === M6_CORPUS_SIZE && transcriptionValidCount === M6_CORPUS_SIZE,
     meaning: meaningCorrectCount >= 18,
     pipeline: fullPipeline.length === M6_FULL_PIPELINE_SIZE,
-    latency: releaseToAnswer.length === M6_FULL_PIPELINE_SIZE && releaseToAnswerP50Ms <= 5_000 && releaseToAnswerP95Ms <= 8_000,
+    latency: stopToAnswer.length === M6_FULL_PIPELINE_SIZE && stopToAnswerP50Ms <= 5_000 && stopToAnswerP95Ms <= 8_000,
     budget: report.budget.actualUsd <= report.budget.capUsd + Number.EPSILON
   }
   return {
     accepted: report.failedIds.length === 0 && Object.values(flags).every(Boolean),
     transcriptionValidCount, meaningCorrectCount, fullPipelineValidCount: fullPipeline.length,
-    releaseToAnswerP50Ms, releaseToAnswerP95Ms, flags
+    stopToAnswerP50Ms, stopToAnswerP95Ms, flags
   }
 }
 
@@ -546,7 +547,7 @@ function validateM6CaseAccounting(result: M6CaseResult): void {
   }
   if (!result.fullPipeline && (result.usage.answerInputTokens !== 0 || result.usage.answerOutputTokens !== 0 || result.usage.answerReasoningTokens !== 0 ||
       result.versions.returnedAnswerModel !== undefined || result.timingsMs.retrieval !== undefined || result.timingsMs.generation !== undefined ||
-      result.timingsMs.releaseToVisibleAnswer !== undefined)) {
+      result.timingsMs.stopToVisibleAnswer !== undefined)) {
     throw new Error(`M6 case ${result.id} contains answer data for a transcription-only case.`)
   }
   const corePassed = result.flags.audioValid && result.flags.transcriptionValid && result.flags.wavDeleted &&
@@ -558,6 +559,40 @@ function validateM6CaseAccounting(result: M6CaseResult): void {
     throw new Error(`M6 case ${result.id} cannot pass without complete provider usage metadata.`)
   }
   if (!result.passed && !result.errorCode) throw new Error(`M6 case ${result.id} is missing a failure code.`)
+}
+
+/**
+ * M6 reports created before toggle listening used release-oriented latency
+ * names. Reading them is intentionally one-way: all newly returned and saved
+ * reports use stop-oriented names, and ambiguous reports containing both are
+ * rejected by the strict schema.
+ */
+function normalizeLegacyM6TimingNames(value: unknown): unknown {
+  if (!isPlainObject(value)) return value
+  const normalized = structuredClone(value) as Record<string, unknown>
+  if (Array.isArray(normalized.results)) {
+    normalized.results = normalized.results.map((rawResult) => {
+      if (!isPlainObject(rawResult) || !isPlainObject(rawResult.timingsMs)) return rawResult
+      const result = { ...rawResult, timingsMs: { ...rawResult.timingsMs } }
+      const timings = result.timingsMs as Record<string, unknown>
+      if ('releaseToVisibleAnswer' in timings) {
+        if ('stopToVisibleAnswer' in timings) return rawResult
+        timings.stopToVisibleAnswer = timings.releaseToVisibleAnswer
+        delete timings.releaseToVisibleAnswer
+      }
+      return result
+    })
+  }
+  if (isPlainObject(normalized.aggregateGate) && 'releaseToAnswerP50Ms' in normalized.aggregateGate) {
+    if ('stopToAnswerP50Ms' in normalized.aggregateGate || 'stopToAnswerP95Ms' in normalized.aggregateGate) return value
+    const gate = { ...normalized.aggregateGate }
+    gate.stopToAnswerP50Ms = gate.releaseToAnswerP50Ms
+    gate.stopToAnswerP95Ms = gate.releaseToAnswerP95Ms
+    delete gate.releaseToAnswerP50Ms
+    delete gate.releaseToAnswerP95Ms
+    normalized.aggregateGate = gate
+  }
+  return normalized
 }
 
 function normalizedWords(value: string): Set<string> {

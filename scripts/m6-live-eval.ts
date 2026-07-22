@@ -161,7 +161,7 @@ try {
     transcriptionMetric = undefined
     answerMetric = undefined
     try {
-      process.stdout.write(`\n${testCase.id}: ask the reviewer to say this sentence, then hold and release Control+Shift+Space:\n${testCase.expectedQuestion}\n`)
+      process.stdout.write(`\n${testCase.id}: press Control+Shift+Space once, ask the reviewer to say this sentence, then press it again:\n${testCase.expectedQuestion}\n`)
       const operationId = randomUUID()
       activeOperation = operationId
       const capture = await helper.capture(operationId, join(audioDir, `${testCase.id}.wav`), operationAbort.signal)
@@ -228,7 +228,7 @@ try {
         answerCostAccounted = true
         ledger.recordActual(answerCost)
       }
-      result.timingsMs.total = performance.now() - capture.releasedAt
+      result.timingsMs.total = performance.now() - capture.stoppedAt
       process.stdout.write(`Transient transcript (not saved): ${transcription.text}\nAutomated meaning check: ${automatedMeaning ? 'PASS' : 'REVIEW'}\n`)
       result.flags.meaningCorrect = await askYes(prompt, 'Does the transcript preserve the intended question meaning? [y/N] ')
       result.passed = result.flags.audioValid && result.flags.transcriptionValid && result.flags.wavDeleted &&
@@ -293,7 +293,7 @@ try {
   report.aggregateGate = evaluateM6AggregateGate(report)
   await writeReport(report)
   const gate = report.aggregateGate
-  process.stdout.write(`\nCampaign complete. Transcription ${gate.transcriptionValidCount}/20; meaning ${gate.meaningCorrectCount}/20; pipeline ${gate.fullPipelineValidCount}/10; renderer-confirmed release-to-visible p50 ${gate.releaseToAnswerP50Ms.toFixed(0)} ms; p95 ${gate.releaseToAnswerP95Ms.toFixed(0)} ms; cost $${ledger.spentUsd.toFixed(6)}.\n`)
+  process.stdout.write(`\nCampaign complete. Transcription ${gate.transcriptionValidCount}/20; meaning ${gate.meaningCorrectCount}/20; pipeline ${gate.fullPipelineValidCount}/10; renderer-confirmed stop-to-visible p50 ${gate.stopToAnswerP50Ms.toFixed(0)} ms; p95 ${gate.stopToAnswerP95Ms.toFixed(0)} ms; cost $${ledger.spentUsd.toFixed(6)}.\n`)
   if (!gate.flags.latency) process.stdout.write('Visible-latency acceptance remains manual: import ten operation-scoped renderer acknowledgements before M6 sign-off.\n')
   if (!gate.accepted) throw new Error('M6 strict aggregate acceptance failed. The redacted report records the blocking gate flags; no case was rerun.')
 } finally {
@@ -334,7 +334,7 @@ interface CaptureResult {
   endpointId: string
   endpointName: string
   finalizationMs: number
-  releasedAt: number
+  stoppedAt: number
 }
 
 class ProtocolV2Helper {
@@ -358,33 +358,33 @@ class ProtocolV2Helper {
   }
 
   async capture(operationId: string, path: string, signal: AbortSignal): Promise<CaptureResult> {
-    process.stdout.write('Waiting for shortcut down...\n')
-    const down = this.waitEvent('shortcutDown', 300_000, signal)
-    const up = this.waitEvent('shortcutUp', 390_000, signal)
-    void up.promise.catch(() => undefined)
+    process.stdout.write('Waiting for the first listening-toggle press...\n')
+    const firstDown = this.waitEvent('shortcutDown', 300_000, signal)
+    let secondDown: ReturnType<ProtocolV2Helper['waitEvent']> | undefined
     try {
-      await down.promise
+      await firstDown.promise
       if (signal.aborted) throw codedError('cancelled')
+      // Install the second-down waiter before helper startup finishes so a
+      // rapid stop press is latched. Key-up remains a native rearm/autorepeat
+      // event and deliberately has no evaluator action.
+      secondDown = this.waitEvent('shortcutDown', 390_000, signal)
       const started = await this.command('startCapture', { operationId, path }, ['captureStarted'], 10_000)
       if (started.operationId !== operationId) throw codedError('stale_helper_reply')
-      process.stdout.write('LISTENING — release the shortcut when the reviewer finishes.\n')
-      await up.promise
-      const releasedAt = performance.now()
-      const stopped = await this.command('stopCapture', { operationId }, ['captureStopped'], 20_000)
-      const finalizationMs = performance.now() - releasedAt
+      process.stdout.write('LISTENING — press the listening toggle again when the reviewer finishes.\n')
+      await secondDown.promise
+      const stoppedAt = performance.now()
+      const stopped = await this.command('stopCapture', { operationId, terminalReason: 'stopped' }, ['captureStopped'], 20_000)
+      const finalizationMs = performance.now() - stoppedAt
       if (stopped.operationId !== operationId) throw codedError('stale_helper_reply')
       return {
         path: String(stopped.path ?? ''), durationMs: Number(stopped.durationMs ?? 0), bytes: Number(stopped.bytes ?? 0),
         sampleRate: Number(stopped.sampleRate ?? 0), channels: Number(stopped.channels ?? 0),
         endpointId: String(stopped.endpointId ?? ''), endpointName: String(stopped.endpointName ?? ''),
-        finalizationMs, releasedAt
+        finalizationMs, stoppedAt
       }
     } finally {
-      // Both waiters are installed before awaiting Down so a rapid release is
-      // latched. Disposing the unused waiter also attaches a rejection handler,
-      // preventing a later timeout/helper-exit rejection from going unhandled.
-      down.dispose()
-      up.dispose()
+      firstDown.dispose()
+      secondDown?.dispose()
     }
   }
 

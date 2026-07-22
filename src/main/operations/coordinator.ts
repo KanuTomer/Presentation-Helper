@@ -50,7 +50,7 @@ interface ActiveOperation {
   cancelling?: Promise<void>
   terminal?: Promise<void>
   captureConfirmedAt?: number
-  releasedAt?: number
+  stoppedAt?: number
   indicatorLatencyMs?: number
   answerRenderConfirmed?: boolean
   answerVisibleAt?: number
@@ -142,7 +142,7 @@ export class OperationCoordinator {
     operation.stageStartedAtIso = this.clock.isoNow()
     operation.stageOpen = true
     if (stage === 'listening') operation.captureConfirmedAt = operation.stageStartedAt
-    if (stage === 'finalizing' && operation.releasedAt === undefined) operation.releasedAt = operation.stageStartedAt
+    if (stage === 'finalizing' && operation.stoppedAt === undefined) operation.stoppedAt = operation.stageStartedAt
     this.displayState = stage
     this.emit()
     return true
@@ -191,9 +191,9 @@ export class OperationCoordinator {
       if (outcome !== 'success' && !operation.controller.signal.aborted) operation.controller.abort()
       this.closeStage(operation)
       operation.timings.totalMs = Math.max(0, this.clock.now() - operation.startedAt)
-      if (operation.releasedAt !== undefined) {
+      if (operation.stoppedAt !== undefined) {
         if (operation.answerRenderConfirmed && operation.answerVisibleAt !== undefined) {
-          operation.timings.releaseToAnswerMs = Math.max(0, operation.answerVisibleAt - operation.releasedAt)
+          operation.timings.stopToAnswerMs = Math.max(0, operation.answerVisibleAt - operation.stoppedAt)
         }
       }
       for (const cleanup of [...operation.cleanups].reverse()) {

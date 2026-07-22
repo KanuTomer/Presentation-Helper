@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, screen } from 'electron'
+import { app, clipboard, dialog, ipcMain, screen } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { channels } from '../../shared/channels.js'
 import {
@@ -22,6 +22,7 @@ import type { TransmissionPreviewGate } from '../privacy/transmissionPreview.js'
 import { LocalDataDeletionService } from '../settings/dataDeletion.js'
 import { ShortcutSettingsTransaction } from '../settings/shortcutTransaction.js'
 import { scheduleRelaunchAfterDeletion } from './relaunchAfterDeletion.js'
+import { parseAnswerFormat, parseClipboardCode } from './interactionValidation.js'
 
 interface Services {
   store: SettingsStore
@@ -121,7 +122,10 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   handle<[string]>(channels.saveApiKey, (_event, key) => secrets.saveKey(key))
   handle(channels.deleteApiKey, () => secrets.deleteKey())
   handle(channels.testApiKey, () => ai.testKey())
-  handle<[string]>(channels.ask, (_event, question) => typedAnswers.ask(question))
+  handle<[unknown, unknown]>(channels.ask, (_event, question, requestedFormat) => {
+    if (typeof question !== 'string') throw new Error('Invalid question.')
+    return typedAnswers.ask(question, parseAnswerFormat(requestedFormat))
+  })
   handle(channels.cancel, () => audio.cancel())
   handle(channels.clearSession, () => { ai.clearSession() })
   handle(channels.getUsage, () => store.usageLedger)
@@ -162,8 +166,10 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   handle<[boolean]>(channels.clickThrough, async (_event, enabled) => { windows.setClickThrough(enabled); await store.updateSettings({ clickThrough: enabled }) })
   handle<[number]>(channels.opacity, async (_event, value) => { windows.setOpacity(value); await store.updateSettings({ opacity: value }) })
   handle(channels.showSettings, () => windows.openSettings())
-  handle(channels.startListening, () => audio.startCapture())
-  handle(channels.stopListening, () => audio.stopAndProcess())
+  handle(channels.toggleListening, () => audio.toggleListening())
+  handle<[unknown]>(channels.copyCode, (_event, value) => {
+    clipboard.writeText(parseClipboardCode(value))
+  })
   handle(channels.refreshAudioDevices, () => audio.refreshDevices(true))
   handle<[string]>(channels.ackListeningIndicator, (_event, operationId) => {
     if (typeof operationId !== 'string' || operationId.length < 1 || operationId.length > 128) throw new Error('Invalid operation identifier.')

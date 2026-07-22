@@ -107,7 +107,7 @@ export function ShortcutSettingsPanel({
     <legend>Shortcuts</legend>
     <ShortcutRecorder label="Ask" value={askShortcut} disabled={disabled} onCommit={(value) => onChange({ askShortcut: value })} />
     <ShortcutRecorder label="Hide/show" value={hideShortcut} disabled={disabled} onCommit={(value) => onChange({ hideShortcut: value })} />
-    <ShortcutRecorder label="Hold-to-listen" value={listenShortcut} disabled={disabled} onCommit={(value) => onChange({ listenShortcut: value })} />
+    <ShortcutRecorder label="Toggle system-audio listening" value={listenShortcut} disabled={disabled} onCommit={(value) => onChange({ listenShortcut: value })} />
     <div className="actions">
       <button type="button" disabled={disabled || restoreDisabled} onClick={() => void onChange({ ...DEFAULT_SHORTCUTS })}>Restore defaults</button>
     </div>

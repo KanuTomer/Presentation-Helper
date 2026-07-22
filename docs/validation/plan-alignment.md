@@ -16,7 +16,7 @@ PresenterAI remains on the chosen architecture: Electron 43 with React/TypeScrip
 | M5 | Source and automated gates pass; the real Meet/shortcut/device campaign is not accepted. |
 | M6 | Source and automated gates pass; billable validation is safety-blocked because its documented worst case exceeds the immutable campaign cap. No M6 API request was made. |
 | M7 | Source complete/offline green: the production SQLite FTS5/context/grounding evaluator passes 50/50. Formal live acceptance waits for M6 and separate spending authority. |
-| M8 | Source complete/offline green. Repair PR #4 passed the full previous-main-to-current installer lifecycle and uploaded redacted evidence; formal acceptance still waits for M2–M7 and a green post-merge `main` lifecycle. |
+| M8 | Source complete/offline green. Repair PR #4 and post-merge `main` passed the full previous-main-to-current installer lifecycle and uploaded redacted evidence; formal acceptance still waits for M2–M7. |
 | M9 | Not implemented and correctly remains experimental. |
 
 No product release gate should be described as complete while M0–M2 remain unsigned. In particular, an installable source-level beta is not the same as the plan's accepted Manual Copilot MVP or personal beta.
@@ -28,7 +28,10 @@ The stored API key remains a main-process secret: the renderer can ask for statu
 | Deviation | Why it was necessary and how risk is contained |
 |---|---|
 | M5/M6 source implementation and some M7/M8 safety scaffolding preceded M0–M2 formal acceptance. | Parallel source work was explicitly authorized. It avoided idling development while manual Windows/Meet evidence required user assistance. Validation documents preserve dependency order and make no premature acceptance claim. |
-| Helper protocol v2 adds operation IDs, readiness/features, terminal reasons, and rendered-frame acknowledgement. | The original protocol did not contain enough identity or timing data to prove race-safe hold/release, exactly one terminal path, or release-to-visible latency. Renderer exposure remains semantic and narrow. |
+| Helper protocol v2 adds operation IDs, readiness/features, terminal reasons, and rendered-frame acknowledgement. | The original protocol did not contain enough identity or timing data to prove race-safe capture, exactly one terminal path, or stop-to-visible latency. Renderer exposure remains semantic and narrow. |
+| Listening is a press-on/press-off toggle rather than hold/release. | The user explicitly requested reusable toggle behavior after testing the hold interaction. Key-up remains restricted to rearming the native hook and suppressing autorepeat; system-output capture, visible listening state, consent, cancellation, and bounded recording limits are unchanged. |
+| Programming creation requests can use structured code cards. | The user requested source code in separate ChatGPT-style containers. This remains one stateless Responses request with `store:false`, the accepted ordinary M3 schema and limits stay unchanged, code is strictly validated and rendered inert, and PresenterAI adds no execution, tools, web search, or code memory. |
+| The overlay now defaults to a wider fixed dark-glass presentation. | The prior 560px shell visibly compressed presenter content. A versioned one-time bounds migration expands legacy narrow windows while preserving later user resizing; Windows acrylic has contrast-safe CSS, reduced-transparency, and forced-colors fallbacks. This is presentation-layer hardening, not an architectural change. |
 | Raw capture is bounded in helper memory and only the final 16 kHz mono WAV is written. | This is more private than the plan's permitted temporary raw sidecar while preserving its bounded transcription flow. The 90-second/128-MiB limits prevent unbounded memory use. |
 | Terra Strong mode permits 1,200 total output tokens instead of 450. | Five accepted-gate requests exhausted 450 tokens on hidden reasoning and returned no visible structure. The strict visible schema still caps the presenter response, so the change fixes truncation without expanding visible output. Luna remains at 450. |
 | Structured answers require exactly three key points although an early shared comment allowed 2–4. | Three bounded points were required to make the accepted M3 120–220 visible-word target enforceable through Structured Outputs. |
@@ -47,25 +50,24 @@ No other material architectural deviation was found. Changes that strengthen val
 
 PR [#3](https://github.com/KanuTomer/Presentation-Helper/pull/3) merged at `986469b`. Its [PR workflow](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29513275263) and [post-merge `main` workflow](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29513301865) both reached the installer upgrade scenario, downloaded the previous successful `main` artifact, and then timed out because the new harness expected the older application to write a result-file protocol that did not exist in that version. The current packaged FTS5 and helper probes had already passed, but the upgraded application and later Delete All/uninstall assertions were never reached.
 
-The repair must start from remote `main`, use legacy-observable readiness for the previous build, retain strict launch-result hooks for the current build, and produce redacted diagnostics even when the lifecycle fails. The repair is complete only after the full local gate, a green repair PR workflow, and a green post-merge `main` workflow publish the installer, checksum manifest, and validation reports. Until then, no current artifact is eligible for independent testing.
+The repair started from remote `main`, used legacy-observable readiness for the previous build, retained strict launch-result hooks for the current build, and produced redacted diagnostics even on failure. Repair PR run 29642064032 and post-merge `main` run 29642541009 both passed and published the installer, checksum manifest, and validation reports. The `dc1b609` artifact is therefore eligible for the narrow manual-mode technical preview; subsequent source changes require a new green workflow.
 
 ## Outstanding route to the planned beta
 
-1. Repair and pass the cross-version installer lifecycle on the repair PR and post-merge `main`; publish checksums and redacted evidence.
-2. Permit only the closed manual-mode technical preview described in `docs/manual/manual-mode-technical-preview.md`; exclude independent audio and capture claims.
-3. Complete the M0–M2 and M5 user-assisted Windows matrices; the M5/M6 automated source branch is already merged.
-4. Resolve the M6 campaign budget with separate authority, then run its immutable live evidence set without retaining audio/transcripts/answers.
-5. Keep M7 source/offline status separate from its later paid live gate; require follow-up resolution, unsupported-warning, contradiction, citation, and zero-invention thresholds unchanged.
-6. Keep M8 source/offline status separate from formal acceptance until every M2–M7 predecessor is accepted.
-7. Leave M9 disabled unless its independent privacy, reliability, cost, and promotion criteria are later authorized and met.
+1. Permit only the closed manual-mode technical preview described in `docs/manual/manual-mode-technical-preview.md`; exclude independent audio and capture claims.
+2. Complete the M0–M2 and M5 user-assisted Windows matrices; the M5/M6 automated source branch is already merged.
+3. Resolve the M6 campaign budget with separate authority, then run its immutable live evidence set without retaining audio/transcripts/answers.
+4. Keep M7 source/offline status separate from its later paid live gate; require follow-up resolution, unsupported-warning, contradiction, citation, and zero-invention thresholds unchanged.
+5. Keep M8 source/offline status separate from formal acceptance until every M2–M7 predecessor is accepted.
+6. Leave M9 disabled unless its independent privacy, reliability, cost, and promotion criteria are later authorized and met.
 
 ## Branch evidence
 
 - M7 offline: 50/50 cases, 20/20 contextual follow-ups, 50/50 production FTS selections, zero failed IDs.
-- Current repair-branch regression: Vitest 284/284, .NET 29/29, Playwright 5/5, M4 50/50, M7 50/50, audit zero vulnerabilities.
+- Current regression: Vitest 323/323, .NET 30/30, Playwright 7/7, M4 50/50, M7 50/50, audit zero vulnerabilities.
 - Packaged runtime: Electron 43.1.0, SQLite 3.53.1 FTS5, helper protocol v2 with nine required features.
 - Local clean installer lifecycle: passed against SHA-256 `86F089B077221C38FB37C7739882D4C9854A72E91FA85D76FD3B1DD630C2AF27`.
 - M7/M8 PR #3 merged at `986469b`, but its PR and post-merge installer gates failed before upgrade validation because the legacy build lacked the new launch-result hook.
-- Repair PR workflow [29642064032](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29642064032): green, with lifecycle `ok=true`, exact previous-baseline provenance, installer/checksum match, M7/M8 records, and clean/upgraded payload removal. The post-merge `main` workflow remains pending and no independent-testing eligibility should be inferred before it passes.
+- Repair PR workflow [29642064032](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29642064032) and post-merge `main` workflow [29642541009](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29642541009): green, with lifecycle `ok=true`, exact previous-baseline provenance, installer/checksum match, M7/M8 records, and clean/upgraded payload removal.
 
 Repair PR #4 has supplied two useful failing-gate results without changing milestone acceptance. The first proved legacy-compatible initialization and genuine upgrade before exposing a Delete All maintenance self-lock; the second proved the corrected eight-scope Delete All path before a recursive file-enumeration race aborted the NSIS cleanup poll roughly three seconds into its 60-second allowance. The harness now treats only `ENOENT` for a concurrently vanished root or subtree as empty, continues polling any actual residual payload, propagates access and other filesystem errors, and records bounded uninstall progress. This is test hardening, not a product-architecture deviation.

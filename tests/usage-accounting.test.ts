@@ -59,6 +59,7 @@ describe('audio usage accounting', () => {
 
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
     expect(saved.windowBounds).toEqual({ x: 20, y: 20, width: 560, height: 720 })
+    expect(saved.windowLayoutRevision).toBe(1)
     expect(saved.settings.opacity).toBe(0.77)
     expect(saved.usage.inputTokens).toBe(210)
     expect(saved.usage.outputTokens).toBe(420)
@@ -180,7 +181,8 @@ describe('audio usage accounting', () => {
     await store.initialize()
     expect(store.recoveryWarning).toEqual({ code: 'invalid_json', recoveredAt: '2026-07-16T14:00:00.000Z' })
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-    expect(saved.schemaVersion).toBe(2)
+    expect(saved.schemaVersion).toBe(3)
+    expect(saved.windowLayoutRevision).toBe(1)
     expect(saved.recoveryWarning).toEqual(store.recoveryWarning)
     expect(saved.recoveryWarning).not.toHaveProperty('message')
   })
@@ -208,5 +210,69 @@ describe('audio usage accounting', () => {
     expect(store.settings).toMatchObject({ opacity: 0.81, projectSummary: 'keep this valid value', approvedVocabulary: ['FTS5'] })
     expect(store.settings.inrPerUsd).toBeUndefined()
     expect(store.recoveryWarning).toEqual({ code: 'invalid_shape', recoveredAt: '2026-07-16T14:30:00.000Z' })
+  })
+
+  it('migrates a valid version-2 file without losing local state and leaves legacy bounds pending one layout upgrade', async () => {
+    userData = await mkdtemp(join(tmpdir(), 'presenter-settings-v2-'))
+    const now = '2026-07-16T15:00:00.000Z'
+    const versionTwo = {
+      schemaVersion: 2,
+      settings: {
+        opacity: 0.73, clickThrough: true, modelMode: 'strong', normalModel: 'gpt-5.6-luna',
+        strongModel: 'gpt-5.6-terra', transcriptionModel: 'gpt-4o-mini-transcribe',
+        askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', listenShortcut: 'Control+Shift+Space',
+        selectedAudioEndpointId: 'render-device', projectSummary: 'preserved summary',
+        approvedVocabulary: ['WASAPI'], inrPerUsd: 84
+      },
+      windowBounds: { x: 2200, y: 80, width: 560, height: 690 },
+      documents: [{ id: 'doc-1', name: 'project.md', path: 'C:\\fixtures\\project.md', kind: 'markdown', chunkCount: 2, addedAt: now }],
+      captureResults: [{
+        id: 'capture-1', path: 'Snipping Tool', captureAppVersion: '1',
+        controlResult: 'overlay-visible', protectedResult: 'overlay-absent', testedAt: now, notes: 'preserve',
+        environment: { windowsBuild: '26100', presenterVersion: '0.2', electronVersion: '43.1.0', gpu: 'fixture', monitorCount: 2 }
+      }],
+      usage: {
+        inputTokens: 10, outputTokens: 5, audioMinutes: 0.25,
+        transcriptionInputTokens: 8, transcriptionAudioTokens: 6, transcriptionOutputTokens: 2,
+        estimatedUsd: 0.01, pricingVersion: 'openai-2026-07-16'
+      },
+      usageRecords: [{
+        id: 'usage-1', timestamp: now, endpoint: 'responses', requestedModel: 'gpt-5.6-luna',
+        returnedModel: 'gpt-5.6-luna', inputTokens: 10, outputTokens: 5,
+        pricingVersion: 'openai-2026-07-16', priced: true, estimatedUsd: 0.00004
+      }],
+      usageRollups: [],
+      privacyConsent: { acceptedVersion: 2, acceptedAt: now }
+    }
+    await writeFile(join(userData, 'presenterai.json'), JSON.stringify(versionTwo), 'utf8')
+    const { SettingsStore, WINDOW_LAYOUT_REVISION } = await import('../src/main/settings/store')
+    const store = new SettingsStore()
+    await store.initialize()
+
+    expect(store.recoveryWarning).toBeUndefined()
+    expect(store.settings).toMatchObject({ opacity: 0.73, projectSummary: 'preserved summary', selectedAudioEndpointId: 'render-device' })
+    expect(store.documents).toHaveLength(1)
+    expect(store.captureResults).toHaveLength(1)
+    expect(store.usageRecords).toHaveLength(1)
+    expect(store.privacyConsent).toMatchObject({
+      requiredVersion: 3,
+      acceptedVersion: 2,
+      acceptedAt: now,
+      satisfied: false
+    })
+    expect(store.windowBounds).toEqual(versionTwo.windowBounds)
+    expect(store.windowLayoutRevision).toBe(0)
+
+    await store.setWindowLayout({ x: 1930, y: 80, width: 1100, height: 690 }, WINDOW_LAYOUT_REVISION)
+    const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
+    expect(saved).toMatchObject({
+      schemaVersion: 3, windowLayoutRevision: 1,
+      windowBounds: { x: 1930, y: 80, width: 1100, height: 690 },
+      settings: { projectSummary: 'preserved summary' }
+    })
+    expect(saved.documents).toEqual(versionTwo.documents)
+    expect(saved.captureResults).toEqual(versionTwo.captureResults)
+    expect(saved.usageRecords).toEqual(versionTwo.usageRecords)
+    expect(saved.privacyConsent).toEqual(versionTwo.privacyConsent)
   })
 })

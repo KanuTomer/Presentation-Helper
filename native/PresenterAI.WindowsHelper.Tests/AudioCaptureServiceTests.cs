@@ -1,3 +1,4 @@
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace PresenterAI.WindowsHelper.Tests;
@@ -7,6 +8,17 @@ public sealed class AudioCaptureServiceTests : IDisposable
     private readonly string directory = Path.Combine(Path.GetTempPath(), "PresenterAI-helper-tests", Guid.NewGuid().ToString("N"));
 
     public AudioCaptureServiceTests() => Directory.CreateDirectory(directory);
+
+    [Fact]
+    public void ProductionFactoryEnumeratesAndCapturesRenderEndpointsOnly()
+    {
+        Assert.Equal(DataFlow.Render, WasapiLoopbackCaptureFactory.EndpointDataFlow);
+        Assert.NotEqual(DataFlow.Capture, WasapiLoopbackCaptureFactory.EndpointDataFlow);
+        WasapiLoopbackCaptureFactory.EnsureRenderEndpoint(DataFlow.Render);
+        var error = Assert.Throws<AudioCaptureException>(() =>
+            WasapiLoopbackCaptureFactory.EnsureRenderEndpoint(DataFlow.Capture));
+        Assert.Equal("device_unavailable", error.Code);
+    }
 
     [Fact]
     public async Task FinalizesOnePcm16kMonoFileWithEndpointMetadata()
@@ -24,7 +36,7 @@ public sealed class AudioCaptureServiceTests : IDisposable
         Assert.Equal(path, result.Path);
         Assert.Equal("endpoint-1", result.EndpointId);
         Assert.Equal("Test output", result.EndpointName);
-        Assert.Equal("released", result.TerminalReason);
+        Assert.Equal("stopped", result.TerminalReason);
         Assert.Equal(16_000, result.SampleRate);
         Assert.Equal(1, result.Channels);
         Assert.InRange(result.DurationMs, 490, 510);

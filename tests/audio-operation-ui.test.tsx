@@ -3,7 +3,7 @@ import React from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppStatus, PresenterAPI } from '../src/shared/contracts'
-import { AnswerRenderAcknowledger, HoldToListenButton, OperationBanner, StageTimingSummary } from '../src/renderer/operationUi'
+import { AnswerRenderAcknowledger, ToggleListenButton, OperationBanner, StageTimingSummary } from '../src/renderer/operationUi'
 
 function status(patch: Partial<AppStatus> = {}): AppStatus {
   return {
@@ -53,28 +53,25 @@ describe('audio operation UI', () => {
     await waitFor(() => expect(acknowledge).toHaveBeenCalledWith('audio-2'))
   })
 
-  it('latches a rapid pointer release by sending start and stop exactly once', async () => {
-    const start = vi.fn(async () => ({ ok: true as const })); const stop = vi.fn(async () => ({ ok: true as const }))
-    installPresenter({ startListening: start, stopListening: stop })
-    render(<HoldToListenButton status={status()} onError={() => undefined} />)
-    const button = screen.getByRole('button', { name: '◉ Hold to listen' })
-    fireEvent.pointerDown(button, { pointerId: 7 }); fireEvent.pointerUp(button, { pointerId: 7 }); fireEvent.pointerUp(button, { pointerId: 7 })
-    await waitFor(() => { expect(start).toHaveBeenCalledOnce(); expect(stop).toHaveBeenCalledOnce() })
+  it('uses one atomic action for both start and stop toggles', async () => {
+    const toggle = vi.fn(async () => ({ ok: true as const }))
+    installPresenter({ toggleListening: toggle })
+    const { rerender } = render(<ToggleListenButton status={status()} onError={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: '◉ Start listening' }))
+    await waitFor(() => expect(toggle).toHaveBeenCalledTimes(1))
+    rerender(<ToggleListenButton status={status({ operation: 'listening', operationKind: 'audio', operationId: 'audio-1' })} onError={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: '■ Stop & answer' }))
+    await waitFor(() => expect(toggle).toHaveBeenCalledTimes(2))
   })
 
-  it('clears a held-pointer latch after an external terminal transition', async () => {
-    const start = vi.fn(async () => ({ ok: true as const }))
-    const stop = vi.fn(async () => ({ ok: true as const }))
-    installPresenter({ startListening: start, stopListening: stop })
-    const { rerender } = render(<HoldToListenButton status={status()} onError={() => undefined} />)
-    fireEvent.pointerDown(screen.getByRole('button', { name: '◉ Hold to listen' }), { pointerId: 8 })
-    await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
-
-    rerender(<HoldToListenButton status={status({ operation: 'listening', operationKind: 'audio', operationId: 'audio-1' })} onError={() => undefined} />)
-    rerender(<HoldToListenButton status={status({ operation: 'finalizing', operationKind: 'audio', operationId: 'audio-1' })} onError={() => undefined} />)
-    rerender(<HoldToListenButton status={status()} onError={() => undefined} />)
-    fireEvent.pointerDown(screen.getByRole('button', { name: '◉ Hold to listen' }), { pointerId: 9 })
-    await waitFor(() => expect(start).toHaveBeenCalledTimes(2))
+  it('allows a fresh toggle from an error display and disables it during downstream work', async () => {
+    const toggle = vi.fn(async () => ({ ok: true as const }))
+    installPresenter({ toggleListening: toggle })
+    const { rerender } = render(<ToggleListenButton status={status({ operation: 'error' })} onError={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: '◉ Start listening' }))
+    await waitFor(() => expect(toggle).toHaveBeenCalledTimes(1))
+    rerender(<ToggleListenButton status={status({ operation: 'transcribing', operationKind: 'audio', operationId: 'audio-1' })} onError={() => undefined} />)
+    expect((screen.getByRole('button', { name: '◉ Start listening' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('acknowledges the first rendered answer frame with its operation ID', async () => {
@@ -88,12 +85,12 @@ describe('audio operation UI', () => {
     expect(rendered).toHaveBeenCalledWith('audio-answer-1')
   })
 
-  it('surfaces typed helper/device failures from the hold action', async () => {
+  it('surfaces typed helper/device failures from the toggle action', async () => {
     const error = { code: 'device_unavailable' as const, message: 'The selected endpoint disappeared.', retryable: true }
-    installPresenter({ startListening: vi.fn(async () => ({ ok: false as const, error })), stopListening: vi.fn(async () => ({ ok: true as const })) })
+    installPresenter({ toggleListening: vi.fn(async () => ({ ok: false as const, error })) })
     const onError = vi.fn()
-    render(<HoldToListenButton status={status()} onError={onError} />)
-    fireEvent.pointerDown(screen.getByRole('button', { name: '◉ Hold to listen' }), { pointerId: 1 })
+    render(<ToggleListenButton status={status()} onError={onError} />)
+    fireEvent.click(screen.getByRole('button', { name: '◉ Start listening' }))
     await waitFor(() => expect(onError).toHaveBeenCalledWith(error))
   })
 

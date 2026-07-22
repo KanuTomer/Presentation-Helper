@@ -18,7 +18,8 @@ import { appSettingsSchema, parseSettingsPatch, validateSettingsMutation, valida
 export { USAGE_PRICING_VERSION } from '../ai/pricing.js'
 export type { SettingsRecoveryWarning } from '../../shared/contracts.js'
 
-export const SETTINGS_SCHEMA_VERSION = 2
+export const SETTINGS_SCHEMA_VERSION = 3
+export const WINDOW_LAYOUT_REVISION = 1
 export { LISTENING_CONSENT_VERSION } from '../../shared/contracts.js'
 export const MAX_RECENT_USAGE_RECORDS = 100
 
@@ -76,6 +77,7 @@ export interface UsageLedger {
 
 interface StoredData {
   schemaVersion: typeof SETTINGS_SCHEMA_VERSION
+  windowLayoutRevision: number
   settings: AppSettings
   windowBounds?: { x: number; y: number; width: number; height: number }
   documents: DocumentInfo[]
@@ -141,12 +143,28 @@ const consentSchema: z.ZodType<StoredPrivacyConsent> = z.object({
 const recoveryWarningSchema: z.ZodType<SettingsRecoveryWarning> = z.object({
   code: z.enum(['invalid_json', 'invalid_shape', 'unsupported_schema']), recoveredAt: isoTimestamp
 }).strict()
-const storedDataSchema: z.ZodType<StoredData> = z.object({
-  schemaVersion: z.literal(SETTINGS_SCHEMA_VERSION), settings: appSettingsSchema,
-  windowBounds: boundsSchema.optional(), documents: z.array(documentSchema), captureResults: z.array(captureResultSchema),
-  usage: usageSummarySchema, usageRecords: z.array(usageRecordSchema).max(MAX_RECENT_USAGE_RECORDS),
-  usageRollups: z.array(usageRollupSchema), privacyConsent: consentSchema.optional(),
+const storedDataShape = {
+  settings: appSettingsSchema,
+  windowBounds: boundsSchema.optional(),
+  documents: z.array(documentSchema),
+  captureResults: z.array(captureResultSchema),
+  usage: usageSummarySchema,
+  usageRecords: z.array(usageRecordSchema).max(MAX_RECENT_USAGE_RECORDS),
+  usageRollups: z.array(usageRollupSchema),
+  privacyConsent: consentSchema.optional(),
   recoveryWarning: recoveryWarningSchema.optional()
+}
+const storedDataSchema: z.ZodType<StoredData> = z.object({
+  schemaVersion: z.literal(SETTINGS_SCHEMA_VERSION),
+  windowLayoutRevision: z.number().int().min(0).max(WINDOW_LAYOUT_REVISION),
+  ...storedDataShape
+}).strict()
+const storedDataV2Schema = z.object({
+  schemaVersion: z.literal(2),
+  // A synthetic installer fixture can downgrade a freshly initialized file.
+  // Ignore the future marker and still exercise the real v2 migration path.
+  windowLayoutRevision: z.number().int().optional(),
+  ...storedDataShape
 }).strict()
 const legacyStoredDataSchema = z.object({
   settings: appSettingsSchema, windowBounds: boundsSchema.optional(), documents: z.array(documentSchema),
@@ -173,7 +191,8 @@ const defaultUsage = (): UsageSummary => ({
   estimatedUsd: 0, pricingVersion: USAGE_PRICING_VERSION
 })
 const defaultData = (): StoredData => ({
-  schemaVersion: SETTINGS_SCHEMA_VERSION, settings: structuredClone(defaultSettings), documents: [], captureResults: [],
+  schemaVersion: SETTINGS_SCHEMA_VERSION, windowLayoutRevision: WINDOW_LAYOUT_REVISION,
+  settings: structuredClone(defaultSettings), documents: [], captureResults: [],
   usage: defaultUsage(), usageRecords: [], usageRollups: []
 })
 
@@ -216,6 +235,14 @@ export class SettingsStore {
     }
 
     const rawVersion = isRecord(raw) ? raw.schemaVersion : undefined
+    if (rawVersion === 2) {
+      const versionTwo = storedDataV2Schema.safeParse(raw)
+      if (versionTwo.success) {
+        this.data = this.migrateVersionTwo(versionTwo.data)
+        await this.flush()
+        return
+      }
+    }
     if (rawVersion === undefined) {
       const legacy = legacyStoredDataSchema.safeParse(raw)
       if (legacy.success) {
@@ -224,7 +251,7 @@ export class SettingsStore {
         return
       }
     }
-    const warningCode: RecoveryReason = rawVersion !== undefined && rawVersion !== SETTINGS_SCHEMA_VERSION
+    const warningCode: RecoveryReason = rawVersion !== undefined && rawVersion !== 2 && rawVersion !== SETTINGS_SCHEMA_VERSION
       ? 'unsupported_schema'
       : 'invalid_shape'
     this.data = this.migrateOrRecover(raw, warningCode)
@@ -243,6 +270,7 @@ export class SettingsStore {
   get recoveryWarning(): SettingsRecoveryWarning | undefined {
     return this.data.recoveryWarning && { ...this.data.recoveryWarning }
   }
+  get windowLayoutRevision(): number { return this.data.windowLayoutRevision }
   get privacyConsent(): PrivacyConsentStatus {
     const accepted = this.data.privacyConsent
     return {
@@ -263,6 +291,12 @@ export class SettingsStore {
 
   async setWindowBounds(bounds: NonNullable<StoredData['windowBounds']>): Promise<void> {
     this.data.windowBounds = boundsSchema.parse(bounds)
+    this.data.windowLayoutRevision = WINDOW_LAYOUT_REVISION
+    await this.flush()
+  }
+  async setWindowLayout(bounds: NonNullable<StoredData['windowBounds']>, revision = WINDOW_LAYOUT_REVISION): Promise<void> {
+    this.data.windowBounds = boundsSchema.parse(bounds)
+    this.data.windowLayoutRevision = z.number().int().min(0).max(WINDOW_LAYOUT_REVISION).parse(revision)
     await this.flush()
   }
   async setDocuments(documents: DocumentInfo[]): Promise<void> {
@@ -346,11 +380,16 @@ export class SettingsStore {
     await this.flush()
     return this.settings
   }
-  async clearWindowBounds(): Promise<void> { delete this.data.windowBounds; await this.flush() }
+  async clearWindowBounds(): Promise<void> {
+    delete this.data.windowBounds
+    this.data.windowLayoutRevision = WINDOW_LAYOUT_REVISION
+    await this.flush()
+  }
   async dismissRecoveryWarning(): Promise<void> { delete this.data.recoveryWarning; await this.flush() }
   async clearSettingsData(): Promise<void> {
     this.data.settings = structuredClone(defaultSettings)
     delete this.data.windowBounds
+    this.data.windowLayoutRevision = WINDOW_LAYOUT_REVISION
     delete this.data.privacyConsent
     delete this.data.recoveryWarning
     await this.flush()
@@ -382,6 +421,7 @@ export class SettingsStore {
   private migrateLegacy(legacy: z.infer<typeof legacyStoredDataSchema>): StoredData {
     const data: StoredData = {
       schemaVersion: SETTINGS_SCHEMA_VERSION,
+      windowLayoutRevision: legacy.windowBounds ? 0 : WINDOW_LAYOUT_REVISION,
       settings: legacy.settings,
       ...(legacy.windowBounds ? { windowBounds: legacy.windowBounds } : {}),
       documents: legacy.documents,
@@ -394,13 +434,28 @@ export class SettingsStore {
     return data
   }
 
+  private migrateVersionTwo(versionTwo: z.infer<typeof storedDataV2Schema>): StoredData {
+    const { schemaVersion: _schemaVersion, windowLayoutRevision: _ignoredLayoutRevision, ...preserved } = versionTwo
+    return {
+      ...preserved,
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      windowLayoutRevision: versionTwo.windowBounds ? 0 : WINDOW_LAYOUT_REVISION
+    }
+  }
+
   private migrateOrRecover(raw: unknown, reason: RecoveryReason): StoredData {
     if (!isRecord(raw)) return this.recoveredDefaults(reason)
-    if (raw.schemaVersion !== undefined && raw.schemaVersion !== SETTINGS_SCHEMA_VERSION) return this.recoveredDefaults(reason)
+    if (raw.schemaVersion !== undefined && raw.schemaVersion !== 2 && raw.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
+      return this.recoveredDefaults(reason)
+    }
 
     const data = defaultData()
+    const recoveredBounds = parseOptional(boundsSchema, raw.windowBounds)
+    data.windowLayoutRevision = (raw.schemaVersion === undefined || raw.schemaVersion === 2) && recoveredBounds
+      ? 0
+      : parseLayoutRevision(raw.windowLayoutRevision)
     data.settings = recoverSettings(raw.settings)
-    data.windowBounds = parseOptional(boundsSchema, raw.windowBounds)
+    data.windowBounds = recoveredBounds
     data.documents = parseArrayItems(documentSchema, raw.documents)
     data.captureResults = parseArrayItems(captureResultSchema, raw.captureResults)
     data.usage = usageSummarySchema.safeParse(raw.usage).success
@@ -468,6 +523,11 @@ function parseOptional<T>(schema: z.ZodType<T>, value: unknown): T | undefined {
   if (value === undefined) return undefined
   const parsed = schema.safeParse(value)
   return parsed.success ? parsed.data : undefined
+}
+
+function parseLayoutRevision(value: unknown): number {
+  const parsed = z.number().int().min(0).max(WINDOW_LAYOUT_REVISION).safeParse(value)
+  return parsed.success ? parsed.data : WINDOW_LAYOUT_REVISION
 }
 
 function parseArrayItems<T>(schema: z.ZodType<T>, value: unknown): T[] {

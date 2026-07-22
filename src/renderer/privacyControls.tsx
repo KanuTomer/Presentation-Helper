@@ -54,10 +54,10 @@ export function ListeningConsentPanel({
   }
   return <fieldset className="listening-consent">
     <legend>First-use listening acknowledgement</legend>
-    <p>PresenterAI captures bounded system-output audio only while you explicitly hold the listening shortcut. Listening starts OFF on every launch.</p>
+    <p>PresenterAI captures bounded system-output audio only after you explicitly toggle listening on. Press the listening control again to stop and answer. Listening starts OFF on every launch.</p>
     <p>Live assistance may be restricted in interviews, examinations, meetings, or graded work. Confirm the applicable rules and obtain consent where required.</p>
     <label className="toggle"><input type="checkbox" checked disabled /> The red listening indicator will remain visible during capture.</label>
-    <button type="button" className="primary" disabled={disabled || pending} onClick={() => void accept()}>{pending ? 'Saving…' : 'I understand and enable hold-to-listen'}</button>
+    <button type="button" className="primary" disabled={disabled || pending} onClick={() => void accept()}>{pending ? 'Saving…' : 'I understand and enable toggle listening'}</button>
     {error && <p className="field-error" role="alert">{error}</p>}
   </fieldset>
 }

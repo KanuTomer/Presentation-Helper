@@ -140,7 +140,7 @@ describe('M6 live evaluator', () => {
       },
       timingsMs: {
         ...fixtureResult(item.id).timingsMs,
-        ...(item.fullPipeline ? { releaseToVisibleAnswer: 4_000 } : {}),
+        ...(item.fullPipeline ? { stopToVisibleAnswer: 4_000 } : {}),
         total: item.fullPipeline ? 3_800 : 500
       },
       versions: item.fullPipeline
@@ -161,13 +161,13 @@ describe('M6 live evaluator', () => {
     report.budget.actualUsd = report.results.reduce((total, item) => total + item.estimatedCostUsd, 0)
     expect(evaluateM6AggregateGate(report)).toMatchObject({
       accepted: true, meaningCorrectCount: 18, fullPipelineValidCount: 10,
-      releaseToAnswerP50Ms: 4_000, releaseToAnswerP95Ms: 4_000
+      stopToAnswerP50Ms: 4_000, stopToAnswerP95Ms: 4_000
     })
 
     report.results[2]!.flags.meaningCorrect = false
     expect(evaluateM6AggregateGate(report).flags.meaning).toBe(false)
     report.results[2]!.flags.meaningCorrect = true
-    report.results[0]!.timingsMs.releaseToVisibleAnswer = 8_001
+    report.results[0]!.timingsMs.stopToVisibleAnswer = 8_001
     expect(evaluateM6AggregateGate(report).flags.latency).toBe(false)
   })
 
@@ -176,9 +176,34 @@ describe('M6 live evaluator', () => {
     expect(evaluateM6AggregateGate(report).flags.latency).toBe(false)
     expect(evaluateM6AggregateGate(report)).toMatchObject({
       accepted: false,
-      releaseToAnswerP50Ms: 0,
-      releaseToAnswerP95Ms: 0
+      stopToAnswerP50Ms: 0,
+      stopToAnswerP95Ms: 0
     })
+  })
+
+  it('reads legacy release-oriented latency fields but returns only stop-oriented names', () => {
+    const report = completePassingReport()
+    report.results.slice(0, 10).forEach((result) => { result.timingsMs.stopToVisibleAnswer = 4_000 })
+    report.aggregateGate = evaluateM6AggregateGate(report)
+    const legacy = structuredClone(report) as unknown as {
+      results: Array<{ timingsMs: Record<string, unknown> }>
+      aggregateGate: Record<string, unknown>
+    }
+    for (const result of legacy.results) {
+      if (result.timingsMs.stopToVisibleAnswer === undefined) continue
+      result.timingsMs.releaseToVisibleAnswer = result.timingsMs.stopToVisibleAnswer
+      delete result.timingsMs.stopToVisibleAnswer
+    }
+    legacy.aggregateGate.releaseToAnswerP50Ms = legacy.aggregateGate.stopToAnswerP50Ms
+    legacy.aggregateGate.releaseToAnswerP95Ms = legacy.aggregateGate.stopToAnswerP95Ms
+    delete legacy.aggregateGate.stopToAnswerP50Ms
+    delete legacy.aggregateGate.stopToAnswerP95Ms
+
+    const resumed = validateM6ResumeReport(legacy, corpus)
+
+    expect(resumed.results[0]!.timingsMs.stopToVisibleAnswer).toBe(4_000)
+    expect(resumed.aggregateGate).toMatchObject({ stopToAnswerP50Ms: 4_000, stopToAnswerP95Ms: 4_000 })
+    expect(JSON.stringify(resumed)).not.toContain('releaseTo')
   })
 })
 

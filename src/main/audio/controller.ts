@@ -24,7 +24,7 @@ interface CaptureSession {
   captureCommandIssued: boolean
   helperTerminal: boolean
   filePresent: boolean
-  releaseRequested: boolean
+  stopRequested: boolean
   cancelRequested: boolean
   processing: boolean
   terminal: boolean
@@ -72,9 +72,12 @@ export class AudioController {
     await this.cleanupStale()
     this.helper.onState = () => this.notify()
     this.helper.onShortcutDown = () => {
-      void this.startCapture().then((result) => { if (!result.ok) this.report(result.error) })
+      void this.toggleListening().then((result) => { if (!result.ok) this.report(result.error) })
     }
-    this.helper.onShortcutUp = () => { void this.stopAndProcess() }
+    // The native hook still emits key-up so it can rearm the configured
+    // accelerator and suppress autorepeat. Toggle semantics intentionally do
+    // not attach an application action to release.
+    this.helper.onShortcutUp = () => undefined
     this.helper.onCaptureLimitReached = (operationId, reason) => {
       const session = this.session
       if (!session || session.operation.id !== operationId || session.processing || session.terminal) return
@@ -89,7 +92,7 @@ export class AudioController {
 
   async configureShortcut(accelerator: string): Promise<void> {
     if (!this.helper.available) {
-      throw operationError('helper_unavailable', 'The Windows helper must be ready before changing the hold-to-listen shortcut.', true)
+      throw operationError('helper_unavailable', 'The Windows helper must be ready before changing the listening toggle shortcut.', true)
     }
     await this.helper.command({ type: 'configureShortcut', accelerator }, ['shortcutConfigured', 'error'])
   }
@@ -131,7 +134,7 @@ export class AudioController {
     const session: CaptureSession = {
       operation, path: join(directory, `${(this.options.idGenerator ?? randomUUID)()}.wav`),
       captureStarted: false, captureCommandIssued: false, helperTerminal: false, filePresent: false,
-      releaseRequested: false, cancelRequested: false, processing: false, terminal: false
+      stopRequested: false, cancelRequested: false, processing: false, terminal: false
     }
     this.session = session
     this.warning = undefined
@@ -174,7 +177,7 @@ export class AudioController {
       this.helper.setLifecycle('capturing')
       if (operation.signal.aborted || session.cancelRequested) {
         await this.cancelSession(session)
-      } else if (session.releaseRequested) {
+      } else if (session.stopRequested) {
         void this.processCapture(session)
       } else {
         this.operations.transition(operation.id, 'listening')
@@ -195,6 +198,23 @@ export class AudioController {
     }
   }
 
+  /**
+   * Atomically toggles the single application-wide audio operation. A second
+   * press during helper startup is latched and finalized after capture starts;
+   * presses during downstream processing remain Busy rather than accidentally
+   * starting a new capture.
+   */
+  async toggleListening(): Promise<OperationActionResult> {
+    const current = this.operations.current
+    if (!current) return this.startCapture()
+    if (current.kind !== 'audio') {
+      return failure('busy', 'Another PresenterAI operation is already active.', false)
+    }
+    const stage = this.operations.snapshot().operation
+    if (stage === 'starting_capture' || stage === 'listening') return this.stopAndProcess()
+    return failure('busy', 'Wait for PresenterAI to finish processing the current recording.', false)
+  }
+
   async stopAndProcess(): Promise<OperationActionResult> {
     const session = this.session
     if (!session || !this.operations.isCurrent(session.operation.id)) {
@@ -202,7 +222,7 @@ export class AudioController {
     }
     const stage = this.operations.snapshot().operation
     if (stage === 'starting_capture') {
-      session.releaseRequested = true
+      session.stopRequested = true
       this.notify()
       return { ok: true }
     }
@@ -274,7 +294,7 @@ export class AudioController {
     try {
       this.operations.transition(operation.id, 'finalizing')
       const event = await this.helper.command({
-        type: 'stopCapture', operationId: operation.id, terminalReason: 'released'
+        type: 'stopCapture', operationId: operation.id, terminalReason: 'stopped'
       }, ['captureStopped', 'error'], 30_000)
       validateOperationEvent(event, operation.id)
       session.helperTerminal = true
@@ -376,7 +396,7 @@ export class AudioController {
     } catch (error) {
       const message = error instanceof Error && error.message
         ? error.message
-        : 'The hold-to-listen shortcut could not be configured.'
+        : 'The listening toggle shortcut could not be configured.'
       await this.helper.stopProcess()
       this.helper.setFailure(message)
       this.warning = message

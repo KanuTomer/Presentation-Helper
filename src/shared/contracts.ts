@@ -22,6 +22,7 @@ export const operationStates = [
 export type OperationState = (typeof operationStates)[number]
 export type OperationKind = 'typed' | 'audio'
 export type ModelMode = 'normal' | 'strong'
+export type AnswerFormat = 'auto' | 'code'
 export type HelperLifecycle = 'missing' | 'starting' | 'ready' | 'capturing' | 'failed'
 export type CaptureTestOutcome = 'overlay-absent' | 'overlay-black' | 'overlay-visible' | 'unsupported' | 'untested'
 export const aiErrorCodes = [
@@ -52,11 +53,18 @@ export interface OperationTimings {
   transcriptionMs?: number
   retrievalMs?: number
   generationMs?: number
+  stopToAnswerMs?: number
+  /** Legacy validation artifacts only. New operations emit stopToAnswerMs. */
   releaseToAnswerMs?: number
   totalMs?: number
 }
 
 export interface Evidence { chunkId: string; documentName: string; location: string }
+export interface CodeBlock {
+  language: string
+  title?: string
+  code: string
+}
 export interface AssistantResponse {
   category: QuestionCategory
   support: SupportLevel
@@ -66,7 +74,23 @@ export interface AssistantResponse {
   ifChallenged: string
   warning?: string
   evidence: Evidence[]
+  codeBlocks?: CodeBlock[]
 }
+
+export type CodeAssistantResponse = AssistantResponse & { codeBlocks: CodeBlock[] }
+
+export const codeBlockSchema = z.object({
+  language: unicodeBoundedString(1, 32).regex(/^[\p{L}\p{N}][\p{L}\p{N}+.#_-]*$/u, 'Use a short programming-language identifier.'),
+  title: unicodeBoundedString(1, 120).optional(),
+  code: unicodeBoundedString(1, 8_000).refine((value) => value.trim().length > 0, 'Code cannot be blank.')
+})
+
+export const codeBlocksSchema = z.array(codeBlockSchema).min(1).max(3).superRefine((blocks, context) => {
+  const aggregateLength = blocks.reduce((total, block) => total + Array.from(block.code).length, 0)
+  if (aggregateLength > 16_000) {
+    context.addIssue({ code: 'custom', message: 'Combined code is limited to 16,000 Unicode characters.' })
+  }
+})
 
 export const assistantResponseSchema = z.object({
   category: z.enum(questionCategories),
@@ -78,8 +102,11 @@ export const assistantResponseSchema = z.object({
   warning: z.string().max(800).optional(),
   evidence: z.array(z.object({
     chunkId: z.string(), documentName: z.string(), location: z.string()
-  })).max(8)
+  })).max(8),
+  codeBlocks: z.array(codeBlockSchema).max(3).optional()
 })
+
+export const codeAssistantResponseSchema = assistantResponseSchema.extend({ codeBlocks: codeBlocksSchema })
 
 export const questionSchema = z.string().trim().min(1, 'Enter a question first.').max(4_000, 'Questions are limited to 4,000 characters.')
 export const aiErrorInfoSchema = z.object({ code: z.enum(aiErrorCodes), message: z.string().min(1).max(800), retryable: z.boolean() })
@@ -247,7 +274,10 @@ export interface PrivacyConsentStatus {
   acceptedAt?: string
   satisfied: boolean
 }
-export const LISTENING_CONSENT_VERSION = 2
+// Version 3 records the material change from hold/release capture to a
+// persistent press-on/press-off toggle. Earlier consent remains visible as
+// history but must not authorize the new interaction silently.
+export const LISTENING_CONSENT_VERSION = 3
 
 export interface OutboundTransmissionPreview {
   operationId: string
@@ -366,7 +396,7 @@ export interface PresenterAPI {
   saveApiKey(key: string): Promise<void>
   deleteApiKey(): Promise<void>
   testApiKey(): Promise<{ ok: boolean; message: string }>
-  ask(question: string): Promise<AskResult>
+  ask(question: string, format?: AnswerFormat): Promise<AskResult>
   cancel(): Promise<OperationActionResult>
   selectDocuments(): Promise<DocumentImportResult>
   listDocuments(): Promise<DocumentInfo[]>
@@ -385,8 +415,8 @@ export interface PresenterAPI {
   setClickThrough(enabled: boolean): Promise<void>
   setOpacity(value: number): Promise<void>
   showSettings(): Promise<void>
-  startListening(): Promise<OperationActionResult>
-  stopListening(): Promise<OperationActionResult>
+  toggleListening(): Promise<OperationActionResult>
+  copyCode(code: string): Promise<void>
   ackListeningIndicator(operationId: string): Promise<void>
   ackAnswerVisible(operationId: string): Promise<void>
   refreshAudioDevices(): Promise<AudioDevice[]>

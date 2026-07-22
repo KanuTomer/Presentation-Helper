@@ -56,6 +56,44 @@ test('registers renderer IPC before delayed helper initialization completes', as
   }).toBe(true)
 })
 
+test('reuses the system-audio toggle after a completed terminal path', async () => {
+  const topmost = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())
+  const recoveryShortcut = () => application.evaluate(({ globalShortcut }) => globalShortcut.isRegistered('Control+Shift+I'))
+  expect(await topmost()).toBe(true)
+  expect(await recoveryShortcut()).toBe(true)
+  const readiness = await page.evaluate(async () => {
+    const status = await window.presenter.getStatus()
+    if (!status.privacyConsent.satisfied) {
+      await window.presenter.acceptListeningConsent(status.privacyConsent.requiredVersion)
+    }
+    return window.presenter.toggleListening()
+  })
+  expect(readiness).toEqual({ ok: true })
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).operation).toBe('listening')
+  expect(await topmost()).toBe(true)
+  expect(await recoveryShortcut()).toBe(true)
+  await page.waitForTimeout(600)
+  expect(await page.evaluate(() => window.presenter.toggleListening())).toEqual({ ok: true })
+  await expect.poll(async () => {
+    const status = await page.evaluate(() => window.presenter.getStatus())
+    return !status.temporaryAudioExists && (status.operation === 'idle' || status.operation === 'error')
+  }, { timeout: 30_000 }).toBe(true)
+  expect(await topmost()).toBe(true)
+  expect(await recoveryShortcut()).toBe(true)
+
+  expect(await page.evaluate(() => window.presenter.toggleListening())).toEqual({ ok: true })
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).operation).toBe('listening')
+  expect(await topmost()).toBe(true)
+  expect(await recoveryShortcut()).toBe(true)
+  expect(await page.evaluate(() => window.presenter.cancel())).toEqual({ ok: true })
+  await expect.poll(async () => {
+    const status = await page.evaluate(() => window.presenter.getStatus())
+    return { operation: status.operation, temporaryAudioExists: status.temporaryAudioExists }
+  }).toEqual({ operation: 'idle', temporaryAudioExists: false })
+  expect(await topmost()).toBe(true)
+  expect(await recoveryShortcut()).toBe(true)
+})
+
 test('creates a protected overlay with hardened web preferences and clamped bounds', async () => {
   const state = await application.evaluate(({ BrowserWindow, screen }) => {
     const window = BrowserWindow.getAllWindows()[0]!
@@ -77,6 +115,23 @@ test('creates a protected overlay with hardened web preferences and clamped boun
     preferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
   })
   expect(state.contained, `bounds ${JSON.stringify(state.bounds)} (content ${JSON.stringify(state.contentBounds)}) were outside work areas ${JSON.stringify(state.workAreas)}`).toBe(true)
+  // DWM can add a small native shadow outside a transparent frameless
+  // window. Validate the requested content width and bound the decoration.
+  expect(state.contentBounds.width).toBeGreaterThanOrEqual(680)
+  expect(state.contentBounds.width).toBeLessThanOrEqual(1116)
+  expect(Math.abs(state.bounds.width - state.contentBounds.width)).toBeLessThanOrEqual(16)
+})
+
+test('shows the wide glass composer and supports a per-request Code override', async () => {
+  await page.getByRole('button', { name: 'copilot' }).click()
+  const auto = page.getByRole('button', { name: 'Auto' })
+  const code = page.getByRole('button', { name: '</> Code' })
+  await expect(auto).toHaveAttribute('aria-pressed', 'true')
+  await code.click()
+  await expect(code).toHaveAttribute('aria-pressed', 'true')
+  await expect(auto).toHaveAttribute('aria-pressed', 'false')
+  const shell = page.locator('.shell')
+  await expect(shell).toHaveCSS('border-radius', '24px')
 })
 
 test('provides tray recovery, hide/show, and emergency click-through escape', async () => {

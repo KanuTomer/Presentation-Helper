@@ -15,10 +15,10 @@ This gate reuses the immutable 20 audio captures designated in the M5 campaign. 
 - Persist only case IDs, pass/fail flags, model IDs, timings, token usage, price-version metadata, estimated cost, and failed IDs.
 - Never persist credentials, audio, transcripts, prompts, answers, or reasoning content.
 
-Latest offline preflight: 2026-07-16, 20-case corpus / 10 full-pipeline cases, **zero network requests**.
+Latest offline preflight: 2026-07-18, 20-case corpus / 10 full-pipeline cases, **zero network requests**.
 
-- Practical projected estimate: **$0.145567**.
-- Documented worst-case bound: **$0.641867**.
+- Practical projected estimate: **$0.148247**.
+- Documented worst-case bound: **$0.644547**.
 - Immutable live cap: **$0.15**.
 - `strictCampaignFeasible=false`.
 - `billableExecutionEnabled=false`.
@@ -42,17 +42,17 @@ Bounded audio is transmitted to the transcription endpoint and selected M4 conte
 | M6-AUTO-09 | Only selected M4 chunks are sent; citations remain validated | Pass | Cross-reference accepted `milestone-4.md`; context/citation tests remain green |
 | M6-AUTO-10 | Stage timings/usage contain no audio, transcript, prompt, or answer | Pass | Timing/usage/redaction tests and offline report scan |
 
-Aggregate non-billable evidence: 196 Vitest tests in 28 files, 29/29 .NET tests, 5/5 Playwright Electron tests, zero high-severity audit findings, and the accepted 50/50 M4 corpus.
+Aggregate non-billable evidence: 323 Vitest tests in 44 files, 30/30 .NET tests, 7/7 Playwright Electron tests, zero dependency vulnerabilities, and the accepted 50/50 M4 corpus.
 
 ## Renderer-visible latency evidence
 
-Release-to-visible-answer acceptance must use the production app's operation-scoped renderer frame acknowledgement. An imported or manually entered standalone timing value is not bound strongly enough to the same audio operation and therefore cannot close the p50/p95 gate by itself. During the user-assisted campaign, transiently verify that the acknowledgement belongs to the active operation, then persist only its case ID and timing. Internal pipeline `total` timing remains diagnostic only.
+Stop-to-visible-answer acceptance must use the production app's operation-scoped renderer frame acknowledgement. An imported or manually entered standalone timing value is not bound strongly enough to the same audio operation and therefore cannot close the p50/p95 gate by itself. During the user-assisted campaign, transiently verify that the acknowledgement belongs to the active operation, then persist only its case ID and timing. Internal pipeline `total` timing remains diagnostic only. Legacy reports using release-oriented timing field names are migrated when read; all new reports emit stop-oriented names.
 
 ## Live twenty-case transcription campaign
 
 Human meaning review is transient. Record only the outcome flag; do not copy transcript or answer text into this file.
 
-| Case ID | M5 trial | Structured | Meaning correct | Continued E2E | Transcription ms | Retrieval ms | Generation ms | Internal total ms | Release→visible ms | Temp gone | Tokens / cost | Result |
+| Case ID | M5 trial | Structured | Meaning correct | Continued E2E | Transcription ms | Retrieval ms | Generation ms | Internal total ms | Stop→visible ms | Temp gone | Tokens / cost | Result |
 |---|---:|---|---|---|---:|---:|---:|---:|---:|---|---|---|
 | M6-LIVE-01–20 | | | | | | | | | | | | Untested |
 
@@ -63,8 +63,8 @@ Designate exactly ten cases for the complete transcription-to-answer path before
 - Valid structured transcription results: ___/20; required 20/20.
 - Correct reviewer-question meaning: ___/20; required at least 18/20.
 - Complete E2E cases: ___/10; required 10/10 terminal outcomes.
-- Release-to-visible-answer p50: ___ ms; required ≤5,000 ms.
-- Release-to-visible-answer p95: ___ ms; required ≤8,000 ms.
+- Stop-to-visible-answer p50: ___ ms; required ≤5,000 ms.
+- Stop-to-visible-answer p95: ___ ms; required ≤8,000 ms.
 - Temporary WAV absent after all outcomes: ___/20; required 20/20.
 - Actual estimated spend: $___; required ≤$0.15.
 - Failed/blocking case IDs:

@@ -36,6 +36,7 @@
     "fflate": "^0.8.2",
     "openai": "6.46.0",
     "pdfjs-dist": "6.1.200",
+    "prism-react-renderer": "2.4.1",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "zod": "^4.1.12"

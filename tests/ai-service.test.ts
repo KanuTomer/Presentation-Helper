@@ -260,6 +260,82 @@ describe('manual AI service', () => {
   })
 })
 
+describe('structured code AI service', () => {
+  const codeResponse = {
+    ...response,
+    codeBlocks: [{
+      language: 'tsx', title: null,
+      code: 'export function SearchDropdown(): JSX.Element {\n  return <input aria-label="Search" />\n}'
+    }]
+  }
+
+  it('automatically uses one stateless code-schema request for a programming creation question', async () => {
+    const create = vi.fn(async () => apiResponse(codeResponse))
+    const { service } = harness(create)
+    const result = await service.ask('Can you design the code for a dropdown search box in React?')
+
+    expect(result.codeBlocks).toEqual([{
+      language: 'tsx',
+      code: 'export function SearchDropdown(): JSX.Element {\n  return <input aria-label="Search" />\n}'
+    }])
+    expect(create).toHaveBeenCalledOnce()
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      model: 'gpt-5.6-luna', reasoning: { effort: 'none' }, max_output_tokens: 2_000, store: false,
+      text: { format: { type: 'json_schema', name: 'presenter_code_response', strict: true } }
+    })
+    expect(String(create.mock.calls[0]?.[0].instructions)).toContain('put every source-code fragment in CODE BLOCKS')
+  })
+
+  it('uses the Strong code budget and low verbosity for an explicit Code override', async () => {
+    const create = vi.fn(async () => apiResponse(codeResponse, { model: 'gpt-5.6-terra-2026-06-01' }))
+    const { service, provider } = harness(create)
+    provider.settings.modelMode = 'strong'
+    await service.ask('Explain eventual consistency.', { answerFormat: 'code' })
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      model: 'gpt-5.6-terra', reasoning: { effort: 'low' }, max_output_tokens: 3_000,
+      text: { verbosity: 'low', format: { name: 'presenter_code_response' } }
+    })
+  })
+
+  it('applies automatic code routing to direct generate calls used by audio transcripts', async () => {
+    const create = vi.fn(async () => apiResponse(codeResponse))
+    const { service } = harness(create)
+    await service.generate('Write a JavaScript function to sort these values.', [])
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      max_output_tokens: 2_000, text: { format: { name: 'presenter_code_response' } }
+    })
+  })
+
+  it('rejects oversized aggregate code and still records returned usage', async () => {
+    const create = vi.fn(async () => apiResponse({
+      ...response,
+      codeBlocks: [
+        { language: 'js', title: null, code: 'a'.repeat(6_000) },
+        { language: 'css', title: null, code: 'b'.repeat(6_000) },
+        { language: 'html', title: null, code: 'c'.repeat(6_000) }
+      ]
+    }))
+    const { service, usage } = harness(create)
+    await expect(service.ask('Generate code for a web component.')).rejects.toMatchObject({ code: 'malformed_response' })
+    expect(create).toHaveBeenCalledOnce()
+    expect(usage).toHaveBeenCalledWith(50, 30)
+  })
+
+  it('does not include generated code in rolling conversation summaries', async () => {
+    const secretCode = 'const PRIVATE_GENERATED_CODE = "must-not-enter-context";'
+    const requests: Record<string, unknown>[] = []
+    const { service } = harness(async (body) => {
+      requests.push(body)
+      return requests.length === 1
+        ? apiResponse({ ...codeResponse, codeBlocks: [{ language: 'js', title: null, code: secretCode }] })
+        : apiResponse(response)
+    })
+    await service.ask('Write a JavaScript function for a dropdown.')
+    await service.ask('What is eventual consistency?')
+    expect(String(requests[1]?.input)).not.toContain(secretCode)
+  })
+})
+
 describe('AI error and retry contract', () => {
   it.each([
     [{ status: 401 }, 'invalid_key', false], [{ status: 429, code: 'rate_limit_exceeded' }, 'rate_limit', true],

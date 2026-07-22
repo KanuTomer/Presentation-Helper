@@ -73,7 +73,7 @@ export function validateSettingsMutation(
   const shortcuts = [
     ['Ask', canonicalAccelerator(next.askShortcut)],
     ['Hide/show', canonicalAccelerator(next.hideShortcut)],
-    ['Hold-to-listen', canonicalAccelerator(next.listenShortcut)]
+    ['Listening toggle', canonicalAccelerator(next.listenShortcut)]
   ] as const
   for (const [label, accelerator] of shortcuts) {
     if (accelerator === emergencyShortcut) throw new Error(`${label} cannot replace the emergency interaction shortcut.`)

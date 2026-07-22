@@ -40,6 +40,16 @@ describe('typed answer outbound preview orchestration', () => {
     expect(h.preview.clear).toHaveBeenCalledOnce()
   })
 
+  it('passes the validated per-request Code override through the preview pipeline', async () => {
+    const h = harness(async () => undefined)
+    await expect(h.controller.ask('Explain eventual consistency.', 'code')).resolves.toEqual({ ok: true, response })
+    expect(h.ai.generate).toHaveBeenCalledWith(
+      'Explain eventual consistency.',
+      [],
+      expect.objectContaining({ answerFormat: 'code', signal: expect.any(AbortSignal) })
+    )
+  })
+
   it('never dispatches generation after preview timeout or cancellation', async () => {
     const unavailable = harness(async () => { throw operationError('privacy_preview_unavailable', 'Preview unavailable.', true) })
     await expect(unavailable.controller.ask('Explain caching.')).resolves.toMatchObject({
