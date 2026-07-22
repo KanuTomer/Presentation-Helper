@@ -35,12 +35,12 @@ describe('operation coordinator', () => {
     expect(coordinator.snapshot()).toMatchObject({
       operation: 'idle', answerRenderConfirmed: true, operationTimings: {
         captureStartMs: 20, listeningMs: 300, finalizationMs: 40, transcriptionMs: 100,
-        releaseToAnswerMs: 140, totalMs: 460
+        stopToAnswerMs: 140, totalMs: 460
       }
     })
   })
 
-  it('does not claim release-to-visible timing when the renderer never acknowledges the answer', async () => {
+  it('does not claim stop-to-visible timing when the renderer never acknowledges the answer', async () => {
     vi.useFakeTimers()
     const { coordinator, tick } = harness()
     const operation = coordinator.begin('audio', 'starting_capture')
@@ -51,7 +51,7 @@ describe('operation coordinator', () => {
     await expect(visible).resolves.toBe(false)
     await coordinator.finish(operation.id, 'error', { code: 'timeout', message: 'Not visible.', retryable: true })
     expect(coordinator.snapshot()).toMatchObject({ answerRenderConfirmed: false })
-    expect(coordinator.snapshot().operationTimings.releaseToAnswerMs).toBeUndefined()
+    expect(coordinator.snapshot().operationTimings.stopToAnswerMs).toBeUndefined()
     vi.useRealTimers()
   })
 
@@ -63,7 +63,7 @@ describe('operation coordinator', () => {
     tick(25); coordinator.acknowledgeAnswerVisible(operation.id)
     await expect(coordinator.waitForAnswerVisible(operation.id)).resolves.toBe(true)
     tick(500); await coordinator.finish(operation.id, 'success')
-    expect(coordinator.snapshot().operationTimings.releaseToAnswerMs).toBe(25)
+    expect(coordinator.snapshot().operationTimings.stopToAnswerMs).toBe(25)
   })
 
   it('keeps API generation timing separate from renderer acknowledgement latency', async () => {
@@ -79,7 +79,46 @@ describe('operation coordinator', () => {
     tick(400); coordinator.acknowledgeAnswerVisible(operation.id)
     await visible
     await coordinator.finish(operation.id, 'success')
-    expect(coordinator.snapshot().operationTimings).toMatchObject({ generationMs: 50, releaseToAnswerMs: 485 })
+    expect(coordinator.snapshot().operationTimings).toMatchObject({ generationMs: 50, stopToAnswerMs: 485 })
+  })
+
+  it('records stop-to-transcript and transcript render acknowledgement timing', async () => {
+    const { coordinator, tick } = harness()
+    const operation = coordinator.begin('audio', 'starting_capture')
+    tick(10); coordinator.transition(operation.id, 'listening')
+    tick(100); coordinator.transition(operation.id, 'finalizing')
+    tick(20); coordinator.transition(operation.id, 'transcribing')
+    tick(80); coordinator.completeCurrentStage(operation.id)
+    const visible = coordinator.waitForTranscriptVisible(operation.id)
+    tick(25); coordinator.acknowledgeTranscriptVisible(operation.id)
+    await expect(visible).resolves.toBe(true)
+    await coordinator.finish(operation.id, 'success')
+    expect(coordinator.snapshot()).toMatchObject({
+      operation: 'idle', transcriptRenderConfirmed: true, transcriptRenderLatencyMs: 25,
+      operationTimings: { transcriptionMs: 80, stopToTranscriptMs: 125, totalMs: 235 }
+    })
+  })
+
+  it('fails transcript visibility closed and ignores late or stale acknowledgements', async () => {
+    vi.useFakeTimers()
+    const { coordinator, tick } = harness()
+    const operation = coordinator.begin('audio', 'starting_capture')
+    tick(10); coordinator.transition(operation.id, 'listening')
+    tick(100); coordinator.transition(operation.id, 'finalizing')
+    tick(20); coordinator.transition(operation.id, 'transcribing')
+    const visible = coordinator.waitForTranscriptVisible(operation.id, 50)
+    coordinator.acknowledgeTranscriptVisible('stale-operation')
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(visible).resolves.toBe(false)
+    coordinator.acknowledgeTranscriptVisible(operation.id)
+    await coordinator.finish(operation.id, 'error', {
+      code: 'transcript_display_unavailable', message: 'Draft not visible.', retryable: true
+    })
+    expect(coordinator.snapshot()).toMatchObject({
+      operation: 'error', transcriptRenderConfirmed: false, transcriptRenderLatencyMs: undefined
+    })
+    expect(coordinator.snapshot().operationTimings.stopToTranscriptMs).toBeUndefined()
+    vi.useRealTimers()
   })
 
   it('rejects overlap and aborts through one cancellation handler', async () => {

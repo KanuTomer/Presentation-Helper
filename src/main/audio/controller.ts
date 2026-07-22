@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { HelperClient, HelperClientError, type HelperEvent } from './helperClient.js'
 import type {
-  AiErrorInfo, AssistantResponse, AudioCaptureResult, AudioDevice, OperationActionResult
+  AiErrorInfo, AudioCaptureResult, AudioDevice, OperationActionResult, TranscriptionDraft
 } from '../../shared/contracts.js'
 import type { SettingsStore } from '../settings/store.js'
 import type { AiService } from '../ai/service.js'
@@ -13,8 +13,7 @@ import {
 } from '../operations/coordinator.js'
 import { validatePresenterWav } from './wavValidation.js'
 import {
-  buildResponseTransmissionPreview, buildTranscriptionTransmissionPreview,
-  type TransmissionPreviewGate
+  buildTranscriptionTransmissionPreview, type TransmissionPreviewGate
 } from '../privacy/transmissionPreview.js'
 
 interface CaptureSession {
@@ -24,7 +23,7 @@ interface CaptureSession {
   captureCommandIssued: boolean
   helperTerminal: boolean
   filePresent: boolean
-  releaseRequested: boolean
+  stopRequested: boolean
   cancelRequested: boolean
   processing: boolean
   terminal: boolean
@@ -47,7 +46,7 @@ export class AudioController {
   activeEndpoint?: AudioDevice
   warning?: string
   onState?: () => void
-  onResponse?: (response: AssistantResponse, operationId: string) => void
+  onTranscriptDraft?: (draft: TranscriptionDraft) => void
   onError?: (error: AiErrorInfo) => void
   private session?: CaptureSession
   private restartUsed = false
@@ -72,9 +71,12 @@ export class AudioController {
     await this.cleanupStale()
     this.helper.onState = () => this.notify()
     this.helper.onShortcutDown = () => {
-      void this.startCapture().then((result) => { if (!result.ok) this.report(result.error) })
+      void this.toggleListening().then((result) => { if (!result.ok) this.report(result.error) })
     }
-    this.helper.onShortcutUp = () => { void this.stopAndProcess() }
+    // The native hook still emits key-up so it can rearm the configured
+    // accelerator and suppress autorepeat. Toggle semantics intentionally do
+    // not attach an application action to release.
+    this.helper.onShortcutUp = () => undefined
     this.helper.onCaptureLimitReached = (operationId, reason) => {
       const session = this.session
       if (!session || session.operation.id !== operationId || session.processing || session.terminal) return
@@ -89,7 +91,7 @@ export class AudioController {
 
   async configureShortcut(accelerator: string): Promise<void> {
     if (!this.helper.available) {
-      throw operationError('helper_unavailable', 'The Windows helper must be ready before changing the hold-to-listen shortcut.', true)
+      throw operationError('helper_unavailable', 'The Windows helper must be ready before changing the listening toggle shortcut.', true)
     }
     await this.helper.command({ type: 'configureShortcut', accelerator }, ['shortcutConfigured', 'error'])
   }
@@ -131,7 +133,7 @@ export class AudioController {
     const session: CaptureSession = {
       operation, path: join(directory, `${(this.options.idGenerator ?? randomUUID)()}.wav`),
       captureStarted: false, captureCommandIssued: false, helperTerminal: false, filePresent: false,
-      releaseRequested: false, cancelRequested: false, processing: false, terminal: false
+      stopRequested: false, cancelRequested: false, processing: false, terminal: false
     }
     this.session = session
     this.warning = undefined
@@ -174,7 +176,7 @@ export class AudioController {
       this.helper.setLifecycle('capturing')
       if (operation.signal.aborted || session.cancelRequested) {
         await this.cancelSession(session)
-      } else if (session.releaseRequested) {
+      } else if (session.stopRequested) {
         void this.processCapture(session)
       } else {
         this.operations.transition(operation.id, 'listening')
@@ -195,6 +197,23 @@ export class AudioController {
     }
   }
 
+  /**
+   * Atomically toggles the single application-wide audio operation. A second
+   * press during helper startup is latched and finalized after capture starts;
+   * presses during downstream processing remain Busy rather than accidentally
+   * starting a new capture.
+   */
+  async toggleListening(): Promise<OperationActionResult> {
+    const current = this.operations.current
+    if (!current) return this.startCapture()
+    if (current.kind !== 'audio') {
+      return failure('busy', 'Another PresenterAI operation is already active.', false)
+    }
+    const stage = this.operations.snapshot().operation
+    if (stage === 'starting_capture' || stage === 'listening') return this.stopAndProcess()
+    return failure('busy', 'Wait for PresenterAI to finish processing the current recording.', false)
+  }
+
   async stopAndProcess(): Promise<OperationActionResult> {
     const session = this.session
     if (!session || !this.operations.isCurrent(session.operation.id)) {
@@ -202,7 +221,7 @@ export class AudioController {
     }
     const stage = this.operations.snapshot().operation
     if (stage === 'starting_capture') {
-      session.releaseRequested = true
+      session.stopRequested = true
       this.notify()
       return { ok: true }
     }
@@ -223,6 +242,10 @@ export class AudioController {
 
   acknowledgeAnswerVisible(operationId: string): void {
     this.operations.acknowledgeAnswerVisible(operationId)
+  }
+
+  acknowledgeTranscriptVisible(operationId: string): void {
+    this.operations.acknowledgeTranscriptVisible(operationId)
   }
 
   async dispose(): Promise<void> {
@@ -274,7 +297,7 @@ export class AudioController {
     try {
       this.operations.transition(operation.id, 'finalizing')
       const event = await this.helper.command({
-        type: 'stopCapture', operationId: operation.id, terminalReason: 'released'
+        type: 'stopCapture', operationId: operation.id, terminalReason: 'stopped'
       }, ['captureStopped', 'error'], 30_000)
       validateOperationEvent(event, operation.id)
       session.helperTerminal = true
@@ -304,21 +327,23 @@ export class AudioController {
       }
       if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
 
-      this.operations.transition(operation.id, 'retrieving')
-      const chunks = this.ai.retrieve(transcription.text, { signal: operation.signal })
-      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
-
-      await this.options.transmissionPreviewGate?.present(buildResponseTransmissionPreview(operation.id, chunks))
-      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
-
-      this.operations.transition(operation.id, 'generating')
-      const response = await this.ai.generate(transcription.text, chunks, { signal: operation.signal })
-      if (!this.operations.isCurrent(operation.id) || operation.signal.aborted) throw operationError('cancelled', 'Operation cancelled.', false)
       this.operations.completeCurrentStage(operation.id)
-      this.onResponse?.(response, operation.id)
-      const answerVisible = await this.operations.waitForAnswerVisible(operation.id)
-      if (!answerVisible && !operation.signal.aborted) {
-        throw operationError('timeout', 'The answer was generated, but PresenterAI could not confirm that it became visible.', true)
+      const draft: TranscriptionDraft = {
+        operationId: operation.id,
+        text: transcription.text,
+        durationMs: validatedAudio.durationMs,
+        endpointId: capture.endpointId,
+        endpointName: capture.endpointName,
+        createdAt: new Date().toISOString()
+      }
+      const transcriptVisible = this.operations.waitForTranscriptVisible(operation.id)
+      this.onTranscriptDraft?.(draft)
+      if (!await transcriptVisible && !operation.signal.aborted) {
+        throw operationError(
+          'transcript_display_unavailable',
+          'The audio was transcribed, but PresenterAI could not confirm that the editable draft became visible. No answer request was sent.',
+          true
+        )
       }
     } catch (error) {
       terminalError = mapPipelineError(error)
@@ -376,7 +401,7 @@ export class AudioController {
     } catch (error) {
       const message = error instanceof Error && error.message
         ? error.message
-        : 'The hold-to-listen shortcut could not be configured.'
+        : 'The listening toggle shortcut could not be configured.'
       await this.helper.stopProcess()
       this.helper.setFailure(message)
       this.warning = message

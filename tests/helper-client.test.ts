@@ -73,6 +73,48 @@ describe('Windows helper client protocol', () => {
     expect(feature.lastError).toMatch(/missing required features/i)
   })
 
+  it('rejects the deterministic test backend as a production audio helper', async () => {
+    const child = responder((command, process) => {
+      if (command.type === 'hello') send(process, {
+        type: 'ready', requestId: command.requestId, protocolVersion: 2, shortcutReady: true,
+        captureBackend: 'synthetic-test',
+        features: features.map((feature) => feature === 'wasapi-system-loopback' ? 'synthetic-test-audio' : feature)
+      })
+    })
+    const { HelperClient } = await import('../src/main/audio/helperClient')
+    const client = new HelperClient({ executablePath: () => process.execPath, spawnProcess: (() => child) as never })
+
+    await expect(client.start()).resolves.toBe(false)
+    expect(client.lastError).toMatch(/wasapi-system-loopback/i)
+    expect(client.state).toBe('failed')
+  })
+
+  it('forwards explicit process arguments and environment only when configured', async () => {
+    const child = responder((command, process) => {
+      if (command.type === 'hello') send(process, {
+        type: 'ready', requestId: command.requestId, protocolVersion: 2, shortcutReady: true, features
+      })
+      if (command.type === 'shutdown') {
+        send(process, { type: 'shutdownComplete', requestId: command.requestId })
+        queueMicrotask(() => process.emit('exit', 0, null))
+      }
+    })
+    const spawnProcess = vi.fn(() => child)
+    const { HelperClient } = await import('../src/main/audio/helperClient')
+    const client = new HelperClient({
+      executablePath: () => process.execPath,
+      spawnProcess: spawnProcess as never,
+      processArgs: ['--test-argument'],
+      processEnvironment: { TEST_ONLY: '1' }
+    })
+
+    await expect(client.start()).resolves.toBe(true)
+    expect(spawnProcess).toHaveBeenCalledWith(process.execPath, ['--test-argument'], expect.objectContaining({
+      env: { TEST_ONLY: '1' }
+    }))
+    await client.stopProcess()
+  })
+
   it('rejects a handshake whose keyboard hook is not ready and catches synchronous spawn failures', async () => {
     const hookChild = responder((command, process) => {
       send(process, { type: 'ready', requestId: command.requestId, protocolVersion: 2, shortcutReady: false, features })
@@ -82,12 +124,14 @@ describe('Windows helper client protocol', () => {
     await expect(hook.start()).resolves.toBe(false)
     expect(hook.lastError).toMatch(/keyboard hook is not ready/i)
 
+    const blocked = Object.assign(new Error('sensitive provider detail'), { code: 'UNKNOWN' })
     const spawnFailure = new HelperClient({
       executablePath: () => process.execPath,
-      spawnProcess: (() => { throw new Error('sensitive provider detail') }) as never
+      spawnProcess: (() => { throw blocked }) as never
     })
     await expect(spawnFailure.start()).resolves.toBe(false)
-    expect(spawnFailure.lastError).toBe('Windows helper could not be launched.')
+    expect(spawnFailure.lastError).toMatch(/Smart App Control or App Control may have blocked the unsigned helper/i)
+    expect(spawnFailure.lastError).not.toContain('sensitive provider detail')
   })
 
   it('preserves an unsolicited fatal keyboard-hook startup error without treating it as an idle crash', async () => {
@@ -229,7 +273,7 @@ describe('Windows helper client protocol', () => {
     await expect(first).rejects.toMatchObject({ code: 'helper_exited' })
     await expect(second).rejects.toMatchObject({ code: 'helper_exited' })
     expect(crashed).toHaveBeenCalledTimes(1)
-    expect(client.lastError).toBe('Windows helper could not be launched.')
+    expect(client.lastError).toMatch(/Windows security policy may have blocked the helper/i)
   })
 
   it('drains bounded stderr and rejects commands after an intentional shutdown', async () => {

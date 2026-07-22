@@ -33,4 +33,13 @@ public sealed class ProtocolUnitTests
         Assert.True(history.Contains("operation-1"));
         Assert.True(history.Contains("operation-1024"));
     }
+
+    [Fact]
+    public void SyntheticAudioBackendRequiresBothExplicitGates()
+    {
+        Assert.False(Program.IsSyntheticAudioTestEnabled([], null));
+        Assert.False(Program.IsSyntheticAudioTestEnabled(["--presenterai-synthetic-audio-test"], null));
+        Assert.False(Program.IsSyntheticAudioTestEnabled([], "1"));
+        Assert.True(Program.IsSyntheticAudioTestEnabled(["--presenterai-synthetic-audio-test"], "1"));
+    }
 }

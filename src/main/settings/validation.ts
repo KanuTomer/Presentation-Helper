@@ -4,7 +4,7 @@ import type { AppSettings } from '../../shared/contracts.js'
 const emergencyShortcut = 'CONTROL+SHIFT+I'
 const sensitiveKeys: ReadonlySet<keyof AppSettings> = new Set([
   'modelMode', 'normalModel', 'strongModel', 'transcriptionModel', 'askShortcut', 'hideShortcut',
-  'listenShortcut', 'projectSummary', 'approvedVocabulary', 'selectedAudioEndpointId'
+  'listenShortcut', 'projectSummary', 'approvedVocabulary', 'selectedAudioEndpointId', 'sessionBudgetUsd'
 ])
 
 const unicodeLength = (value: string): number => Array.from(value).length
@@ -36,7 +36,7 @@ const vocabularySchema = z.array(z.string()).max(30).transform((value, context) 
 
 /** Strict persistence and IPC boundary for the renderer-visible settings object. */
 export const appSettingsSchema = z.object({
-  opacity: z.number().finite().min(0.45).max(1),
+  glassTint: z.number().finite().min(0.18).max(0.78),
   clickThrough: z.boolean(),
   modelMode: z.enum(['normal', 'strong']),
   normalModel: modelSchema,
@@ -48,7 +48,7 @@ export const appSettingsSchema = z.object({
   projectSummary: projectSummarySchema,
   approvedVocabulary: vocabularySchema,
   selectedAudioEndpointId: endpointSchema.optional(),
-  inrPerUsd: z.number().finite().min(1).max(1_000).optional()
+  sessionBudgetUsd: z.number().finite().min(0.01).max(100)
 }).strict()
 
 export const appSettingsPatchSchema = appSettingsSchema.partial().strict()
@@ -73,7 +73,7 @@ export function validateSettingsMutation(
   const shortcuts = [
     ['Ask', canonicalAccelerator(next.askShortcut)],
     ['Hide/show', canonicalAccelerator(next.hideShortcut)],
-    ['Hold-to-listen', canonicalAccelerator(next.listenShortcut)]
+    ['Listening toggle', canonicalAccelerator(next.listenShortcut)]
   ] as const
   for (const [label, accelerator] of shortcuts) {
     if (accelerator === emergencyShortcut) throw new Error(`${label} cannot replace the emergency interaction shortcut.`)

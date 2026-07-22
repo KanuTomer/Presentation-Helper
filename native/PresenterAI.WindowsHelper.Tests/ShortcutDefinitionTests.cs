@@ -33,7 +33,7 @@ public sealed class ShortcutDefinitionTests
         Assert.Throws<ArgumentException>(() => ShortcutDefinition.Parse(accelerator));
 
     [Fact]
-    public void SuppressesAutoRepeatAndEmitsOneRelease()
+    public void SuppressesAutoRepeatAndRearmsOnlyAfterRelease()
     {
         using var hook = new ShortcutHook();
         var downs = 0;
@@ -46,9 +46,12 @@ public sealed class ShortcutDefinitionTests
         hook.ProcessKey(0x20, true, false, Pressed);
         hook.ProcessKey(0x20, false, true, Pressed);
         hook.ProcessKey(0x20, false, true, Pressed);
+        hook.ProcessKey(0x20, true, false, Pressed);
+        hook.ProcessKey(0x20, true, false, Pressed);
+        hook.ProcessKey(0x20, false, true, Pressed);
 
-        Assert.Equal(1, downs);
-        Assert.Equal(1, ups);
+        Assert.Equal(2, downs);
+        Assert.Equal(2, ups);
     }
 
     [Fact]

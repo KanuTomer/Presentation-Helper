@@ -84,17 +84,84 @@ public sealed class ProtocolIntegrationTests
         await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    private static Process StartHelper()
+    [Fact]
+    public async Task CompletesTwoSyntheticCaptureCyclesInOneHelperProcess()
+    {
+        var paths = new[]
+        {
+            Path.Combine(Path.GetTempPath(), $"presenterai-protocol-{Guid.NewGuid():N}-1.wav"),
+            Path.Combine(Path.GetTempPath(), $"presenterai-protocol-{Guid.NewGuid():N}-2.wav")
+        };
+        try
+        {
+            using var process = StartHelper(syntheticAudio: true);
+            using var startup = await ReadNext(process);
+            Assert.Equal("synthetic-test", startup.RootElement.GetProperty("captureBackend").GetString());
+            var features = startup.RootElement.GetProperty("features").EnumerateArray()
+                .Select(feature => feature.GetString()).ToArray();
+            Assert.Contains("synthetic-test-audio", features);
+            Assert.DoesNotContain("wasapi-system-loopback", features);
+
+            await Write(process, new { type = "listDevices", requestId = "synthetic-devices" });
+            using var devices = await ReadFor(process, "synthetic-devices");
+            Assert.Single(devices.RootElement.GetProperty("devices").EnumerateArray());
+
+            for (var cycle = 0; cycle < paths.Length; cycle++)
+            {
+                var operationId = $"synthetic-cycle-{cycle + 1}";
+                await Write(process, new
+                {
+                    type = "startCapture",
+                    requestId = $"synthetic-start-{cycle + 1}",
+                    operationId,
+                    path = paths[cycle]
+                });
+                using var started = await ReadFor(process, $"synthetic-start-{cycle + 1}");
+                Assert.Equal("captureStarted", started.RootElement.GetProperty("type").GetString());
+                await Task.Delay(300);
+
+                await Write(process, new
+                {
+                    type = "stopCapture",
+                    requestId = $"synthetic-stop-{cycle + 1}",
+                    operationId
+                });
+                using var stopped = await ReadFor(process, $"synthetic-stop-{cycle + 1}");
+                Assert.Equal("captureStopped", stopped.RootElement.GetProperty("type").GetString());
+                Assert.Equal(16_000, stopped.RootElement.GetProperty("sampleRate").GetInt32());
+                Assert.Equal(1, stopped.RootElement.GetProperty("channels").GetInt32());
+                Assert.True(stopped.RootElement.GetProperty("durationMs").GetInt64() >= 250);
+                Assert.True(stopped.RootElement.GetProperty("bytes").GetInt64() > 44);
+                Assert.True(File.Exists(paths[cycle]));
+            }
+
+            await Write(process, new { type = "shutdown", requestId = "synthetic-shutdown" });
+            using var shutdown = await ReadFor(process, "synthetic-shutdown");
+            Assert.Equal("shutdownComplete", shutdown.RootElement.GetProperty("type").GetString());
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, process.ExitCode);
+        }
+        finally
+        {
+            foreach (var path in paths)
+                try { File.Delete(path); } catch { }
+        }
+    }
+
+    private static Process StartHelper(bool syntheticAudio = false)
     {
         var assembly = Path.Combine(AppContext.BaseDirectory, "PresenterAI.WindowsHelper.dll");
-        return Process.Start(new ProcessStartInfo("dotnet", $"\"{assembly}\"")
+        var arguments = $"\"{assembly}\"{(syntheticAudio ? " --presenterai-synthetic-audio-test" : string.Empty)}";
+        var startInfo = new ProcessStartInfo("dotnet", arguments)
         {
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
-        })!;
+        };
+        if (syntheticAudio) startInfo.Environment["PRESENTERAI_ENABLE_SYNTHETIC_AUDIO_TEST"] = "1";
+        return Process.Start(startInfo)!;
     }
 
     private static async Task Write(Process process, object command)

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react'
-import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AssistantResponse } from '../src/shared/contracts'
 import { ResponseCard, evidenceSupport } from '../src/renderer/responseCard'
 
@@ -33,5 +33,45 @@ describe('response evidence badges', () => {
     rerender(<ResponseCard response={supported} />)
     expect(screen.getByLabelText('Evidence support').textContent).toBe('Document-supported')
     expect(evidenceSupport({ ...supported, warning: 'A supplemental caution.' })).toBe('document-supported')
+  })
+})
+
+describe('structured code cards', () => {
+  it('renders inert highlighted code with exact whitespace and copies the original source', async () => {
+    const code = 'export function SearchDropdown() {\n  const unsafe = "<script>alert(1)</script>"\n\n  return unsafe\n}\n'
+    const copy = vi.fn(async () => undefined)
+    const { container } = render(<ResponseCard
+      response={{ ...base, codeBlocks: [{ language: 'tsx', title: 'SearchDropdown.tsx', code }] }}
+      onCopyCode={copy}
+    />)
+
+    expect(screen.getByText('tsx')).toBeTruthy()
+    expect(screen.getByText('SearchDropdown.tsx')).toBeTruthy()
+    expect(screen.getByLabelText('SearchDropdown.tsx (tsx) source').textContent).toBe(code)
+    expect(container.querySelector('script')).toBeNull()
+    expect(container.querySelector('[dangerouslySetInnerHTML]')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy SearchDropdown.tsx (tsx)' }))
+    await waitFor(() => expect(copy).toHaveBeenCalledWith(code))
+    expect(await screen.findByText('Code copied.')).toBeTruthy()
+  })
+
+  it('renders multiple blocks before the presenter key points and disables copying without a narrow handler', () => {
+    const { container } = render(<ResponseCard response={{
+      ...base,
+      codeBlocks: [
+        { language: 'tsx', title: 'Component.tsx', code: 'export const Component = () => null' },
+        { language: 'css', title: 'component.css', code: '.component { display: block; }' }
+      ]
+    }} />)
+    expect(screen.getAllByRole('region')).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: /^Copy / })).toHaveLength(2)
+    for (const button of screen.getAllByRole('button', { name: /^Copy / })) {
+      expect((button as HTMLButtonElement).disabled).toBe(true)
+    }
+
+    const firstCode = container.querySelector('.code-block-card')
+    const keyPoints = Array.from(container.querySelectorAll('h3')).find((heading) => heading.textContent === 'KEY POINTS')
+    expect(firstCode?.compareDocumentPosition(keyPoints!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
 })

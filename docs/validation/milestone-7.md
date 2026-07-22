@@ -59,6 +59,6 @@ Until that later gate passes, UI, documentation, commits, and release notes must
 - Gate date: 2026-07-16; commit: the commit containing this record.
 - `npm run eval:m7`: 50/50 passed, 20/20 contextual follow-ups, 50/50 production FTS selections, 50/50 semantic checks, 50/50 grounding checks, zero failed IDs.
 - Redacted report: `artifacts/m7/m7-offline-report.json` (generated and ignored locally; uploaded by Windows CI).
-- Regression gate: TypeScript checks passed; Vitest 259/259; .NET helper tests 29/29; Electron production build passed.
+- Current beta.2 local regression: TypeScript and production build passed; Vitest 353/353; Playwright Electron 9/9; M7 offline 50/50. The latest isolated .NET run reached 33/33, but prior Code Integrity blocks mean clean Windows CI must still execute the native gate before delivery.
 - No live M7 harness, OpenAI credential read, or OpenAI request occurred.
 - Windows PR/post-merge CI and uploaded-report links are publication evidence and are recorded on GitHub rather than predeclared here.

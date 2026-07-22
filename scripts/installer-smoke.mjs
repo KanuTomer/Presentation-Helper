@@ -437,7 +437,12 @@ async function seedApplicationData(userData, temporaryDirectory, sourceDocument,
 
 async function assertSeededApplicationData(userData, temporaryDirectory, sourceDocument, scenario, stage) {
   const stored = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-  if (stored.settings?.projectSummary !== `installer-smoke:${scenario}` || stored.settings?.inrPerUsd !== 83) {
+  const migrated = stage === 'after upgrade'
+  const settingsPreserved = stored.settings?.projectSummary === `installer-smoke:${scenario}` && (migrated
+    ? stored.schemaVersion === 4 && stored.settings?.inrPerUsd === undefined && stored.settings?.opacity === undefined &&
+      stored.settings?.glassTint === 0.42 && stored.settings?.sessionBudgetUsd === 0.25
+    : stored.settings?.inrPerUsd === 83)
+  if (!settingsPreserved) {
     throw new Error(`The seeded settings were not preserved ${stage}.`)
   }
   if (!stored.windowBounds || stored.captureResults?.length !== 1 || stored.usageRecords?.length !== 1 || stored.privacyConsent?.acceptedVersion !== 2) {
@@ -456,9 +461,11 @@ async function assertSeededApplicationData(userData, temporaryDirectory, sourceD
 async function assertApplicationDataCleared(userData, temporaryDirectory, sourceDocument) {
   if (!existsSync(sourceDocument)) throw new Error('Delete All or uninstall removed the user-owned source document.')
   const stored = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-  if (stored.settings?.projectSummary !== '' || stored.settings?.inrPerUsd !== undefined || stored.windowBounds !== undefined ||
+  if (stored.schemaVersion !== 4 || stored.settings?.projectSummary !== '' || stored.settings?.inrPerUsd !== undefined ||
+      stored.settings?.opacity !== undefined || stored.settings?.glassTint !== 0.42 || stored.settings?.sessionBudgetUsd !== 0.25 || stored.windowBounds !== undefined ||
       stored.captureResults?.length !== 0 || stored.usageRecords?.length !== 0 || stored.usageRollups?.length !== 0 ||
-      stored.privacyConsent !== undefined || stored.documents?.length !== 0) {
+      stored.privacyConsent !== undefined || stored.documents?.length !== 0 || stored.sessionBudget?.actualUsd !== 0 ||
+      stored.sessionBudget?.reservations?.length !== 0) {
     throw new Error('Delete All did not restore settings, consent, compatibility, usage, bounds, and catalog defaults.')
   }
   if (stored.usage?.inputTokens !== 0 || stored.usage?.outputTokens !== 0 || stored.usage?.estimatedUsd !== 0) {

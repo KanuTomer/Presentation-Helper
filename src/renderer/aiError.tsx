@@ -9,7 +9,9 @@ const titles: Record<AiErrorInfo['code'], string> = {
   device_unavailable: 'Audio output unavailable', invalid_audio: 'Recording could not be used',
   invalid_transcript: 'Reviewer speech was not understood', capture_timeout: 'Listening limit reached',
   listening_consent_required: 'Listening acknowledgement required',
-  privacy_preview_unavailable: 'Outbound data preview was not confirmed', unknown: 'Request failed'
+  privacy_preview_unavailable: 'Outbound data preview was not confirmed',
+  session_budget_exceeded: 'Session spending limit reached', unpriced_model: 'Model price is not reviewed',
+  transcript_display_unavailable: 'Transcript display was not confirmed', unknown: 'Request failed'
 }
 
 export function AiErrorPanel({ error, onRetry, onOpenSettings, onOpenPrivacy, allowRetry = true }: { error: AiErrorInfo; onRetry(): void; onOpenSettings(): void; onOpenPrivacy?(): void; allowRetry?: boolean }): React.JSX.Element {

@@ -48,6 +48,52 @@ jobs:
       - name: Publish self-contained Windows helper
         run: npm run helper:build
 
+      - name: Run two-cycle helper-process smoke with deterministic test audio
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/audio | Out-Null
+          npm run --silent test:helper-process-smoke | Out-File artifacts/audio/helper-smoke-report.json -Encoding utf8
+          $report = Get-Content artifacts/audio/helper-smoke-report.json -Raw | ConvertFrom-Json
+          if ($report.captureBackend -ne 'synthetic-test' -or $report.wasapiCaptureValidated -ne $false -or $report.captureCycles -ne 2) {
+            throw 'The deterministic two-cycle helper-process smoke did not report its backend and coverage accurately.'
+          }
+
+      - name: Record code-integrity environment
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/code-integrity | Out-Null
+          npm run --silent test:code-integrity-environment | Out-File artifacts/code-integrity/environment.json -Encoding utf8
+          $report = Get-Content artifacts/code-integrity/environment.json -Raw | ConvertFrom-Json
+          if ($report.spawnOutcome.state -ne 'ready') { throw "The CI helper diagnostic did not reach ready: $($report.spawnOutcome.state)" }
+
+      - name: Ensure redacted code-integrity diagnostics exist
+        if: always()
+        shell: pwsh
+        run: |
+          $path = 'artifacts/code-integrity/environment.json'
+          New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
+          $valid = $false
+          if (Test-Path -LiteralPath $path -PathType Leaf) {
+            try { $null = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop; $valid = $true } catch { $valid = $false }
+          }
+          if (-not $valid) {
+            [ordered]@{
+              platform = 'win32'
+              smartAppControl = 'unknown'
+              expectedHelperPath = 'unavailable'
+              helperSignature = 'unknown'
+              spawnOutcome = [ordered]@{ state = 'diagnostic-failed' }
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding utf8
+          }
+
+      - name: Upload code-integrity diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PresenterAI-code-integrity-${{ github.run_id }}
+          path: artifacts/code-integrity/environment.json
+          if-no-files-found: error
+
       - name: Build Electron application
         run: npm run build
 
@@ -160,6 +206,8 @@ jobs:
             artifacts/m4/m4-retrieval-report.json
             artifacts/m7/m7-offline-report.json
             artifacts/installer/installer-lifecycle-report.json
+            artifacts/code-integrity/environment.json
+            artifacts/audio/helper-smoke-report.json
             docs/validation/milestones-0-2.md
             docs/validation/milestone-5.md
             docs/validation/milestone-6.md

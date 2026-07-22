@@ -7,6 +7,7 @@ import { WindowManager } from './windows/windowManager.js'
 import { RetrievalIndex } from './retrieval/index.js'
 import { AiService } from './ai/service.js'
 import { AudioController } from './audio/controller.js'
+import { HelperClient } from './audio/helperClient.js'
 import { OperationCoordinator } from './operations/coordinator.js'
 import { registerIpc } from './ipc/register.js'
 import { TransmissionPreviewGate } from './privacy/transmissionPreview.js'
@@ -71,7 +72,17 @@ if (packagedFtsSmoke) {
       showOverlay: () => windows?.showTransmissionPreview(),
       onChange: () => audio?.onState?.()
     })
+    const e2eSyntheticHelper = process.env.PRESENTERAI_E2E === '1'
+      && process.env.PRESENTERAI_E2E_AUDIO_BACKEND === 'synthetic-test'
+      ? new HelperClient({
+          processArgs: ['--presenterai-synthetic-audio-test'],
+          processEnvironment: { ...process.env, PRESENTERAI_ENABLE_SYNTHETIC_AUDIO_TEST: '1' },
+          requiredCaptureFeature: 'synthetic-test-audio',
+          expectedCaptureBackend: 'synthetic-test'
+        })
+      : undefined
     audio = new AudioController(ai, store, operations, {
+      ...(e2eSyntheticHelper ? { helper: e2eSyntheticHelper } : {}),
       transmissionPreviewGate: transmissionPreview,
       onListeningConsentRequired: () => windows?.openPrivacy()
     })

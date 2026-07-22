@@ -1,8 +1,8 @@
-import { app, dialog, ipcMain, screen } from 'electron'
+import { app, clipboard, dialog, ipcMain, screen } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { channels } from '../../shared/channels.js'
 import {
-  documentImportResultSchema, documentInspectionPageSchema, documentSearchHitsSchema,
+  documentImportResultSchema, documentInspectionPageSchema, documentSearchHitsSchema, transcriptionDraftSchema,
   type AppSettings, type AppStatus, type CaptureTestInput,
   type DeleteAllLocalDataResult, type DocumentInspectionPage, type DocumentSearchHit,
   type OutboundTransmissionPreview
@@ -22,6 +22,7 @@ import type { TransmissionPreviewGate } from '../privacy/transmissionPreview.js'
 import { LocalDataDeletionService } from '../settings/dataDeletion.js'
 import { ShortcutSettingsTransaction } from '../settings/shortcutTransaction.js'
 import { scheduleRelaunchAfterDeletion } from './relaunchAfterDeletion.js'
+import { parseAnswerFormat, parseClipboardCode } from './interactionValidation.js'
 
 interface Services {
   store: SettingsStore
@@ -53,16 +54,17 @@ export function registerIpc(services: Services): RegisteredIpcServices {
       lastCapture: audio.lastCapture, activeAudioEndpoint: audio.activeEndpoint,
       shortcutWarnings: [...windows.shortcutWarnings, ...(escapeWarning ? [escapeWarning] : [])],
       privacyConsent: store.privacyConsent,
+      sessionBudget: store.sessionBudgetStatus,
       ...(transmissionPreview.current ? { outboundPreview: transmissionPreview.current } : {}),
       ...(store.recoveryWarning ? { settingsRecoveryWarning: store.recoveryWarning } : {})
     }
   }
   const broadcast = (): void => windows.window?.webContents.send(channels.status, status())
   audio.onState = broadcast
-  audio.onResponse = (response, operationId) => windows.window?.webContents.send(channels.audioResponse, response, operationId)
+  audio.onTranscriptDraft = (draft) => windows.window?.webContents.send(channels.transcriptDraft, transcriptionDraftSchema.parse(draft))
   audio.onError = (error) => windows.window?.webContents.send(channels.appError, error)
   const deletion = new LocalDataDeletionService(() => audio.operations.acquireMaintenance(), {
-    session: () => ai.clearSession(),
+    session: async () => { ai.clearSession(); await store.startNewSession() },
     documents: () => retrieval.clearAll(),
     usage: () => store.clearUsage(),
     compatibility: () => store.clearCaptureResults(),
@@ -79,7 +81,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
       if (audio.helper.available) {
         await audio.configureShortcut(defaults.listenShortcut)
       }
-      windows.setOpacity(defaults.opacity)
+      windows.setGlassTint(defaults.glassTint)
       windows.setClickThrough(defaults.clickThrough)
     }
   })
@@ -106,7 +108,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
           rollbackPersistence: () => store.updateSettings(previous)
         })
       : await store.updateSettings(patch)
-    windows.setOpacity(settings.opacity)
+    windows.setGlassTint(settings.glassTint)
     windows.setClickThrough(settings.clickThrough)
     if (Object.prototype.hasOwnProperty.call(patch, 'selectedAudioEndpointId')) {
       try { await audio.refreshDevices() }
@@ -121,9 +123,19 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   handle<[string]>(channels.saveApiKey, (_event, key) => secrets.saveKey(key))
   handle(channels.deleteApiKey, () => secrets.deleteKey())
   handle(channels.testApiKey, () => ai.testKey())
-  handle<[string]>(channels.ask, (_event, question) => typedAnswers.ask(question))
+  handle<[unknown, unknown]>(channels.ask, (_event, question, requestedFormat) => {
+    if (typeof question !== 'string') throw new Error('Invalid question.')
+    return typedAnswers.ask(question, parseAnswerFormat(requestedFormat))
+  })
   handle(channels.cancel, () => audio.cancel())
   handle(channels.clearSession, () => { ai.clearSession() })
+  handle(channels.startNewSession, async () => {
+    ensureIdle(audio)
+    ai.clearSession()
+    const budget = await store.startNewSession()
+    broadcast()
+    return budget
+  })
   handle(channels.getUsage, () => store.usageLedger)
   handle(channels.clearUsage, async () => { ensureIdle(audio); await store.clearUsage(); broadcast() })
   handle(channels.clearCaptureResults, async () => { ensureIdle(audio); await store.clearCaptureResults(); broadcast() })
@@ -160,10 +172,12 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     return documentInspectionPageSchema.parse(page)
   })
   handle<[boolean]>(channels.clickThrough, async (_event, enabled) => { windows.setClickThrough(enabled); await store.updateSettings({ clickThrough: enabled }) })
-  handle<[number]>(channels.opacity, async (_event, value) => { windows.setOpacity(value); await store.updateSettings({ opacity: value }) })
+  handle<[number]>(channels.glassTint, async (_event, value) => { windows.setGlassTint(value); await store.updateSettings({ glassTint: value }) })
   handle(channels.showSettings, () => windows.openSettings())
-  handle(channels.startListening, () => audio.startCapture())
-  handle(channels.stopListening, () => audio.stopAndProcess())
+  handle(channels.toggleListening, () => audio.toggleListening())
+  handle<[unknown]>(channels.copyCode, (_event, value) => {
+    clipboard.writeText(parseClipboardCode(value))
+  })
   handle(channels.refreshAudioDevices, () => audio.refreshDevices(true))
   handle<[string]>(channels.ackListeningIndicator, (_event, operationId) => {
     if (typeof operationId !== 'string' || operationId.length < 1 || operationId.length > 128) throw new Error('Invalid operation identifier.')
@@ -172,6 +186,10 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   handle<[string]>(channels.ackAnswerVisible, (_event, operationId) => {
     if (typeof operationId !== 'string' || operationId.length < 1 || operationId.length > 128) throw new Error('Invalid operation identifier.')
     audio.acknowledgeAnswerVisible(operationId)
+  })
+  handle<[string]>(channels.ackTranscriptVisible, (_event, operationId) => {
+    if (!validOperationId(operationId)) throw new Error('Invalid operation identifier.')
+    audio.acknowledgeTranscriptVisible(operationId)
   })
   handle<[boolean]>(channels.setCaptureProtection, (_event, enabled) => {
     if (!windows.window) throw new Error('Overlay window is unavailable.')

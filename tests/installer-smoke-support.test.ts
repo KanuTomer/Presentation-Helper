@@ -230,40 +230,40 @@ describe('current launch hook and diagnostic report safety', () => {
 })
 
 describe('genuine installer upgrade identity', () => {
-  const currentPath = 'C:\\build\\PresenterAI-0.2.0-beta.1-setup.exe'
-  const previousPath = 'C:\\artifact\\PresenterAI-0.1.0-setup.exe'
-  const differentHashes = async (path: string) => path.includes('0.2.0') ? 'a'.repeat(64) : 'b'.repeat(64)
+  const currentPath = 'C:\\build\\PresenterAI-0.2.0-beta.2-setup.exe'
+  const previousPath = 'C:\\artifact\\PresenterAI-0.2.0-beta.1-setup.exe'
+  const differentHashes = async (path: string) => path.includes('beta.2') ? 'a'.repeat(64) : 'b'.repeat(64)
 
   it('requires the package version, a strictly older baseline, and different SHA-256 bytes', async () => {
     expect(await validateInstallerUpgrade({
-      currentPath, previousPath, packageVersion: '0.2.0-beta.1', hashFile: differentHashes
+      currentPath, previousPath, packageVersion: '0.2.0-beta.2', hashFile: differentHashes
     })).toEqual({
-      current: { fileName: 'PresenterAI-0.2.0-beta.1-setup.exe', version: '0.2.0-beta.1', sha256: 'a'.repeat(64) },
-      previous: { fileName: 'PresenterAI-0.1.0-setup.exe', version: '0.1.0', sha256: 'b'.repeat(64) }
+      current: { fileName: 'PresenterAI-0.2.0-beta.2-setup.exe', version: '0.2.0-beta.2', sha256: 'a'.repeat(64) },
+      previous: { fileName: 'PresenterAI-0.2.0-beta.1-setup.exe', version: '0.2.0-beta.1', sha256: 'b'.repeat(64) }
     })
   })
 
   it('rejects same-version paths, downgrades, byte-identical artifacts, malformed names, and package mismatch', async () => {
     await expect(validateInstallerUpgrade({
-      currentPath, previousPath: 'D:\\other\\PresenterAI-0.2.0-beta.1-setup.exe',
-      packageVersion: '0.2.0-beta.1', hashFile: differentHashes
+      currentPath, previousPath: 'D:\\other\\PresenterAI-0.2.0-beta.2-setup.exe',
+      packageVersion: '0.2.0-beta.2', hashFile: differentHashes
     })).rejects.toMatchObject({ code: 'installer-version-not-upgrade' })
     await expect(validateInstallerUpgrade({
       currentPath, previousPath: 'D:\\other\\PresenterAI-0.2.0-setup.exe',
-      packageVersion: '0.2.0-beta.1', hashFile: differentHashes
+      packageVersion: '0.2.0-beta.2', hashFile: differentHashes
     })).rejects.toMatchObject({ code: 'installer-version-not-upgrade' })
     await expect(validateInstallerUpgrade({
-      currentPath, previousPath, packageVersion: '0.2.0-beta.1', hashFile: async () => 'c'.repeat(64)
+      currentPath, previousPath, packageVersion: '0.2.0-beta.2', hashFile: async () => 'c'.repeat(64)
     })).rejects.toMatchObject({ code: 'installer-bytes-identical' })
     await expect(validateInstallerUpgrade({
-      currentPath: 'C:\\build\\PresenterAI-current-setup.exe', packageVersion: '0.2.0-beta.1', hashFile: differentHashes
+      currentPath: 'C:\\build\\PresenterAI-current-setup.exe', packageVersion: '0.2.0-beta.2', hashFile: differentHashes
     })).rejects.toMatchObject({ code: 'malformed-installer-name' })
     await expect(validateInstallerUpgrade({
       currentPath, previousPath: 'D:\\other\\previous-setup.exe',
-      packageVersion: '0.2.0-beta.1', hashFile: differentHashes
+      packageVersion: '0.2.0-beta.2', hashFile: differentHashes
     })).rejects.toMatchObject({ code: 'malformed-installer-name' })
     await expect(validateInstallerUpgrade({
-      currentPath, packageVersion: '0.2.0-beta.2', hashFile: differentHashes
+      currentPath, packageVersion: '0.2.0-beta.3', hashFile: differentHashes
     })).rejects.toMatchObject({ code: 'current-version-mismatch' })
     await expect(validateInstallerUpgrade({
       currentPath: 'C:\\build\\PresenterAI-0.2.0-beta.01-setup.exe', packageVersion: '0.2.0-beta.01', hashFile: differentHashes

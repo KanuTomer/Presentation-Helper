@@ -37,6 +37,10 @@ export interface HelperClientOptions {
   executablePath?: () => string
   spawnProcess?: typeof spawn
   startupTimeoutMs?: number
+  processArgs?: string[]
+  processEnvironment?: NodeJS.ProcessEnv
+  requiredCaptureFeature?: 'wasapi-system-loopback' | 'synthetic-test-audio'
+  expectedCaptureBackend?: 'wasapi-system-loopback' | 'synthetic-test'
 }
 
 export class HelperClient {
@@ -80,9 +84,12 @@ export class HelperClient {
     this.stopping = false
     let child: ChildProcessWithoutNullStreams
     try {
-      child = (this.options.spawnProcess ?? spawn)(executable, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
-    } catch {
-      this.setState('failed', 'Windows helper could not be launched.')
+      child = (this.options.spawnProcess ?? spawn)(executable, this.options.processArgs ?? [], {
+        stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+        ...(this.options.processEnvironment ? { env: this.options.processEnvironment } : {})
+      })
+    } catch (error) {
+      this.setState('failed', helperLaunchFailureMessage(error))
       return false
     }
     this.process = child
@@ -110,7 +117,14 @@ export class HelperClient {
         throw new HelperClientError('shortcut_hook_unavailable', 'The Windows helper keyboard hook is not ready.')
       }
       this.features = Array.isArray(hello.features) ? hello.features.map(String) : []
-      const missing = REQUIRED_FEATURES.filter((feature) => !this.features.includes(feature))
+      if (this.options.expectedCaptureBackend && hello.captureBackend !== this.options.expectedCaptureBackend) {
+        throw new HelperClientError('feature_mismatch', `Windows helper reported the unexpected ${String(hello.captureBackend ?? 'unknown')} capture backend.`)
+      }
+      const requiredCaptureFeature = this.options.requiredCaptureFeature ?? 'wasapi-system-loopback'
+      const requiredFeatures = REQUIRED_FEATURES.map((feature) => (
+        feature === 'wasapi-system-loopback' ? requiredCaptureFeature : feature
+      ))
+      const missing = requiredFeatures.filter((feature) => !this.features.includes(feature))
       if (missing.length) throw new HelperClientError('feature_mismatch', `Windows helper is missing required features: ${missing.join(', ')}.`)
       this.setState('ready')
       return true
@@ -216,7 +230,7 @@ export class HelperClient {
     this.process = undefined
     this.resolveExit?.(); this.resolveExit = undefined
     const message = this.fatalError ?? (spawnError
-      ? 'Windows helper could not be launched.'
+      ? helperLaunchFailureMessage(spawnError)
       : `Windows helper exited${code === null || code === undefined ? '' : ` with code ${code}`}${signal ? ` (${signal})` : ''}.`)
     this.fatalError = undefined
     for (const pending of this.callbacks.values()) pending.complete({ type: 'error', code: 'helper_exited', message })
@@ -240,4 +254,14 @@ function safeProtocolMessage(message: unknown): string {
 
 function safeMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message.slice(0, 600) : fallback
+}
+
+export function helperLaunchFailureMessage(error: unknown): string {
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code ?? '')
+    : ''
+  const policyHint = ['UNKNOWN', 'EACCES', 'EPERM'].includes(code.toUpperCase())
+    ? ' Windows Smart App Control or App Control may have blocked the unsigned helper.'
+    : ' Windows security policy may have blocked the helper.'
+  return `Windows could not launch the audio helper.${policyHint} Use a trusted-signed build or an authorized development environment; PresenterAI did not change Windows security settings.`
 }

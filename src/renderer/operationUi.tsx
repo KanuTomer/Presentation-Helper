@@ -15,9 +15,10 @@ const timingLabels: Array<[keyof OperationTimings, string]> = [
   ['listeningMs', 'Listening'],
   ['finalizationMs', 'Finalization'],
   ['transcriptionMs', 'Transcription'],
+  ['stopToTranscriptMs', 'Stop to transcript'],
   ['retrievalMs', 'Retrieval'],
   ['generationMs', 'Generation'],
-  ['releaseToAnswerMs', 'Release to answer'],
+  ['stopToAnswerMs', 'Stop to answer'],
   ['totalMs', 'Total']
 ]
 
@@ -104,12 +105,13 @@ export function AnswerRenderAcknowledger({
   return null
 }
 
-export function StageTimingSummary({ timings, indicatorLatencyMs }: { timings: OperationTimings; indicatorLatencyMs?: number }): React.JSX.Element | null {
+export function StageTimingSummary({ timings, indicatorLatencyMs, transcriptRenderLatencyMs }: { timings: OperationTimings; indicatorLatencyMs?: number; transcriptRenderLatencyMs?: number }): React.JSX.Element | null {
   const rows: Array<{ key: string; label: string; value: number }> = timingLabels.flatMap(([key, label]) => {
     const value = timings[key]
     return value === undefined ? [] : [{ key, label, value }]
   })
   if (indicatorLatencyMs !== undefined) rows.splice(1, 0, { key: 'indicatorLatencyMs', label: 'Listening indicator', value: indicatorLatencyMs })
+  if (transcriptRenderLatencyMs !== undefined) rows.push({ key: 'transcriptRenderLatencyMs', label: 'Transcript render', value: transcriptRenderLatencyMs })
   if (rows.length === 0) return null
 
   return <section className="stage-timings" aria-label="Last operation timings">
@@ -118,48 +120,27 @@ export function StageTimingSummary({ timings, indicatorLatencyMs }: { timings: O
   </section>
 }
 
-export function HoldToListenButton({ status, onError }: { status: AppStatus; onError(error: AiErrorInfo): void }): React.JSX.Element {
-  const pressed = useRef(false)
+export function ToggleListenButton({ status, onError }: { status: AppStatus; onError(error: AiErrorInfo): void }): React.JSX.Element {
   const activeAudio = status.operationKind === 'audio' && ['starting_capture', 'listening'].includes(status.operation)
-  const blocked = !status.helperAvailable || (status.operation !== 'idle' && !activeAudio)
+  const availableToStart = status.operation === 'idle' || status.operation === 'error'
+  const blocked = !status.helperAvailable || (!availableToStart && !activeAudio)
   const title = !status.helperAvailable
     ? 'The Windows audio helper is unavailable. Open Settings for recovery details.'
     : blocked
       ? 'Another operation is active.'
-      : 'Hold while the reviewer speaks'
-
-  useEffect(() => {
-    // Esc, a helper crash, or the hard capture limit can terminate ownership
-    // while the pointer is still down. Disabled elements are not guaranteed to
-    // receive pointer-up, so clear the local latch as soon as capture leaves
-    // its hold-owned stages.
-    if (!activeAudio) pressed.current = false
-  }, [activeAudio])
-
-  const stop = (): void => {
-    if (!pressed.current) return
-    pressed.current = false
-    void window.presenter.stopListening().then((result) => { if (!result.ok) onError(result.error) }).catch(() => {
-      onError({ code: 'unknown', message: 'Could not stop system-audio capture.', retryable: true })
-    })
-  }
+      : activeAudio ? 'Stop system-audio capture and create an editable transcript' : 'Start capturing the selected Windows system-output device'
 
   return <button
     disabled={blocked}
     aria-pressed={activeAudio}
     title={title}
-    onPointerDown={(event) => {
-      if (blocked || status.operation !== 'idle' || pressed.current) return
-      pressed.current = true
-      event.currentTarget.setPointerCapture?.(event.pointerId)
-      void window.presenter.startListening().then((result) => {
-        if (!result.ok) { pressed.current = false; onError(result.error) }
+    onClick={() => {
+      if (blocked) return
+      void window.presenter.toggleListening().then((result) => {
+        if (!result.ok) onError(result.error)
       }).catch(() => {
-        pressed.current = false
-        onError({ code: 'helper_unavailable', message: 'The Windows audio helper could not start.', retryable: true })
+        onError({ code: 'helper_unavailable', message: 'The Windows system-audio helper could not toggle capture.', retryable: true })
       })
     }}
-    onPointerUp={stop}
-    onPointerCancel={stop}
-  >◉ Hold to listen</button>
+  >{activeAudio ? '■ Stop & transcribe' : '◉ Start listening'}</button>
 }

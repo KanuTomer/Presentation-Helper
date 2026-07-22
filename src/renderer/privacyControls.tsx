@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import type { SessionBudgetStatus } from '../shared/contracts'
 
 export interface PrivacyConsentView {
   requiredVersion: number
@@ -28,7 +29,6 @@ export interface UsageEstimateView {
   pricingVersion: string
   requestCount: number
   unpricedRequestCount: number
-  inrPerUsd?: number
   rolledUpRequestCount?: number
 }
 
@@ -54,10 +54,10 @@ export function ListeningConsentPanel({
   }
   return <fieldset className="listening-consent">
     <legend>First-use listening acknowledgement</legend>
-    <p>PresenterAI captures bounded system-output audio only while you explicitly hold the listening shortcut. Listening starts OFF on every launch.</p>
+    <p>PresenterAI captures bounded system-output audio only after you explicitly toggle listening on. Press the control again to stop and create an editable transcript. No evidence retrieval or answer request occurs until you review the draft and submit it.</p>
     <p>Live assistance may be restricted in interviews, examinations, meetings, or graded work. Confirm the applicable rules and obtain consent where required.</p>
     <label className="toggle"><input type="checkbox" checked disabled /> The red listening indicator will remain visible during capture.</label>
-    <button type="button" className="primary" disabled={disabled || pending} onClick={() => void accept()}>{pending ? 'Saving…' : 'I understand and enable hold-to-listen'}</button>
+    <button type="button" className="primary" disabled={disabled || pending} onClick={() => void accept()}>{pending ? 'Saving…' : 'I understand and enable transcript review'}</button>
     {error && <p className="field-error" role="alert">{error}</p>}
   </fieldset>
 }
@@ -121,7 +121,8 @@ export function PrivacyDisclosure(): React.JSX.Element {
   return <section className="privacy-disclosure">
     <h3>Data handling</h3>
     <ul>
-      <li>Bounded audio is sent only for transcription and is deleted locally when that request reaches a terminal state.</li>
+      <li>Bounded system-output audio is sent only for transcription and is deleted locally when that request reaches a terminal state.</li>
+      <li>The transcript is shown as an editable in-memory draft. It is not sent for retrieval or answering until you explicitly submit it.</li>
       <li>Only the current question, bounded background, and selected local evidence chunks are sent for an answer.</li>
       <li>Responses use <code>store:false</code>; PresenterAI creates no OpenAI Conversation and keeps no cloud meeting history.</li>
       <li>OpenAI may retain Responses API abuse-monitoring logs for up to 30 days under its ordinary API controls. The published transcription endpoint table currently lists no application-state or abuse-monitoring retention.</li>
@@ -132,14 +133,24 @@ export function PrivacyDisclosure(): React.JSX.Element {
 }
 
 export function UsageEstimatePanel({ usage }: { usage: UsageEstimateView }): React.JSX.Element {
-  const inr = usage.inrPerUsd === undefined ? undefined : usage.estimatedUsd * usage.inrPerUsd
   return <section className="usage">
     <strong>Local usage estimate</strong>
     <span>${usage.estimatedUsd.toFixed(4)} USD</span>
-    {inr !== undefined && <span>≈ ₹{inr.toFixed(2)} INR</span>}
     <small>{usage.requestCount} recent request{usage.requestCount === 1 ? '' : 's'}{usage.rolledUpRequestCount ? ` · ${usage.rolledUpRequestCount} older rolled up` : ''}</small>
     {usage.unpricedRequestCount > 0 && <small className="field-error">{usage.unpricedRequestCount} request{usage.unpricedRequestCount === 1 ? ' is' : 's are'} unpriced because the exact returned model is unknown.</small>}
-    <small>Pricing metadata: {usage.pricingVersion}. Estimates are not billing reconciliation; INR uses your manually configured exchange rate.</small>
+    <small>Pricing metadata: {usage.pricingVersion}. Estimates are not billing reconciliation.</small>
+  </section>
+}
+
+export function SessionBudgetPanel({ budget, disabled, onNewSession }: { budget: SessionBudgetStatus; disabled: boolean; onNewSession(): Promise<void> | void }): React.JSX.Element {
+  const spentOrHeld = Math.min(budget.capUsd, budget.actualUsd + budget.heldUsd)
+  const percent = budget.capUsd > 0 ? Math.min(100, (spentOrHeld / budget.capUsd) * 100) : 100
+  return <section className="usage session-budget" aria-label="Session spending limit">
+    <div className="budget-heading"><strong>Current PresenterAI session</strong><span>{budget.blocked ? 'Blocked by cap' : `$${budget.remainingUsd.toFixed(4)} remaining`}</span></div>
+    <progress max={100} value={percent} aria-label="Session budget used or reserved" />
+    <div className="info-grid"><PreviewInfo label="Actual estimate" value={`$${budget.actualUsd.toFixed(4)}`} /><PreviewInfo label="Held reserve" value={`$${budget.heldUsd.toFixed(4)}`} /><PreviewInfo label="Session cap" value={`$${budget.capUsd.toFixed(2)}`} /></div>
+    <small>Started {new Date(budget.startedAt).toLocaleString()} · {budget.pricingVersion}. Clear Usage does not reset this ledger.</small>
+    <button type="button" disabled={disabled} onClick={() => void onNewSession()}>New Session</button>
   </section>
 }
 
@@ -156,7 +167,7 @@ export interface RetentionActions {
   } | void>
 }
 
-export function RetentionControls({ actions, busy = false }: { actions: RetentionActions; busy?: boolean }): React.JSX.Element {
+export function RetentionControls({ actions, busy = false, onDeleteAllSuccess }: { actions: RetentionActions; busy?: boolean; onDeleteAllSuccess?(): void }): React.JSX.Element {
   const [confirmingAll, setConfirmingAll] = useState(false)
   const [confirmation, setConfirmation] = useState('')
   const [pending, setPending] = useState('')
@@ -185,6 +196,7 @@ export function RetentionControls({ actions, busy = false }: { actions: Retentio
         setMessage(result.message || 'Some local data could not be deleted.')
         return
       }
+      onDeleteAllSuccess?.()
       setMessage('Delete all local data completed.')
       setConfirmingAll(false); setConfirmation('')
     } catch (error) {

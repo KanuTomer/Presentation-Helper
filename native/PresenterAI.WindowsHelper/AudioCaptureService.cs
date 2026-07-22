@@ -44,13 +44,17 @@ internal interface ILoopbackCapture : IDisposable
 
 internal sealed class WasapiLoopbackCaptureFactory : ILoopbackCaptureFactory
 {
+    // Keep device discovery and capture activation tied to render endpoints.
+    // PresenterAI intentionally has no microphone/DataFlow.Capture path.
+    internal const DataFlow EndpointDataFlow = DataFlow.Render;
+
     public IReadOnlyList<AudioDevice> ListDevices()
     {
         using var enumerator = new MMDeviceEnumerator();
         string? defaultId = null;
         try
         {
-            using var defaultDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            using var defaultDevice = enumerator.GetDefaultAudioEndpoint(EndpointDataFlow, Role.Multimedia);
             defaultId = defaultDevice.ID;
         }
         catch
@@ -58,7 +62,7 @@ internal sealed class WasapiLoopbackCaptureFactory : ILoopbackCaptureFactory
             // A machine without a render endpoint legitimately has no default device.
         }
 
-        var endpoints = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+        var endpoints = enumerator.EnumerateAudioEndPoints(EndpointDataFlow, DeviceState.Active);
         var devices = new List<AudioDevice>(endpoints.Count);
         foreach (var endpoint in endpoints)
         {
@@ -76,8 +80,14 @@ internal sealed class WasapiLoopbackCaptureFactory : ILoopbackCaptureFactory
         {
             using var enumerator = new MMDeviceEnumerator();
             var device = string.IsNullOrWhiteSpace(endpointId)
-                ? enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia)
+                ? enumerator.GetDefaultAudioEndpoint(EndpointDataFlow, Role.Multimedia)
                 : enumerator.GetDevice(endpointId);
+            var dataFlow = device.DataFlow;
+            if (dataFlow != EndpointDataFlow)
+            {
+                device.Dispose();
+                EnsureRenderEndpoint(dataFlow);
+            }
             return new WasapiLoopbackCaptureAdapter(device);
         }
         catch (Exception error)
@@ -89,6 +99,12 @@ internal sealed class WasapiLoopbackCaptureFactory : ILoopbackCaptureFactory
                     : "The selected Windows output device is unavailable.",
                 error);
         }
+    }
+
+    internal static void EnsureRenderEndpoint(DataFlow dataFlow)
+    {
+        if (dataFlow != EndpointDataFlow)
+            throw new AudioCaptureException("device_unavailable", "PresenterAI only captures Windows output devices through system loopback.");
     }
 }
 
@@ -212,7 +228,7 @@ internal sealed class AudioCaptureService
             ActiveOperationId = operationId;
             ActiveEndpointId = nextCapture.EndpointId;
             ActiveEndpointName = nextCapture.EndpointName;
-            terminalReason = "released";
+            terminalReason = "stopped";
             rawBytes = 0;
             stopRequested = 0;
             limitSignaled = 0;
@@ -255,7 +271,7 @@ internal sealed class AudioCaptureService
                 var startedAt = StartedAt;
                 var completion = stopped!;
 
-                RequestStop("released");
+                RequestStop("stopped");
                 await completion.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 limitTimer?.Dispose();
                 limitTimer = null;
@@ -263,7 +279,7 @@ internal sealed class AudioCaptureService
 
                 var duration = startedAt is null ? 0 : Math.Max(0, (long)(utcNow() - startedAt.Value).TotalMilliseconds);
                 if (duration < minimumDurationMs || rawBytes == 0)
-                    throw new AudioCaptureException("invalid_audio", "The recording was too short. Hold the shortcut until the reviewer finishes speaking.");
+                    throw new AudioCaptureException("invalid_audio", "The recording was too short. Start listening before the reviewer speaks, then stop after the question finishes.");
 
                 ConvertBufferedCaptureToPcm16kMono(finalPath);
                 using var reader = new WaveFileReader(finalPath);
@@ -397,6 +413,9 @@ internal sealed class AudioCaptureService
         ILoopbackCapture? activeCapture;
         lock (ioLock)
         {
+            // "released" remains accepted by Electron for recordings created
+            // by an older helper, but new v2 captures use the toggle-neutral
+            // "stopped" terminal reason.
             if (terminalReason is "released" or "stopped" || reason is "maximum_duration" or "maximum_size")
                 terminalReason = reason;
             activeCapture = capture;

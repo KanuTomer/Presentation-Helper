@@ -1,5 +1,6 @@
 import React from 'react'
 import type { AssistantResponse, SupportLevel } from '../shared/contracts'
+import { CodeBlockCard, type CopyCodeHandler } from './codeBlockCard'
 
 export type EvidenceSupport = SupportLevel
 
@@ -11,11 +12,12 @@ const labels: Record<EvidenceSupport, string> = {
   'unsupported-project-claim': 'Project evidence unavailable'
 }
 
-export function ResponseCard({ response }: { response: AssistantResponse }): React.JSX.Element {
+export function ResponseCard({ response, onCopyCode }: { response: AssistantResponse; onCopyCode?: CopyCodeHandler }): React.JSX.Element {
   const support = evidenceSupport(response)
   return <article className="response-card">
     <div className="response-labels"><span className="category">{response.category}</span><span className={`support-badge ${support}`} aria-label="Evidence support">{labels[support]}</span></div>
     <h3>SAY</h3><p className="say">{response.say}</p>
+    {response.codeBlocks?.map((block, index) => <CodeBlockCard key={`${block.language}:${block.title ?? ''}:${index}`} block={block} onCopy={onCopyCode} />)}
     <h3>KEY POINTS</h3><ul>{response.keyPoints.map((point) => <li key={point}>{point}</li>)}</ul>
     <h3>IF CHALLENGED</h3><p>{response.ifChallenged}</p>
     {response.warning && <div className="warning-box"><strong>WARNING</strong><p>{response.warning}</p></div>}

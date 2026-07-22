@@ -6,10 +6,12 @@ import {
   ListeningConsentPanel,
   PrivacyDisclosure,
   RetentionControls,
+  SessionBudgetPanel,
   TransmissionPreviewPanel,
   UsageEstimatePanel,
   type RetentionActions
 } from '../src/renderer/privacyControls'
+import { LISTENING_CONSENT_VERSION } from '../src/shared/contracts'
 
 let frames: FrameRequestCallback[]
 beforeEach(() => {
@@ -22,9 +24,9 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 describe('privacy controls', () => {
   it('persists only the required listening disclosure version', async () => {
     const accept = vi.fn()
-    render(<ListeningConsentPanel consent={{ requiredVersion: 2, satisfied: false }} onAccept={accept} />)
-    fireEvent.click(screen.getByRole('button', { name: /enable hold-to-listen/i }))
-    await waitFor(() => expect(accept).toHaveBeenCalledWith(2))
+    render(<ListeningConsentPanel consent={{ requiredVersion: LISTENING_CONSENT_VERSION, satisfied: false }} onAccept={accept} />)
+    fireEvent.click(screen.getByRole('button', { name: /enable transcript review/i }))
+    await waitFor(() => expect(accept).toHaveBeenCalledWith(LISTENING_CONSENT_VERSION))
   })
 
   it('acknowledges a visible operation-scoped preview after two frames', async () => {
@@ -40,20 +42,35 @@ describe('privacy controls', () => {
     expect(rendered).toHaveBeenCalledWith('op-7', 'response')
   })
 
-  it('discloses retention, DPAPI limitations, and approximate INR pricing', () => {
-    render(<><PrivacyDisclosure /><UsageEstimatePanel usage={{ estimatedUsd: 0.1, pricingVersion: 'prices-v2', requestCount: 3, unpricedRequestCount: 1, inrPerUsd: 85 }} /></>)
+  it('discloses retention, DPAPI limitations, and USD-only pricing', () => {
+    render(<><PrivacyDisclosure /><UsageEstimatePanel usage={{ estimatedUsd: 0.1, pricingVersion: 'prices-v2', requestCount: 3, unpricedRequestCount: 1 }} /></>)
     expect(screen.getByText(/up to 30 days/i)).toBeTruthy()
     expect(screen.getByText(/same user/i)).toBeTruthy()
-    expect(screen.getByText('≈ ₹8.50 INR')).toBeTruthy()
+    expect(screen.queryByText(/INR/u)).toBeNull()
     expect(screen.getByText(/1 request is unpriced/i)).toBeTruthy()
   })
 
+  it('shows actual, held, and remaining USD and resets only through New Session', async () => {
+    const startNewSession = vi.fn()
+    render(<SessionBudgetPanel budget={{
+      sessionId: 'session-1', startedAt: '2026-07-22T00:00:00.000Z', capUsd: 0.25,
+      actualUsd: 0.04, heldUsd: 0.06, remainingUsd: 0.15, pricingVersion: 'prices-v4', blocked: false
+    }} disabled={false} onNewSession={startNewSession} />)
+    expect(screen.getByText('$0.1500 remaining')).toBeTruthy()
+    expect(screen.getByText('$0.0400')).toBeTruthy()
+    expect(screen.getByText('$0.0600')).toBeTruthy()
+    expect((screen.getByRole('progressbar') as HTMLProgressElement).value).toBe(40)
+    fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
+    await waitFor(() => expect(startNewSession).toHaveBeenCalledTimes(1))
+  })
+
   it('requires the exact phrase and never describes source documents as deleted', async () => {
+    const onDeleteAllSuccess = vi.fn()
     const actions: RetentionActions = {
       clearSession: vi.fn(), clearUsage: vi.fn(), clearCompatibility: vi.fn(), clearDocuments: vi.fn(), deleteApiKey: vi.fn(),
       deleteAllData: vi.fn().mockResolvedValue({ ok: true })
     }
-    render(<RetentionControls actions={actions} />)
+    render(<RetentionControls actions={actions} onDeleteAllSuccess={onDeleteAllSuccess} />)
     expect(screen.getByText(/never your original/i)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Delete all local PresenterAI data' }))
     const confirmButton = screen.getByRole('button', { name: 'Delete all' }) as HTMLButtonElement
@@ -63,9 +80,11 @@ describe('privacy controls', () => {
     fireEvent.change(screen.getByLabelText('Delete all confirmation'), { target: { value: 'DELETE ALL' } })
     fireEvent.click(confirmButton)
     await waitFor(() => expect(actions.deleteAllData).toHaveBeenCalledTimes(1))
+    expect(onDeleteAllSuccess).toHaveBeenCalledTimes(1)
   })
 
   it('renders mixed per-scope delete-all results without hiding partial failure', async () => {
+    const onDeleteAllSuccess = vi.fn()
     const actions: RetentionActions = {
       clearSession: vi.fn(), clearUsage: vi.fn(), clearCompatibility: vi.fn(), clearDocuments: vi.fn(), deleteApiKey: vi.fn(),
       deleteAllData: vi.fn().mockResolvedValue({
@@ -77,7 +96,7 @@ describe('privacy controls', () => {
         ]
       })
     }
-    render(<RetentionControls actions={actions} />)
+    render(<RetentionControls actions={actions} onDeleteAllSuccess={onDeleteAllSuccess} />)
     fireEvent.click(screen.getByRole('button', { name: 'Delete all local PresenterAI data' }))
     fireEvent.change(screen.getByLabelText('Delete all confirmation'), { target: { value: 'DELETE ALL' } })
     fireEvent.click(screen.getByRole('button', { name: 'Delete all' }))
@@ -86,6 +105,7 @@ describe('privacy controls', () => {
     expect(screen.getByText('session: cleared')).toBeTruthy()
     expect(screen.getByText('documents: SQLite index remained locked.')).toBeTruthy()
     expect(screen.getByRole('dialog', { name: 'Confirm deletion of all local data' })).toBeTruthy()
+    expect(onDeleteAllSuccess).not.toHaveBeenCalled()
   })
 
   it('disables every retention action during active work', () => {

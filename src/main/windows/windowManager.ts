@@ -2,8 +2,18 @@ import { BrowserWindow, Menu, Tray, app, globalShortcut, nativeImage, screen } f
 import { join } from 'node:path'
 import { is } from '@electron-toolkit/utils'
 import { channels } from '../../shared/channels.js'
-import type { SettingsStore } from '../settings/store.js'
+import { WINDOW_LAYOUT_REVISION, type SettingsStore } from '../settings/store.js'
 import type { CaptureProtection } from './captureProtection.js'
+
+export interface OverlayBounds { x: number; y: number; width: number; height: number }
+export interface WorkArea { x: number; y: number; width: number; height: number }
+
+export const OVERLAY_DEFAULT_WIDTH = 1100
+export const OVERLAY_DEFAULT_HEIGHT = 720
+export const OVERLAY_MIN_WIDTH = 680
+export const OVERLAY_MIN_HEIGHT = 420
+export const OVERLAY_EDGE_MARGIN = 16
+const LEGACY_NARROW_WIDTH = 900
 
 export class WindowManager {
   window?: BrowserWindow
@@ -13,24 +23,37 @@ export class WindowManager {
   private boundsTimer?: NodeJS.Timeout
   private clickThrough = false
   private quitting = false
+  private glassTint = 0.42
+  private glassTintCssKey?: string
+  private glassTintCssRevision = 0
   constructor(private store: SettingsStore, private capture: CaptureProtection) {}
 
   create(): BrowserWindow {
     if (this.window && !this.window.isDestroyed()) return this.window
-    const initialBounds = this.validBounds(this.store.windowBounds) ?? this.defaultBounds()
+    const requiresLayoutMigration = this.store.windowLayoutRevision < WINDOW_LAYOUT_REVISION
+    const initialBounds = requiresLayoutMigration
+      ? this.migrateLegacyBounds(this.store.windowBounds)
+      : this.validBounds(this.store.windowBounds) ?? this.defaultBounds()
     this.window = new BrowserWindow({
       ...initialBounds,
-      minWidth: 380, minHeight: 300, frame: false, transparent: true, alwaysOnTop: true,
+      minWidth: OVERLAY_MIN_WIDTH, minHeight: OVERLAY_MIN_HEIGHT, frame: false, transparent: true, alwaysOnTop: true,
       skipTaskbar: true, resizable: true, movable: true, show: false, backgroundColor: '#00000000',
+      hasShadow: false, roundedCorners: true,
+      ...(process.platform === 'win32' ? { backgroundMaterial: 'none' as const } : {}),
       webPreferences: { preload: join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false }
     })
-    this.window.setOpacity(this.store.settings.opacity)
+    // Applying the Electron-supported screen-saver level after native window
+    // creation keeps the transparent overlay topmost without changing focus.
+    this.window.setAlwaysOnTop(true, 'screen-saver')
+    this.glassTint = this.clampGlassTint(this.store.settings.glassTint)
+    this.window.webContents.once('did-finish-load', () => this.applyGlassTint())
+    if (requiresLayoutMigration) void this.store.setWindowLayout(initialBounds, WINDOW_LAYOUT_REVISION)
     this.clickThrough = this.store.settings.clickThrough
     this.window.setIgnoreMouseEvents(this.clickThrough, { forward: true })
     this.capture.setEnabled(this.window, true)
     this.window.once('ready-to-show', () => {
       if (!this.window) return
-      this.window.showInactive()
+      this.showInactiveTopmost(this.window)
     })
     this.window.on('close', (event) => {
       if (this.quitting) return
@@ -49,22 +72,24 @@ export class WindowManager {
   }
 
   setClickThrough(enabled: boolean): void { this.clickThrough = enabled; this.window?.setIgnoreMouseEvents(enabled, { forward: true }) }
-  setOpacity(value: number): void { this.window?.setOpacity(Math.min(1, Math.max(0.45, value))) }
-  focusAsk(): void { const window = this.ensureWindow(); window.show(); window.focus(); window.webContents.send(channels.focusAsk) }
-  openSettings(): void { const window = this.ensureWindow(); window.show(); window.focus(); window.webContents.send(channels.openSettings) }
+  setGlassTint(value: number): void {
+    this.glassTint = this.clampGlassTint(value)
+    this.applyGlassTint()
+  }
+  focusAsk(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); window.webContents.send(channels.focusAsk) }
+  openSettings(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); window.webContents.send(channels.openSettings) }
   openPrivacy(): void {
     this.emergencyUnlock()
     const window = this.ensureWindow()
-    window.show()
-    window.focus()
+    this.showFocusedTopmost(window)
     window.webContents.send(channels.openPrivacy)
   }
-  showTransmissionPreview(): void { this.ensureWindow().showInactive() }
+  showTransmissionPreview(): void { this.showInactiveTopmost(this.ensureWindow()) }
   get hasTray(): boolean { return Boolean(this.tray) }
   get isClickThrough(): boolean { return this.clickThrough }
-  toggleVisibility(): void { const window = this.ensureWindow(); window.isVisible() ? window.hide() : window.showInactive() }
+  toggleVisibility(): void { const window = this.ensureWindow(); window.isVisible() ? window.hide() : this.showInactiveTopmost(window) }
   emergencyUnlock(): void { this.setClickThrough(false); void this.store.updateSettings({ clickThrough: false }) }
-  showFromTray(): void { this.emergencyUnlock(); const window = this.ensureWindow(); window.show(); window.focus() }
+  showFromTray(): void { this.emergencyUnlock(); this.showFocusedTopmost(this.ensureWindow()) }
   openSettingsFromTray(): void { this.emergencyUnlock(); this.openSettings() }
   prepareToQuit(): void { this.quitting = true }
 
@@ -118,7 +143,7 @@ export class WindowManager {
     ]))
   }
   private persistBounds(): void { clearTimeout(this.boundsTimer); this.boundsTimer = setTimeout(() => { if (this.window) void this.store.setWindowBounds(this.window.getBounds()) }, 250) }
-  private validBounds(bounds?: { x: number; y: number; width: number; height: number }) {
+  private validBounds(bounds?: OverlayBounds): OverlayBounds | undefined {
     if (!bounds) return undefined
     const displays = screen.getAllDisplays()
     if (displays.length === 0) return undefined
@@ -126,33 +151,102 @@ export class WindowManager {
     const display = intersects
       ? screen.getDisplayMatching(bounds)
       : screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y })
-    const area = display.workArea
-    // Leave room for the DWM shadow that Windows can add to transparent,
-    // frameless windows after BrowserWindow has applied the requested bounds.
-    const edgeMargin = 16
-    const horizontalMargin = area.width >= 380 + edgeMargin * 2 ? edgeMargin : 0
-    const verticalMargin = area.height >= 300 + edgeMargin * 2 ? edgeMargin : 0
-    const width = Math.min(Math.max(380, bounds.width), area.width - horizontalMargin * 2)
-    const height = Math.min(Math.max(300, bounds.height), area.height - verticalMargin * 2)
-    return {
-      x: Math.min(Math.max(bounds.x, area.x + horizontalMargin), area.x + area.width - horizontalMargin - width),
-      y: Math.min(Math.max(bounds.y, area.y + verticalMargin), area.y + area.height - verticalMargin - height),
-      width,
-      height
-    }
+    return clampOverlayBounds(bounds, display.workArea)
   }
 
-  private defaultBounds(): { x: number; y: number; width: number; height: number } {
-    const area = screen.getPrimaryDisplay().workArea
-    const width = Math.min(560, area.width)
-    const height = Math.min(720, area.height)
-    return {
-      x: area.x + Math.max(0, Math.floor((area.width - width) / 2)),
-      y: area.y + Math.max(0, Math.floor((area.height - height) / 2)),
-      width,
-      height
-    }
+  private migrateLegacyBounds(bounds?: OverlayBounds): OverlayBounds {
+    if (!bounds) return this.defaultBounds()
+    const displays = screen.getAllDisplays()
+    if (displays.length === 0) return bounds
+    const intersects = displays.some(({ workArea }) => rectanglesIntersect(bounds, workArea))
+    const display = intersects
+      ? screen.getDisplayMatching(bounds)
+      : screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y })
+    return migrateLegacyOverlayBounds(bounds, display.workArea)
+  }
+
+  private defaultBounds(): OverlayBounds { return defaultOverlayBounds(screen.getPrimaryDisplay().workArea) }
+
+  private clampGlassTint(value: number): number { return Math.min(0.78, Math.max(0.18, value)) }
+
+  private applyGlassTint(): void {
+    const window = this.window
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
+    const revision = ++this.glassTintCssRevision
+    const previousKey = this.glassTintCssKey
+    const css = `:root { --glass-tint: ${this.glassTint.toFixed(2)}; }`
+    void window.webContents.insertCSS(css).then(async (key) => {
+      if (!this.window || this.window.isDestroyed() || revision !== this.glassTintCssRevision) {
+        await window.webContents.removeInsertedCSS(key).catch(() => undefined)
+        return
+      }
+      this.glassTintCssKey = key
+      if (previousKey && previousKey !== key) {
+        await window.webContents.removeInsertedCSS(previousKey).catch(() => undefined)
+      }
+    }).catch(() => undefined)
+  }
+
+  private showInactiveTopmost(window: BrowserWindow): void {
+    window.showInactive()
+    // The screen-saver level is the Electron-supported topmost tier that
+    // remains effective over fullscreen presentation windows.
+    window.setAlwaysOnTop(true, 'screen-saver')
+  }
+
+  private showFocusedTopmost(window: BrowserWindow): void {
+    window.show()
+    window.setAlwaysOnTop(true, 'screen-saver')
+    window.focus()
   }
 
   private ensureWindow(): BrowserWindow { return this.window && !this.window.isDestroyed() ? this.window : this.create() }
+}
+
+export function defaultOverlayBounds(area: WorkArea): OverlayBounds {
+  const horizontalMargin = area.width >= OVERLAY_MIN_WIDTH + OVERLAY_EDGE_MARGIN * 2 ? OVERLAY_EDGE_MARGIN : 0
+  const verticalMargin = area.height >= OVERLAY_MIN_HEIGHT + OVERLAY_EDGE_MARGIN * 2 ? OVERLAY_EDGE_MARGIN : 0
+  const width = Math.min(OVERLAY_DEFAULT_WIDTH, area.width - horizontalMargin * 2)
+  const height = Math.min(OVERLAY_DEFAULT_HEIGHT, area.height - verticalMargin * 2)
+  return {
+    x: area.x + Math.max(horizontalMargin, Math.floor((area.width - width) / 2)),
+    y: area.y + Math.max(verticalMargin, Math.floor((area.height - height) / 2)),
+    width,
+    height
+  }
+}
+
+export function migrateLegacyOverlayBounds(bounds: OverlayBounds, area: WorkArea): OverlayBounds {
+  if (bounds.width >= LEGACY_NARROW_WIDTH) return clampOverlayBounds(bounds, area)
+  const targetWidth = Math.min(OVERLAY_DEFAULT_WIDTH, availableDimension(area.width, OVERLAY_MIN_WIDTH))
+  const centerX = bounds.x + bounds.width / 2
+  return clampOverlayBounds({
+    ...bounds,
+    x: Math.round(centerX - targetWidth / 2),
+    width: targetWidth
+  }, area)
+}
+
+export function clampOverlayBounds(bounds: OverlayBounds, area: WorkArea): OverlayBounds {
+  const horizontalMargin = area.width >= OVERLAY_MIN_WIDTH + OVERLAY_EDGE_MARGIN * 2 ? OVERLAY_EDGE_MARGIN : 0
+  const verticalMargin = area.height >= OVERLAY_MIN_HEIGHT + OVERLAY_EDGE_MARGIN * 2 ? OVERLAY_EDGE_MARGIN : 0
+  const availableWidth = area.width - horizontalMargin * 2
+  const availableHeight = area.height - verticalMargin * 2
+  const width = Math.min(Math.max(OVERLAY_MIN_WIDTH, bounds.width), availableWidth)
+  const height = Math.min(Math.max(OVERLAY_MIN_HEIGHT, bounds.height), availableHeight)
+  return {
+    x: Math.min(Math.max(bounds.x, area.x + horizontalMargin), area.x + area.width - horizontalMargin - width),
+    y: Math.min(Math.max(bounds.y, area.y + verticalMargin), area.y + area.height - verticalMargin - height),
+    width,
+    height
+  }
+}
+
+function availableDimension(size: number, minimum: number): number {
+  return size >= minimum + OVERLAY_EDGE_MARGIN * 2 ? size - OVERLAY_EDGE_MARGIN * 2 : size
+}
+
+function rectanglesIntersect(left: OverlayBounds, right: WorkArea): boolean {
+  return left.x < right.x + right.width && left.x + left.width > right.x &&
+    left.y < right.y + right.height && left.y + left.height > right.y
 }

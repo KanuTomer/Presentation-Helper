@@ -5,13 +5,13 @@ Do not infer any result from the protection request or Electron's reported state
 This is the operator runbook. Record immutable results in:
 
 - `docs/validation/milestones-0-2.md` for early Windows and capture prerequisites;
-- `docs/validation/milestone-5.md` for push-to-listen;
+- `docs/validation/milestone-5.md` for toggle listening;
 - `docs/validation/milestone-6.md` for transcription-to-response;
 - `docs/capture-compatibility/matrix.md` for capture-path observations.
 
 Milestones 3 and 4 are already accepted in their respective reports. Do not spend API credits rerunning M3 or repeat the offline M4 corpus as manual evidence.
 
-Milestones 5 and 6 are **not accepted**. The current non-billable gate passes 196 Vitest tests in 28 files, 29/29 .NET tests, 5/5 Playwright Electron tests, an audit with zero high-severity findings, and the 50/50 M4 corpus. Those results do not replace the fullscreen, capture-path, Meet, physical-device, or installed-app rows below.
+Milestones 5 and 6 are **not accepted**. The current non-billable gate passes 323 Vitest tests in 44 files, 30/30 .NET tests, 7/7 Playwright Electron tests, an audit with zero vulnerabilities, and the 50/50 M4 corpus. Those results do not replace the fullscreen, capture-path, Meet, physical-device, or installed-app rows below.
 
 > **M6 paid campaign safety stop:** the current zero-network preflight estimates $0.148247, but its documented worst-case bound is $0.644547. Because that exceeds the immutable $0.15 cap, it reports `strictCampaignFeasible=false`, sets `billableExecutionEnabled=false`, and refuses live execution. M6 has spent $0. Do not supply the API key or run billable cases until the user separately revises the case count or cap.
 
@@ -32,14 +32,14 @@ Run the matrix once for speakers, wired headphones, and each available Bluetooth
 
 | Check | Result | Evidence / notes |
 |---|---|---|
-| 20 hold/release trials; no duplicate starts or stops | Untested | |
+| 20 press-on/press-off toggle trials; no duplicate starts or stops | Untested | User-directed replacement for the original hold/release interaction |
 | Intelligible Meet speech in at least 19/20 trials | Untested | |
 | Confirmed-capture indicator appears within 150 ms | Untested | |
 | Esc cancels capture and deletes temporary audio | Untested | |
 | Removing the selected device gives a visible recoverable error | Untested | |
 | Changing the default device falls back visibly | Untested | |
 | Ten transcription-to-answer trials completed | Untested | |
-| Release-to-answer p50 / p95 | Untested | Record stage timings |
+| Stop-to-answer p50 / p95 | Untested | Record operation-scoped renderer timings |
 | Temporary WAV deleted after every terminal outcome | Untested | |
 
 The local command `npm run test:helper-smoke` is an automated format and lifecycle check. It is not a substitute for intelligibility testing with a live Meet session.
@@ -56,7 +56,7 @@ The final campaign is stricter than the compact table above: perform 50 physical
 4. Sign off M5 only if its strict thresholds pass.
 5. Stop before the paid M6 phase. Obtain a separate user decision that changes the case count or budget cap enough for the strict documented bound; the existing $0.15 authorization cannot start the current 20-case campaign.
 6. After a revised plan is explicitly authorized, run only that approved campaign sequentially with zero SDK retries. Stop on the first infrastructure/budget failure and leave later rows `Untested`.
-7. Calculate p50/p95 only from operation-scoped production-app renderer acknowledgements for the pre-designated full-pipeline cases. A standalone/imported timing value or internal pipeline `total` is diagnostic and cannot satisfy release-to-visible acceptance.
+7. Calculate p50/p95 only from operation-scoped production-app renderer acknowledgements for the pre-designated full-pipeline cases. A standalone/imported timing value or internal pipeline `total` is diagnostic and cannot satisfy stop-to-visible acceptance.
 8. Sign off M6 only if every gate passes within the newly authorized strict budget.
 
 ## Installer matrix

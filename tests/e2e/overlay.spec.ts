@@ -19,6 +19,7 @@ test.beforeAll(async () => {
     env: {
       ...childEnvironment,
       PRESENTERAI_E2E: '1',
+      PRESENTERAI_E2E_AUDIO_BACKEND: 'synthetic-test',
       PRESENTERAI_E2E_USER_DATA: userData,
       PRESENTERAI_E2E_HELPER_START_DELAY_MS: '4000'
     }
@@ -56,6 +57,44 @@ test('registers renderer IPC before delayed helper initialization completes', as
   }).toBe(true)
 })
 
+test('reuses the system-audio toggle after a completed terminal path', async () => {
+  const topmost = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())
+  const recoveryShortcut = () => application.evaluate(({ globalShortcut }) => globalShortcut.isRegistered('Control+Shift+I'))
+  expect(await topmost()).toBe(true)
+  expect(await recoveryShortcut()).toBe(true)
+  const readiness = await page.evaluate(async () => {
+    const status = await window.presenter.getStatus()
+    if (!status.privacyConsent.satisfied) {
+      await window.presenter.acceptListeningConsent(status.privacyConsent.requiredVersion)
+    }
+    return window.presenter.toggleListening()
+  })
+  expect(readiness).toEqual({ ok: true })
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).operation).toBe('listening')
+  expect(await topmost()).toBe(true)
+  expect(await recoveryShortcut()).toBe(true)
+  await page.waitForTimeout(600)
+  expect(await page.evaluate(() => window.presenter.toggleListening())).toEqual({ ok: true })
+  await expect.poll(async () => {
+    const status = await page.evaluate(() => window.presenter.getStatus())
+    return !status.temporaryAudioExists && (status.operation === 'idle' || status.operation === 'error')
+  }, { timeout: 30_000 }).toBe(true)
+  expect(await topmost()).toBe(true)
+  expect(await recoveryShortcut()).toBe(true)
+
+  expect(await page.evaluate(() => window.presenter.toggleListening())).toEqual({ ok: true })
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).operation).toBe('listening')
+  expect(await topmost()).toBe(true)
+  expect(await recoveryShortcut()).toBe(true)
+  expect(await page.evaluate(() => window.presenter.cancel())).toEqual({ ok: true })
+  await expect.poll(async () => {
+    const status = await page.evaluate(() => window.presenter.getStatus())
+    return { operation: status.operation, temporaryAudioExists: status.temporaryAudioExists }
+  }).toEqual({ operation: 'idle', temporaryAudioExists: false })
+  expect(await topmost()).toBe(true)
+  expect(await recoveryShortcut()).toBe(true)
+})
+
 test('creates a protected overlay with hardened web preferences and clamped bounds', async () => {
   const state = await application.evaluate(({ BrowserWindow, screen }) => {
     const window = BrowserWindow.getAllWindows()[0]!
@@ -68,15 +107,86 @@ test('creates a protected overlay with hardened web preferences and clamped boun
     ))
     return {
       alwaysOnTop: window.isAlwaysOnTop(), movable: window.isMovable(), resizable: window.isResizable(),
-      protected: window.isContentProtected(), contained, bounds, contentBounds, workAreas,
+      protected: window.isContentProtected(), hasShadow: window.hasShadow(), contained, bounds, contentBounds, workAreas,
       preferences: window.webContents.getLastWebPreferences()
     }
   })
   expect(state).toMatchObject({
-    alwaysOnTop: true, movable: true, resizable: true, protected: true,
+    alwaysOnTop: true, movable: true, resizable: true, protected: true, hasShadow: false,
     preferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
   })
   expect(state.contained, `bounds ${JSON.stringify(state.bounds)} (content ${JSON.stringify(state.contentBounds)}) were outside work areas ${JSON.stringify(state.workAreas)}`).toBe(true)
+  // The renderer owns the rounded glass edge; native shadowing is disabled.
+  expect(state.contentBounds.width).toBeGreaterThanOrEqual(680)
+  expect(state.contentBounds.width).toBeLessThanOrEqual(1116)
+  expect(Math.abs(state.bounds.width - state.contentBounds.width)).toBeLessThanOrEqual(16)
+})
+
+test('shows the wide glass composer and supports a per-request Code override', async () => {
+  await page.getByRole('button', { name: 'copilot' }).click()
+  const auto = page.getByRole('button', { name: 'Auto' })
+  const code = page.getByRole('button', { name: '</> Code' })
+  await expect(auto).toHaveAttribute('aria-pressed', 'true')
+  await code.click()
+  await expect(code).toHaveAttribute('aria-pressed', 'true')
+  await expect(auto).toHaveAttribute('aria-pressed', 'false')
+  const shell = page.locator('.shell')
+  await expect(shell).toHaveCSS('border-radius', '24px')
+})
+
+test('scrolls every long tab by wheel and keyboard at wide and minimum sizes', async () => {
+  for (const [width, height] of [[1100, 720], [680, 420]] as const) {
+    await application.evaluate(({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0]?.setContentSize(size.width, size.height)
+    }, { width, height })
+    for (const tab of ['copilot', 'documents', 'settings', 'privacy', 'capture'] as const) {
+      if (tab === 'capture') await page.getByTitle('Capture protection status').click()
+      else await page.getByRole('button', { name: tab, exact: true }).click()
+      const content = page.locator('.content')
+      await content.evaluate((element) => {
+        const fixture = document.createElement('div')
+        fixture.className = 'e2e-scroll-fixture'
+        fixture.setAttribute('aria-hidden', 'true')
+        fixture.style.height = '1400px'
+        fixture.style.minHeight = '1400px'
+        element.append(fixture)
+      })
+      await expect.poll(async () => content.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+      await content.evaluate((element) => { element.scrollTop = 0 })
+      await content.hover()
+      await page.mouse.wheel(0, 360)
+      await expect.poll(async () => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+
+      await content.focus()
+      await page.keyboard.press('Home')
+      await expect.poll(async () => content.evaluate((element) => element.scrollTop)).toBe(0)
+      await page.keyboard.press('PageDown')
+      await expect.poll(async () => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+      await content.locator('.e2e-scroll-fixture').evaluate((element) => element.remove())
+    }
+  }
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1100, 720))
+})
+
+test('keeps wheel and touchpad-style deltas inside nested code scrolling surfaces', async () => {
+  await page.getByRole('button', { name: 'copilot', exact: true }).click()
+  const code = page.locator('.content').evaluate((content) => {
+    const card = document.createElement('article')
+    card.className = 'code-block-card e2e-code-card'
+    const pre = document.createElement('pre')
+    pre.className = 'code-scroll'
+    pre.tabIndex = 0
+    pre.textContent = Array.from({ length: 80 }, (_, index) => `${index}: ${'nested-scroll-content '.repeat(12)}`).join('\n')
+    card.append(pre)
+    content.firstElementChild?.append(card)
+  })
+  await code
+  const scroller = page.locator('.e2e-code-card .code-scroll')
+  await scroller.hover()
+  await page.mouse.wheel(300, 320)
+  await expect.poll(async () => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+  await expect.poll(async () => scroller.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0)
+  await page.locator('.e2e-code-card').evaluate((element) => element.remove())
 })
 
 test('provides tray recovery, hide/show, and emergency click-through escape', async () => {
