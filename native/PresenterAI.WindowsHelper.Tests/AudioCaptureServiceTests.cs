@@ -51,6 +51,40 @@ public sealed class AudioCaptureServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task CompletesTwoSequentialCaptureCyclesInOneServiceProcess()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var first = new FakeCapture();
+        var second = new FakeCapture();
+        var service = new AudioCaptureService(
+            new SequenceCaptureFactory(first, second),
+            maximumDuration: TimeSpan.FromMinutes(5),
+            utcNow: () => now);
+        var firstPath = CapturePath();
+        var secondPath = CapturePath();
+
+        await service.StartAsync("cycle-1", firstPath, "endpoint-1");
+        first.EmitStereoFloat(seconds: 0.5);
+        now += TimeSpan.FromMilliseconds(500);
+        var firstResult = await service.StopAsync("cycle-1");
+
+        await service.StartAsync("cycle-2", secondPath, "endpoint-1");
+        second.EmitStereoFloat(seconds: 0.5);
+        now += TimeSpan.FromMilliseconds(500);
+        var secondResult = await service.StopAsync("cycle-2");
+
+        Assert.Equal("stopped", firstResult.TerminalReason);
+        Assert.Equal("stopped", secondResult.TerminalReason);
+        Assert.Equal(16_000, firstResult.SampleRate);
+        Assert.Equal(16_000, secondResult.SampleRate);
+        Assert.Equal(1, first.StopCalls);
+        Assert.Equal(1, second.StopCalls);
+        Assert.True(File.Exists(firstPath));
+        Assert.True(File.Exists(secondPath));
+        Assert.Null(service.ActiveOperationId);
+    }
+
+    [Fact]
     public async Task RejectsShortAudioAndDeletesOutput()
     {
         var now = DateTimeOffset.UtcNow;
@@ -216,6 +250,22 @@ public sealed class AudioCaptureServiceTests : IDisposable
             if (endpointId is not null && endpointId != "endpoint-1")
                 throw new AudioCaptureException("device_unavailable", "Unknown test endpoint.");
             return capture;
+        }
+    }
+
+    private sealed class SequenceCaptureFactory(params FakeCapture[] captures) : ILoopbackCaptureFactory
+    {
+        private readonly Queue<FakeCapture> captures = new(captures);
+
+        public IReadOnlyList<AudioDevice> ListDevices() => [new("endpoint-1", "Test output", true)];
+
+        public ILoopbackCapture Create(string? endpointId)
+        {
+            if (endpointId is not null && endpointId != "endpoint-1")
+                throw new AudioCaptureException("device_unavailable", "Unknown test endpoint.");
+            if (captures.Count == 0)
+                throw new AudioCaptureException("device_unavailable", "No test capture remains.");
+            return captures.Dequeue();
         }
     }
 

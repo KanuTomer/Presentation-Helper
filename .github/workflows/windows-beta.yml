@@ -48,8 +48,15 @@ jobs:
       - name: Publish self-contained Windows helper
         run: npm run helper:build
 
-      - name: Run two-cycle WASAPI helper smoke
-        run: npm run test:helper-smoke
+      - name: Run two-cycle helper-process smoke with deterministic test audio
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/audio | Out-Null
+          npm run --silent test:helper-process-smoke | Out-File artifacts/audio/helper-smoke-report.json -Encoding utf8
+          $report = Get-Content artifacts/audio/helper-smoke-report.json -Raw | ConvertFrom-Json
+          if ($report.captureBackend -ne 'synthetic-test' -or $report.wasapiCaptureValidated -ne $false -or $report.captureCycles -ne 2) {
+            throw 'The deterministic two-cycle helper-process smoke did not report its backend and coverage accurately.'
+          }
 
       - name: Record code-integrity environment
         shell: pwsh
@@ -200,6 +207,7 @@ jobs:
             artifacts/m7/m7-offline-report.json
             artifacts/installer/installer-lifecycle-report.json
             artifacts/code-integrity/environment.json
+            artifacts/audio/helper-smoke-report.json
             docs/validation/milestones-0-2.md
             docs/validation/milestone-5.md
             docs/validation/milestone-6.md

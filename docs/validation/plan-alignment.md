@@ -66,7 +66,7 @@ The repair started from remote `main`, used legacy-observable readiness for the 
 ## Branch evidence
 
 - M7 offline: 50/50 cases, 20/20 contextual follow-ups, 50/50 production FTS selections, zero failed IDs.
-- Current beta.2 local regression: Vitest 351/351 in 50 files, Playwright 9/9, M4 50/50, M7 50/50, M6 preflight zero network requests, and audit zero vulnerabilities. Two-cycle WASAPI and packaged probes ran successfully after reputation evaluation, but Smart App Control blocks the unsigned .NET test assembly and the local installer lifecycle; clean Windows CI remains mandatory and M5/M6 are not accepted.
+- Current beta.2 local regression: Vitest 352/352 in 50 files, .NET 33/33 in the latest isolated run, Playwright 9/9, M4 50/50, M7 50/50, M6 preflight zero network requests, and audit zero vulnerabilities. Strict local two-cycle WASAPI and packaged probes ran after reputation evaluation. GitHub-hosted run 29908576569 exposed no render endpoint, so CI uses the published helper's dual-gated deterministic backend for two full process/protocol cycles and reports `wasapiCaptureValidated: false`; it never labels hosted physical capture successful. Smart App Control has blocked unsigned local payloads and the local installer lifecycle; M5/M6 are not accepted.
 - Packaged runtime: Electron 43.1.0, SQLite 3.53.1 FTS5, helper protocol v2 with nine required features.
 - Local clean installer lifecycle: passed against SHA-256 `86F089B077221C38FB37C7739882D4C9854A72E91FA85D76FD3B1DD630C2AF27`.
 - M7/M8 PR #3 merged at `986469b`, but its PR and post-merge installer gates failed before upgrade validation because the legacy build lacked the new launch-result hook.

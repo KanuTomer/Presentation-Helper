@@ -14,6 +14,7 @@
     "test:watch": "vitest",
     "test:helper": "node scripts/helper-tests.mjs",
     "test:helper-smoke": "node scripts/helper-smoke.mjs",
+    "test:helper-process-smoke": "node scripts/helper-smoke.mjs --synthetic-test-audio",
     "test:packaged-fts": "node scripts/packaged-fts-smoke.mjs",
     "test:packaged-helper": "node scripts/packaged-helper-smoke.mjs",
     "test:code-integrity-environment": "node scripts/code-integrity-environment.mjs",

@@ -32,14 +32,22 @@ internal sealed class BoundedOperationHistory
 internal static class Program
 {
     private const int ProtocolVersion = 2;
+    private const string SyntheticAudioFlag = "--presenterai-synthetic-audio-test";
+    private const string SyntheticAudioEnvironment = "PRESENTERAI_ENABLE_SYNTHETIC_AUDIO_TEST";
     private static readonly object OutputLock = new();
     private static readonly JsonSerializerOptions ProtocolJsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-    private static readonly AudioCaptureService Audio = new();
+    private static AudioCaptureService Audio = new();
     private static readonly ShortcutHook Hook = new();
     private static readonly BoundedOperationHistory TerminalOperations = new(1_024);
+    private static string CaptureBackend = "wasapi-system-loopback";
 
-    public static async Task Main()
+    public static async Task Main(string[] args)
     {
+        var syntheticAudioTest = IsSyntheticAudioTestEnabled(
+            args,
+            Environment.GetEnvironmentVariable(SyntheticAudioEnvironment));
+        Audio = new AudioCaptureService(syntheticAudioTest ? new DeterministicTestLoopbackCaptureFactory() : null);
+        CaptureBackend = syntheticAudioTest ? "synthetic-test" : "wasapi-system-loopback";
         Hook.ShortcutDown += () => Emit(new { type = "shortcutDown" });
         Hook.ShortcutUp += () => Emit(new { type = "shortcutUp" });
         Audio.CaptureLimitReached += EmitCaptureLimitReached;
@@ -199,12 +207,13 @@ internal static class Program
         requestId,
         protocolVersion = ProtocolVersion,
         shortcutReady = Hook.IsReady,
+        captureBackend = CaptureBackend,
         features = Features()
     });
 
     private static string[] Features() =>
     [
-        "wasapi-system-loopback",
+        CaptureBackend == "synthetic-test" ? "synthetic-test-audio" : "wasapi-system-loopback",
         "device-selection",
         "hold-shortcut",
         "pcm16k-mono",
@@ -214,6 +223,10 @@ internal static class Program
         "capture-limit-events",
         "operation-ids"
     ];
+
+    internal static bool IsSyntheticAudioTestEnabled(IEnumerable<string> args, string? environmentValue) =>
+        string.Equals(environmentValue, "1", StringComparison.Ordinal)
+        && args.Contains(SyntheticAudioFlag, StringComparer.Ordinal);
 
     private static string RequiredString(JsonElement root, string property)
     {

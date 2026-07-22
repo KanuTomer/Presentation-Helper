@@ -73,6 +73,22 @@ describe('Windows helper client protocol', () => {
     expect(feature.lastError).toMatch(/missing required features/i)
   })
 
+  it('rejects the deterministic test backend as a production audio helper', async () => {
+    const child = responder((command, process) => {
+      if (command.type === 'hello') send(process, {
+        type: 'ready', requestId: command.requestId, protocolVersion: 2, shortcutReady: true,
+        captureBackend: 'synthetic-test',
+        features: features.map((feature) => feature === 'wasapi-system-loopback' ? 'synthetic-test-audio' : feature)
+      })
+    })
+    const { HelperClient } = await import('../src/main/audio/helperClient')
+    const client = new HelperClient({ executablePath: () => process.execPath, spawnProcess: (() => child) as never })
+
+    await expect(client.start()).resolves.toBe(false)
+    expect(client.lastError).toMatch(/wasapi-system-loopback/i)
+    expect(client.state).toBe('failed')
+  })
+
   it('rejects a handshake whose keyboard hook is not ready and catches synchronous spawn failures', async () => {
     const hookChild = responder((command, process) => {
       send(process, { type: 'ready', requestId: command.requestId, protocolVersion: 2, shortcutReady: false, features })
