@@ -2,6 +2,19 @@
 
 Status: **ACCEPTED — all Milestone 3 automated and live model gates passed on 2026-07-13.**
 
+## Current prompt compatibility note
+
+The accepted live report below remains immutable historical evidence for the `m3-final-v3` repair lineage and the mode-specific Luna/Terra request policy. PresenterAI `0.2.0-beta.4` adds spoken-delivery guidance without changing the provider schema, grounding rules, category precedence, field word ranges, models, output-token limits, `store:false`, or one-request behavior.
+
+- Current revision: `presenter-natural-delivery-v1`.
+- Instructions-and-schema SHA-256: `cb69745f89c00f4e5db1bb3cac4c682cb68ec9435ff18293e4cdd54a16668d33`.
+- Added behavior: directly speakable `SAY`, calm conversational wording, evidence-bound first-person claims, compact memory cues, and a respectful spoken challenge continuation.
+- Explicit exclusions: canned openings, question restatement, AI/meta wording, corporate filler, and repeated ideas across fields.
+- Validation state: offline prompt/schema/grounding regressions are green; no OpenAI request was made for this revision.
+- Future live report: ignored `artifacts/m3/m3-natural-delivery-live-report.json`; the evaluator deliberately does not resume the accepted historical report under different instructions.
+
+The historical 40/40 Luna and 8/8 Terra results must not be represented as a live evaluation of the new prompt fingerprint. A separately authorized, budget-bounded live revalidation is required before making that narrower claim. This compatibility note does not reopen or erase the completed historical gate.
+
 Latest attempt: **2026-07-13.** The Terra output-budget repair preserved all 40 passing Luna results and three passing Terra results, then reran only `g01`, `g03`, `c01`, `c03`, and `x01` in Strong mode. All five succeeded. Luna passes schema validity 40/40, category accuracy 40/40, unsupported warnings 20/20, zero inventions, and visible-word compliance 40/40. Terra passes structured output and no-invention checks 8/8.
 
 Lifetime evaluation usage is 38,162 input tokens and 17,909 output tokens, including 1,407 recorded reasoning tokens in the final repair. Estimated lifetime cost is **$0.206648**. The immutable **$0.40** ceiling leaves **$0.193352** unused; the final repair itself cost approximately **$0.045423** against its $0.105 sub-cap. Relative to the user's added $5, the estimated untouched balance is **$4.793352**; the OpenAI billing dashboard remains authoritative.
@@ -16,7 +29,7 @@ npm run eval:m3:live
 Remove-Item Env:OPENAI_API_KEY
 ```
 
-The command uses an empty retrieval provider. It runs 40 synthetic Luna cases first and starts the eight Terra smoke cases only if all Luna gates pass. Evaluation SDK retries are disabled. Before the first request it prices the run conservatively using the serialized instructions, input, schema, and mode-specific output allowance: 450 tokens for Luna and 1,200 for Terra. It writes only redacted metrics to ignored `artifacts/m3/m3-live-report.json` and does not persist prompts, responses, or the API key.
+The current command uses an empty retrieval provider. It runs 40 synthetic Luna cases first and starts the eight Terra smoke cases only if all Luna gates pass. Evaluation SDK retries are disabled. Before the first request it prices the run conservatively using the serialized instructions, input, schema, and mode-specific output allowance: 450 tokens for Luna and 1,200 for Terra. It writes only redacted metrics to ignored `artifacts/m3/m3-natural-delivery-live-report.json` and does not persist prompts, responses, or the API key. Resume requires the exact prompt revision and fingerprint; the accepted historical failed-case repair list is disabled for this new lineage.
 
 ## Exit checklist
 

@@ -212,9 +212,9 @@ export function App(): React.JSX.Element {
         if (!transcriptDraft) return
         if (choice !== 'discard') setQuestionFromUser(mergeTranscriptDraft(questionRef.current, transcriptDraft.draft.text, choice))
         setTranscriptDraft(undefined); setTimeout(() => input.current?.focus(), 0)
-      }} answerFormat={answerFormat} setAnswerFormat={setAnswerFormat} neonIntensity={neonIntensity} onNeonIntensityChange={updateNeonIntensity} onSetClickThrough={setClickThrough} input={input} ask={() => ask()} retry={() => ask(lastSubmittedFormat.current)} response={response} aiError={aiError ?? status.operationError} openSettings={() => setView('settings')} openPrivacy={() => setView('privacy')} hasKey={apiKeyStatus.configured} status={status} onAudioError={showAiError} />}
+      }} answerFormat={answerFormat} setAnswerFormat={setAnswerFormat} onSetClickThrough={setClickThrough} input={input} ask={() => ask()} retry={() => ask(lastSubmittedFormat.current)} response={response} aiError={aiError ?? status.operationError} openSettings={() => setView('settings')} openPrivacy={() => setView('privacy')} hasKey={apiKeyStatus.configured} status={status} onAudioError={showAiError} />}
       {view === 'documents' && <DocumentsView documents={documents} onChange={refresh} />}
-      {view === 'settings' && settings && <Settings settings={settings} status={status} recordingMs={recordingMs} apiKeyStatus={apiKeyStatus} onChange={refresh} />}
+      {view === 'settings' && settings && <Settings settings={settings} status={status} recordingMs={recordingMs} apiKeyStatus={apiKeyStatus} onNeonIntensityChange={updateNeonIntensity} onChange={refresh} />}
       {view === 'privacy' && <Privacy status={status} recordingMs={recordingMs} documents={documents} usage={usage} settings={settings} onNewSession={async () => {
         await window.presenter.startNewSession()
         clearRendererSession()
@@ -222,40 +222,35 @@ export function App(): React.JSX.Element {
       }} onDeleteAllSuccess={clearRendererSession} onChange={refresh} />}
       {view === 'capture' && <CaptureStatus status={status} onChange={refresh} />}
     </section>
-    <footer><span>Audio defaults OFF</span><span>Ctrl+Shift+I restores interaction</span></footer>
   </main>
 }
 
-function Copilot(props: { question: string; setQuestion(v: string): void; transcriptDraft?: { draft: TranscriptionDraft; conflict: boolean }; resolveTranscript(choice: 'replace' | 'append' | 'discard'): void; answerFormat: AnswerFormat; setAnswerFormat(v: AnswerFormat): void; neonIntensity: number; onNeonIntensityChange(value: number): void; onSetClickThrough(enabled: boolean): Promise<void>; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; retry(): void; response?: AssistantResponse; aiError?: AiErrorInfo; openSettings(): void; openPrivacy(): void; hasKey: boolean; status: AppStatus; onAudioError(error: AiErrorInfo): void }) {
+function Copilot(props: { question: string; setQuestion(v: string): void; transcriptDraft?: { draft: TranscriptionDraft; conflict: boolean }; resolveTranscript(choice: 'replace' | 'append' | 'discard'): void; answerFormat: AnswerFormat; setAnswerFormat(v: AnswerFormat): void; onSetClickThrough(enabled: boolean): Promise<void>; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; retry(): void; response?: AssistantResponse; aiError?: AiErrorInfo; openSettings(): void; openPrivacy(): void; hasKey: boolean; status: AppStatus; onAudioError(error: AiErrorInfo): void }) {
   const busy = props.status.operation !== 'idle' && props.status.operation !== 'error'
   const canSubmit = props.hasKey && Boolean(props.question.trim()) && !busy && !props.transcriptDraft?.conflict
   const retryIsSafe = props.status.operationKind !== 'audio' && !['busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio', 'invalid_transcript', 'capture_timeout', 'transcript_display_unavailable'].includes(props.aiError?.code ?? '')
   return <div className="stack">
     {!props.hasKey && <Notice tone="warning">Add your OpenAI API key in Settings before asking a question.</Notice>}
-    <CopilotQuickControls
-      answerFormat={props.answerFormat}
-      neonIntensity={props.neonIntensity}
-      clickThrough={props.status.clickThrough}
-      answerStyleDisabled={busy}
-      onAnswerFormatChange={props.setAnswerFormat}
-      onNeonIntensityChange={props.onNeonIntensityChange}
-      onSetClickThrough={props.onSetClickThrough}
-    />
     <div className="question-box">
       <textarea ref={props.input} value={props.question} onChange={(event) => props.setQuestion(event.target.value)} placeholder="Ask a reviewer question…" onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); if (canSubmit) void props.ask() } }} />
       {props.transcriptDraft && <TranscriptDraftNotice draft={props.transcriptDraft.draft} conflict={props.transcriptDraft.conflict} onResolve={props.resolveTranscript} />}
-      <div className="composer-toolbar">
-        <span className="submission-hint">{props.answerFormat === 'code' ? 'Developer response' : 'Presenter response · one request'}</span>
-        <div className="actions"><button className="primary" disabled={!canSubmit} title={busy ? 'Another operation is active.' : props.transcriptDraft?.conflict ? 'Resolve the pending transcript first.' : undefined} onClick={() => void props.ask()}>{props.answerFormat === 'code' ? 'Generate code' : 'Ask presenter'} <kbd>Ctrl↵</kbd></button>
-          <ToggleListenButton status={props.status} onError={props.onAudioError} /></div>
-      </div>
+      <CopilotQuickControls
+        answerFormat={props.answerFormat}
+        clickThrough={props.status.clickThrough}
+        answerStyleDisabled={busy}
+        onAnswerFormatChange={props.setAnswerFormat}
+        onSetClickThrough={props.onSetClickThrough}
+      >
+        <button className="primary" disabled={!canSubmit} title={busy ? 'Another operation is active.' : props.transcriptDraft?.conflict ? 'Resolve the pending transcript first.' : undefined} onClick={() => void props.ask()}>{props.answerFormat === 'code' ? 'Generate code' : 'Ask presenter'} <kbd>Ctrl↵</kbd></button>
+        <ToggleListenButton status={props.status} onError={props.onAudioError} />
+      </CopilotQuickControls>
     </div>
     {props.aiError && <AiErrorPanel error={props.aiError} allowRetry={retryIsSafe} onRetry={props.retry} onOpenSettings={props.openSettings} onOpenPrivacy={props.openPrivacy} />}
     {props.response ? <ResponseCard response={props.response} onCopyCode={(code) => window.presenter.copyCode(code)} /> : <div className="empty"><div className="wave">∿</div><h2>Ready when you are</h2><p>Type a question, or toggle system-audio listening. After transcription, review the draft and press Ctrl + Enter.</p></div>}
   </div>
 }
 
-function Settings({ settings, status, recordingMs, apiKeyStatus, onChange }: { settings: AppSettings; status: AppStatus; recordingMs: number; apiKeyStatus: ApiKeyStatus; onChange(): Promise<void> }) {
+function Settings({ settings, status, recordingMs, apiKeyStatus, onNeonIntensityChange, onChange }: { settings: AppSettings; status: AppStatus; recordingMs: number; apiKeyStatus: ApiKeyStatus; onNeonIntensityChange(value: number): void; onChange(): Promise<void> }) {
   const keyInput = useRef<HTMLInputElement>(null)
   const [message, setMessage] = useState(''); const [failure, setFailure] = useState('')
   const update = async (patch: Partial<AppSettings>) => {
@@ -266,6 +261,21 @@ function Settings({ settings, status, recordingMs, apiKeyStatus, onChange }: { s
   const busy = status.operation !== 'idle' && status.operation !== 'error'
   return <div className="stack"><h2>Settings</h2>
     {failure && <Notice tone="danger">{failure}</Notice>}
+    <fieldset className="appearance-settings"><legend>Appearance</legend>
+      <label className="neon-control">
+        <span>Neon intensity <output>{Math.round(settings.neonIntensity * 100)}%</output></span>
+        <input
+          aria-label="Neon intensity"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={settings.neonIntensity}
+          onChange={(event) => onNeonIntensityChange(Number(event.target.value))}
+        />
+      </label>
+      <p className="muted">Controls only the blue-violet caustics and rim light. Text and panel opacity stay fixed.</p>
+    </fieldset>
     <fieldset><legend>OpenAI API key</legend><p>{apiKeyStatus.configured ? 'A masked, DPAPI-encrypted key is stored for this Windows user.' : 'No API key is stored.'}</p>{apiKeyStatus.updatedAt && <small>Last replaced {new Date(apiKeyStatus.updatedAt).toLocaleString()}</small>}<p className="muted">Protection: {apiKeyStatus.protection === 'windows-dpapi' ? 'Windows DPAPI' : 'secure storage unavailable'}. DPAPI primarily protects against other Windows users, not every process already running as you.</p><input ref={keyInput} type="password" autoComplete="off" placeholder="sk-…" /><div className="actions"><button className="primary" onClick={async () => { const value = keyInput.current?.value.trim() ?? ''; if (keyInput.current) keyInput.current.value = ''; try { await window.presenter.saveApiKey(value); setMessage('Key saved.'); await onChange() } catch (e) { setFailure((e as Error).message || 'The API key could not be saved.') } }}>Save key</button><button disabled={!apiKeyStatus.configured} onClick={async () => { try { setMessage((await window.presenter.testApiKey()).message) } catch (e) { setFailure((e as Error).message || 'The API key could not be tested.') } }}>Test</button><button disabled={!apiKeyStatus.configured} onClick={async () => { try { await window.presenter.deleteApiKey(); await onChange() } catch (e) { setFailure((e as Error).message || 'The API key could not be deleted.') } }}>Delete</button></div>{message && <small>{message}</small>}</fieldset>
     <fieldset><legend>Answer model</legend><select value={settings.modelMode} onChange={(e) => void update({ modelMode: e.target.value as AppSettings['modelMode'] })}><option value="normal">Normal · {settings.normalModel}</option><option value="strong">Strong · {settings.strongModel}</option></select></fieldset>
     <fieldset><legend>System audio output</legend><p className="muted">PresenterAI captures all sound played through the selected Windows output device. It does not listen to the microphone.</p><div className="helper-health"><span className={`health-dot ${status.helperState}`} /><strong>{status.helperState}</strong></div>{status.operation === 'listening' && <p>Recording: {(recordingMs / 1000).toFixed(1)} seconds</p>}<Info label="Active capture endpoint" value={status.activeAudioEndpoint?.name ?? 'None — listening is off'} />{status.helperError && <Notice tone={status.helperState === 'failed' ? 'danger' : 'warning'}>{status.helperError}</Notice>}{status.helperState === 'missing' && <p className="muted">Reinstall PresenterAI or run the packaged build so the Windows helper is available.</p>}{status.helperState === 'failed' && <p className="muted">An unsigned helper may have been blocked by Windows Smart App Control or App Control. PresenterAI never disables that protection. Retry after using a trusted-signed build or an authorized development environment.</p>}<label>Preferred output device<select value={settings.selectedAudioEndpointId ?? ''} disabled={!status.helperAvailable} onChange={(e) => void update({ selectedAudioEndpointId: e.target.value || undefined })}><option value="">Windows default output</option>{status.audioDevices.map((device) => <option value={device.id} key={device.id}>{device.name}{device.isDefault ? ' (default)' : ''}</option>)}</select></label><button onClick={async () => { setFailure(''); try { await window.presenter.refreshAudioDevices(); await onChange() } catch (e) { setFailure((e as Error).message || 'The Windows audio helper could not be retried.') } }}>{status.helperState === 'failed' ? 'Retry helper' : 'Refresh devices'}</button>{status.shortcutWarnings.map((warning) => <Notice tone="warning" key={warning}>{warning}</Notice>)}</fieldset>

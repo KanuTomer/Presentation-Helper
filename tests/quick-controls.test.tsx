@@ -14,11 +14,9 @@ describe('Copilot quick controls', () => {
   it('keeps Code visible and locks answer-style changes while a request runs', () => {
     render(<CopilotQuickControls
       answerFormat="code"
-      neonIntensity={0.65}
       clickThrough={{ enabled: false, recoveryShortcut: 'Control+Shift+I', recoveryAvailable: true }}
       answerStyleDisabled
       onAnswerFormatChange={vi.fn()}
-      onNeonIntensityChange={vi.fn()}
       onSetClickThrough={vi.fn()}
     />)
     expect((screen.getByRole('button', { name: 'Presenter' }) as HTMLButtonElement).disabled).toBe(true)
@@ -27,22 +25,21 @@ describe('Copilot quick controls', () => {
     expect(code.getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('keeps Code selected and exposes the fixed neon range', () => {
+  it('keeps Code selected and embeds submission actions in one command bar', () => {
     const onFormat = vi.fn()
-    const onNeon = vi.fn()
     render(<CopilotQuickControls
       answerFormat="code"
-      neonIntensity={0.65}
       clickThrough={{ enabled: false, recoveryShortcut: 'Control+Shift+I', recoveryAvailable: true }}
       onAnswerFormatChange={onFormat}
-      onNeonIntensityChange={onNeon}
       onSetClickThrough={vi.fn()}
-    />)
+    >
+      <button type="button">Generate code</button>
+      <button type="button">Start listening</button>
+    </CopilotQuickControls>)
     expect(screen.getByRole('button', { name: '</> Code' }).getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByRole('slider', { name: 'Neon intensity' }).getAttribute('min')).toBe('0')
-    expect(screen.getByRole('slider', { name: 'Neon intensity' }).getAttribute('max')).toBe('1')
-    fireEvent.change(screen.getByRole('slider', { name: 'Neon intensity' }), { target: { value: '0' } })
-    expect(onNeon).toHaveBeenCalledWith(0)
+    expect(screen.queryByRole('slider', { name: 'Neon intensity' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Generate code' }).closest('.command-actions')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start listening' }).closest('.command-actions')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Presenter' }))
     expect(onFormat).toHaveBeenCalledWith('presenter')
   })
@@ -51,10 +48,8 @@ describe('Copilot quick controls', () => {
     const setClickThrough = vi.fn().mockResolvedValue(undefined)
     render(<CopilotQuickControls
       answerFormat="code"
-      neonIntensity={1}
       clickThrough={{ enabled: false, recoveryShortcut: 'Control+Shift+I', recoveryAvailable: true }}
       onAnswerFormatChange={vi.fn()}
-      onNeonIntensityChange={vi.fn()}
       onSetClickThrough={setClickThrough}
     />)
     fireEvent.click(screen.getByRole('button', { name: 'Enable click-through' }))
@@ -69,10 +64,8 @@ describe('Copilot quick controls', () => {
   it('cancels confirmation with Escape and returns focus to its trigger', () => {
     render(<CopilotQuickControls
       answerFormat="code"
-      neonIntensity={0.65}
       clickThrough={{ enabled: false, recoveryShortcut: 'Control+Shift+I', recoveryAvailable: true }}
       onAnswerFormatChange={vi.fn()}
-      onNeonIntensityChange={vi.fn()}
       onSetClickThrough={vi.fn()}
     />)
     const trigger = screen.getByRole('button', { name: 'Enable click-through' })
@@ -87,17 +80,35 @@ describe('Copilot quick controls', () => {
     })
   })
 
+  it('traps Tab and Shift+Tab inside the click-through confirmation', () => {
+    render(<CopilotQuickControls
+      answerFormat="code"
+      clickThrough={{ enabled: false, recoveryShortcut: 'Control+Shift+I', recoveryAvailable: true }}
+      onAnswerFormatChange={vi.fn()}
+      onSetClickThrough={vi.fn()}
+    />)
+    fireEvent.click(screen.getByRole('button', { name: 'Enable click-through' }))
+    const dialog = screen.getByRole('alertdialog')
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' })
+    const enable = within(dialog).getByRole('button', { name: 'Enable click-through' })
+
+    enable.focus()
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(document.activeElement).toBe(cancel)
+
+    cancel.focus()
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(enable)
+  })
+
   it('refuses an unsafe enable and retains a visible active recovery banner', () => {
     const { rerender } = render(<CopilotQuickControls
       answerFormat="code"
-      neonIntensity={0.4}
       clickThrough={{ enabled: false, recoveryShortcut: 'Control+Shift+I', recoveryAvailable: false }}
       onAnswerFormatChange={vi.fn()}
-      onNeonIntensityChange={vi.fn()}
       onSetClickThrough={vi.fn()}
     />)
-    expect((screen.getByRole('button', { name: 'Enable click-through' }) as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByText('Recovery shortcut unavailable')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Click-through unavailable' }) as HTMLButtonElement).disabled).toBe(true)
 
     rerender(<ClickThroughBanner status={{ enabled: true, recoveryShortcut: 'Control+Shift+I', recoveryAvailable: true }} />)
     expect(screen.getByRole('status').textContent).toContain('CLICK-THROUGH ON · Ctrl+Shift+I')
@@ -107,10 +118,8 @@ describe('Copilot quick controls', () => {
     const setClickThrough = vi.fn().mockRejectedValue(new Error('Persistence unavailable.'))
     render(<CopilotQuickControls
       answerFormat="code"
-      neonIntensity={0.65}
       clickThrough={{ enabled: true, recoveryShortcut: 'Control+Shift+I', recoveryAvailable: true }}
       onAnswerFormatChange={vi.fn()}
-      onNeonIntensityChange={vi.fn()}
       onSetClickThrough={setClickThrough}
     />)
 
