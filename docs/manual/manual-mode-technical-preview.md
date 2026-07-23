@@ -9,11 +9,11 @@ The preview covers typed questions, local document ingestion and retrieval, grou
 1. Open the repository's **Actions** page and select the newest successful Windows Beta run whose branch is `main`.
 2. Confirm the workflow commit is the current remote `main` commit and that the complete installer lifecycle step passed.
 3. Download and extract the `PresenterAI-Windows-beta` artifact. Do not use artifacts from PR #3 or either failed `986469b` workflow.
-4. Confirm the artifact contains the unsigned `PresenterAI-0.2.0-beta.3-setup.exe`, `SHA256SUMS.txt`, and redacted validation/lifecycle reports.
+4. Confirm the artifact contains the unsigned `PresenterAI-0.2.0-beta.4-setup.exe`, `SHA256SUMS.txt`, and redacted validation/lifecycle reports.
 5. In PowerShell, calculate the installer hash:
 
    ```powershell
-   Get-FileHash ".\PresenterAI-0.2.0-beta.3-setup.exe" -Algorithm SHA256
+   Get-FileHash ".\PresenterAI-0.2.0-beta.4-setup.exe" -Algorithm SHA256
    ```
 
 6. Compare the complete hexadecimal value with the matching entry in `SHA256SUMS.txt`. Stop if the filename or hash differs.
@@ -67,7 +67,7 @@ For an independent upgrade check:
 
 1. Verify and install the previous successful `main` installer in the same controlled account.
 2. Add disposable settings and fixture documents, then quit from the tray.
-3. Install the verified `0.2.0-beta.3` artifact over it.
+3. Install the verified `0.2.0-beta.4` artifact over it.
 4. Confirm settings and indexed catalog remain usable, the helper health is reported, and source files are unchanged.
 5. Perform Delete All and final uninstall as described above.
 
