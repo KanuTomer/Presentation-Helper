@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   browserWindowConstructor, getAllDisplays, getDisplayMatching, getDisplayNearestPoint, getPrimaryDisplay,
-  register, unregister
+  register, unregister, screenOn, screenRemoveListener
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
   getAllDisplays: vi.fn(),
@@ -10,7 +10,9 @@ const {
   getDisplayNearestPoint: vi.fn(),
   getPrimaryDisplay: vi.fn(),
   register: vi.fn(),
-  unregister: vi.fn()
+  unregister: vi.fn(),
+  screenOn: vi.fn(),
+  screenRemoveListener: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -20,7 +22,10 @@ vi.mock('electron', () => ({
   app: { quit: vi.fn() },
   globalShortcut: { register, unregister },
   nativeImage: { createFromDataURL: vi.fn() },
-  screen: { getAllDisplays, getDisplayMatching, getDisplayNearestPoint, getPrimaryDisplay }
+  screen: {
+    getAllDisplays, getDisplayMatching, getDisplayNearestPoint, getPrimaryDisplay,
+    on: screenOn, removeListener: screenRemoveListener
+  }
 }))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 
@@ -30,6 +35,8 @@ describe('window recovery shortcuts', () => {
     register.mockReset()
     register.mockReturnValue(true)
     unregister.mockReset()
+    screenOn.mockReset()
+    screenRemoveListener.mockReset()
     const display = { workArea: { x: 0, y: 0, width: 1920, height: 1080 } }
     getAllDisplays.mockReset()
     getAllDisplays.mockReturnValue([display])
@@ -123,7 +130,6 @@ describe('window recovery shortcuts', () => {
     const fakeWindow = {
       isDestroyed: () => false,
       getBounds: () => ({ x: 100, y: 100, width: 1100, height: 720 }),
-      setShape: vi.fn(),
       setAlwaysOnTop: vi.fn(),
       setIgnoreMouseEvents,
       once: vi.fn(),
@@ -158,10 +164,12 @@ describe('window recovery shortcuts', () => {
     windows.create()
 
     expect(browserWindowConstructor).toHaveBeenCalledWith(expect.objectContaining({
-      backgroundMaterial: 'acrylic',
+      transparent: true,
+      backgroundColor: '#00000000',
       roundedCorners: true,
       hasShadow: false
     }))
+    expect(browserWindowConstructor.mock.calls[0]?.[0]).not.toHaveProperty('backgroundMaterial')
     const recoveryAttempt = register.mock.invocationCallOrder[
       register.mock.calls.findIndex(([shortcut]) => shortcut === 'Control+Shift+I')
     ]
@@ -172,29 +180,30 @@ describe('window recovery shortcuts', () => {
     expect(updateSettings).toHaveBeenCalledWith({ clickThrough: false })
   })
 
-  it('falls back to the shader-only transparent window when Acrylic creation is rejected', async () => {
+  it('restores the renderer surface exactly once for each show, restore, resize, and display lifecycle event', async () => {
+    const onceHandlers = new Map<string, () => void>()
+    const windowHandlers = new Map<string, () => void>()
+    let visible = false
     const fakeWindow = {
       isDestroyed: () => false,
+      isVisible: () => visible,
       getBounds: () => ({ x: 100, y: 100, width: 1100, height: 720 }),
-      setShape: vi.fn(),
       setAlwaysOnTop: vi.fn(),
       setIgnoreMouseEvents: vi.fn(),
-      once: vi.fn(),
-      on: vi.fn(),
+      showInactive: vi.fn(() => { visible = true }),
+      show: vi.fn(() => { visible = true }),
+      hide: vi.fn(() => { visible = false }),
+      focus: vi.fn(),
+      once: vi.fn((event: string, callback: () => void) => onceHandlers.set(event, callback)),
+      on: vi.fn((event: string, callback: () => void) => windowHandlers.set(event, callback)),
       loadFile: vi.fn(),
       webContents: {
-        once: vi.fn(),
+        send: vi.fn(),
         setWindowOpenHandler: vi.fn(),
         on: vi.fn()
       }
     }
-    browserWindowConstructor
-      .mockImplementationOnce(function AcrylicWindowMock() {
-        throw new Error('Backdrop unavailable under this Windows policy.')
-      })
-      .mockImplementationOnce(function TransparentWindowMock() {
-        return fakeWindow
-      })
+    browserWindowConstructor.mockImplementation(function TransparentWindowMock() { return fakeWindow })
     const store = {
       windowLayoutRevision: 999,
       windowBounds: { x: 100, y: 100, width: 1100, height: 720 },
@@ -211,9 +220,35 @@ describe('window recovery shortcuts', () => {
     ;(windows as unknown as { tray: unknown }).tray = {}
 
     expect(windows.create()).toBe(fakeWindow)
-    expect(browserWindowConstructor).toHaveBeenCalledTimes(2)
-    expect(browserWindowConstructor.mock.calls[0]?.[0]).toMatchObject({ backgroundMaterial: 'acrylic' })
-    expect(browserWindowConstructor.mock.calls[1]?.[0]).not.toHaveProperty('backgroundMaterial')
+    expect(browserWindowConstructor).toHaveBeenCalledOnce()
+    expect(browserWindowConstructor.mock.calls[0]?.[0]).toMatchObject({
+      transparent: true, backgroundColor: '#00000000', roundedCorners: true, hasShadow: false
+    })
+    expect(browserWindowConstructor.mock.calls[0]?.[0]).not.toHaveProperty('backgroundMaterial')
+
+    onceHandlers.get('ready-to-show')?.()
+    windows.focusAsk()
+    windows.openSettings()
+    windows.showTransmissionPreview()
+    windows.showFromTray()
+    visible = false
+    windows.toggleVisibility()
+    windowHandlers.get('resize')?.()
+    windowHandlers.get('restore')?.()
+    for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) {
+      const listener = screenOn.mock.calls.find(([name]) => name === event)?.[1] as (() => void) | undefined
+      listener?.()
+    }
+
+    expect(fakeWindow.webContents.send.mock.calls.filter(([channel]) => channel === 'ui:surface-restored')).toHaveLength(11)
+    expect(screenOn.mock.calls.map(([event]) => event)).toEqual([
+      'display-added', 'display-removed', 'display-metrics-changed'
+    ])
+
+    windowHandlers.get('closed')?.()
+    expect(screenRemoveListener.mock.calls.map(([event]) => event)).toEqual([
+      'display-added', 'display-removed', 'display-metrics-changed'
+    ])
   })
 
   it('never restores persisted click-through without a fresh user confirmation', async () => {
@@ -221,7 +256,6 @@ describe('window recovery shortcuts', () => {
     const fakeWindow = {
       isDestroyed: () => false,
       getBounds: () => ({ x: 100, y: 100, width: 1100, height: 720 }),
-      setShape: vi.fn(),
       setAlwaysOnTop: vi.fn(),
       setIgnoreMouseEvents,
       once: vi.fn(),
@@ -291,14 +325,6 @@ describe('window recovery shortcuts', () => {
 })
 
 describe('wide overlay bounds', () => {
-  it('requests Acrylic only on supported Windows builds so the shader remains the fallback', async () => {
-    const { supportsWindowsAcrylic } = await import('../src/main/windows/windowManager')
-    expect(supportsWindowsAcrylic('win32', '10.0.22621')).toBe(true)
-    expect(supportsWindowsAcrylic('win32', '10.0.22000')).toBe(false)
-    expect(supportsWindowsAcrylic('linux', '6.8.0')).toBe(false)
-    expect(supportsWindowsAcrylic('win32', 'invalid')).toBe(false)
-  })
-
   it('centres a fresh 1100 by 720 overlay inside the work area', async () => {
     const { defaultOverlayBounds } = await import('../src/main/windows/windowManager')
     expect(defaultOverlayBounds({ x: 0, y: 0, width: 1920, height: 1080 })).toEqual({
@@ -322,16 +348,5 @@ describe('wide overlay bounds', () => {
       { x: -1_000, y: 2_000, width: 760, height: 500 },
       { x: 0, y: 0, width: 1920, height: 1080 }
     )).toEqual({ x: 16, y: 564, width: 760, height: 500 })
-  })
-
-  it('builds a symmetric rounded region without leaving native material in the corners', async () => {
-    const { roundedWindowShape } = await import('../src/main/windows/windowManager')
-    const shape = roundedWindowShape(680, 420, 24)
-    expect(shape[0]).toMatchObject({ y: 0 })
-    expect(shape[0]!.x).toBeGreaterThan(0)
-    expect(shape.at(-1)).toMatchObject({ y: expect.any(Number) })
-    expect(shape.at(-1)!.x).toBe(shape[0]!.x)
-    expect(shape.some((rect) => rect.x === 0 && rect.width === 680)).toBe(true)
-    expect(shape.reduce((height, rect) => height + rect.height, 0)).toBe(420)
   })
 })

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react'
-import { cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   LIQUID_GLASS_MAX_DPR,
@@ -16,6 +16,7 @@ import {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  Reflect.deleteProperty(window, 'presenter')
 })
 
 describe('liquid-glass helpers', () => {
@@ -59,8 +60,7 @@ describe('LiquidGlassLayer', () => {
     const canvas = container.querySelector('canvas')
     expect(canvas?.getAttribute('aria-hidden')).toBe('true')
     expect(canvas?.getAttribute('tabindex')).toBe('-1')
-    expect(canvas?.style.pointerEvents).toBe('none')
-    expect(canvas?.style.background).toBe('transparent')
+    expect(canvas?.classList.contains('liquid-glass-layer')).toBe(true)
     expect(canvas?.getAttribute('data-neon-intensity')).toBe('0.72')
 
     await waitFor(() => {
@@ -73,8 +73,23 @@ describe('LiquidGlassLayer', () => {
   it('reports context loss and rebuilds resources when WebGL2 is restored', async () => {
     const gl = createFakeWebGl2Context()
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(gl)
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 7)
+    let nextFrame: FrameRequestCallback | undefined
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      nextFrame = callback
+      return 7
+    })
     const cancelFrame = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined)
+    let restoreSurface: (() => void) | undefined
+    const unsubscribe = vi.fn()
+    Object.defineProperty(window, 'presenter', {
+      configurable: true,
+      value: {
+        onSurfaceRestored: (callback: () => void) => {
+          restoreSurface = callback
+          return unsubscribe
+        }
+      }
+    })
     const status = vi.fn()
     const { container, unmount } = render(
       <LiquidGlassLayer neonIntensity={0.5} onStatusChange={status} />
@@ -84,6 +99,16 @@ describe('LiquidGlassLayer', () => {
     await waitFor(() => expect(canvas.dataset.liquidGlassStatus).toBe('ready'))
     expect(gl.createProgram).toHaveBeenCalledTimes(1)
 
+    const viewportCalls = gl.viewport.mock.calls.length
+    restoreSurface?.()
+    expect(gl.viewport).toHaveBeenCalledTimes(viewportCalls + 1)
+    act(() => {
+      const frame = nextFrame
+      nextFrame = undefined
+      frame?.(performance.now() + 1_000)
+    })
+    expect(gl.drawArrays).toHaveBeenCalledOnce()
+
     canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }))
     await waitFor(() => expect(canvas.dataset.liquidGlassStatus).toBe('context-lost'))
 
@@ -92,9 +117,52 @@ describe('LiquidGlassLayer', () => {
     expect(gl.createProgram).toHaveBeenCalledTimes(2)
 
     unmount()
+    expect(unsubscribe).toHaveBeenCalledOnce()
     expect(cancelFrame).toHaveBeenCalled()
     expect(gl.deleteProgram).toHaveBeenCalled()
     expect(gl.deleteBuffer).toHaveBeenCalled()
+  })
+
+  it('updates the WebGL intensity uniform and renders another frame when props change', async () => {
+    const gl = createFakeWebGl2Context()
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(gl)
+    let nextFrameId = 1
+    const frames = new Map<number, FrameRequestCallback>()
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      const id = nextFrameId
+      nextFrameId += 1
+      frames.set(id, callback)
+      return id
+    })
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+      frames.delete(id)
+    })
+
+    const flushFrames = (now: number): void => {
+      const pending = [...frames.values()]
+      frames.clear()
+      for (const callback of pending) callback(now)
+    }
+    const intensityValues = (): number[] => gl.uniform1f.mock.calls
+      .filter(([location]) => (location as unknown as { name?: string })?.name === 'u_intensity')
+      .map(([, value]) => value)
+
+    const { container, rerender } = render(<LiquidGlassLayer neonIntensity={0} />)
+    const canvas = container.querySelector('canvas')!
+    await waitFor(() => expect(canvas.dataset.liquidGlassStatus).toBe('ready'))
+
+    act(() => flushFrames(1_000))
+    expect(intensityValues()).toContain(0)
+    const drawCountAtZero = gl.drawArrays.mock.calls.length
+
+    rerender(<LiquidGlassLayer neonIntensity={1} />)
+    act(() => flushFrames(1_100))
+
+    expect(canvas.dataset.neonIntensity).toBe('1')
+    expect(intensityValues()).toContain(1)
+    expect(gl.drawArrays.mock.calls.length).toBeGreaterThan(drawCountAtZero)
+    expect(gl.enable).not.toHaveBeenCalled()
+    expect(gl.blendFunc).not.toHaveBeenCalled()
   })
 })
 
@@ -132,7 +200,7 @@ function createFakeWebGl2Context(): WebGL2RenderingContext {
     bindBuffer: vi.fn(),
     bufferData: vi.fn(),
     getAttribLocation: vi.fn(() => 0),
-    getUniformLocation: vi.fn(() => uniform),
+    getUniformLocation: vi.fn((_program, name: string) => ({ ...uniform, name })),
     deleteBuffer: vi.fn(),
     viewport: vi.fn(),
     clearColor: vi.fn(),

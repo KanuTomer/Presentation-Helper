@@ -13,5 +13,6 @@ export const channels = {
   clearCaptureResults: 'privacy:clear-capture-results', deleteAllLocalData: 'privacy:delete-all-local-data',
   dismissSettingsRecoveryWarning: 'settings:dismiss-recovery-warning',
   setCaptureProtection: 'capture:set-protection', saveCaptureResult: 'capture:save-result', removeCaptureResult: 'capture:remove-result',
-  focusAsk: 'ui:focus-ask', openSettings: 'ui:open-settings', openPrivacy: 'ui:open-privacy'
+  focusAsk: 'ui:focus-ask', openSettings: 'ui:open-settings', openPrivacy: 'ui:open-privacy',
+  surfaceRestored: 'ui:surface-restored'
 } as const

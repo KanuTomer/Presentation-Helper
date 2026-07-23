@@ -33,6 +33,7 @@ interface LiquidGlassResources {
 export interface LiquidGlassEngine {
   setIntensity: (value: number) => void
   setReducedMotion: (reduced: boolean) => void
+  restoreSurface: () => void
   dispose: () => void
 }
 
@@ -117,7 +118,10 @@ void main() {
   float energy = clamp(caustic * 0.62 + diagonal * 0.12 + lensRim * 0.28, 0.0, 1.0);
   float edgeBias = mix(0.42, 1.0, smoothstep(0.24, 0.78, radial));
   float alpha = u_intensity * (0.025 + energy * 0.17) * edgeBias;
-  out_color = vec4(color * u_intensity, alpha);
+  // The canvas is composited as premultiplied alpha. Drawing one full-screen
+  // quad means no framebuffer blending is required; write premultiplied RGB
+  // directly to avoid alpha-squared, pale-edge artifacts.
+  out_color = vec4(color * alpha, alpha);
 }
 `
 
@@ -261,6 +265,7 @@ export function createLiquidGlassEngine(
   let animationFrame: number | undefined
   let startedAt = performance.now()
   let lastRenderedAt = Number.NEGATIVE_INFINITY
+  let surfaceRestorePending = false
 
   const isVisible = (): boolean =>
     typeof document === 'undefined' || document.visibilityState !== 'hidden'
@@ -296,8 +301,6 @@ export function createLiquidGlassEngine(
     lastRenderedAt = now
     gl.clearColor(0, 0, 0, 0)
     gl.clear(gl.COLOR_BUFFER_BIT)
-    gl.enable(gl.BLEND)
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
     gl.useProgram(resources.program)
     gl.bindBuffer(gl.ARRAY_BUFFER, resources.vertexBuffer)
     if (resources.position >= 0) {
@@ -339,8 +342,19 @@ export function createLiquidGlassEngine(
   }
 
   const handleVisibility = (): void => {
-    if (isVisible()) render()
-    else cancelAnimation()
+    if (!isVisible()) {
+      cancelAnimation()
+      return
+    }
+    // Native show notifications can arrive one task before Chromium updates
+    // document.visibilityState. A pending restoration is completed here so a
+    // hidden canvas can never remain at its stale backing size after show.
+    resize()
+    if (surfaceRestorePending) {
+      lastRenderedAt = Number.NEGATIVE_INFINITY
+      surfaceRestorePending = false
+    }
+    render()
   }
   const handleResize = (): void => {
     resize()
@@ -373,6 +387,17 @@ export function createLiquidGlassEngine(
     },
     setReducedMotion(reduced: boolean): void {
       reducedMotion = reduced
+      render()
+    },
+    restoreSurface(): void {
+      if (disposed) return
+      surfaceRestorePending = true
+      if (!isVisible()) return
+      resize()
+      lastRenderedAt = Number.NEGATIVE_INFINITY
+      surfaceRestorePending = false
+      // Coalesce rapid resize/display notifications into the next animation
+      // frame instead of bypassing the 30 fps rendering cap synchronously.
       render()
     },
     dispose(): void {
@@ -446,6 +471,10 @@ export function LiquidGlassLayer({
     engineRef.current?.setReducedMotion(reducedMotion)
   }, [reducedMotion])
 
+  useEffect(() => window.presenter?.onSurfaceRestored?.(() => {
+    engineRef.current?.restoreSurface()
+  }), [])
+
   return (
     <canvas
       ref={canvasRef}
@@ -458,15 +487,6 @@ export function LiquidGlassLayer({
       ].filter(Boolean).join(' ')}
       data-liquid-glass-status={status}
       data-neon-intensity={clampNeonIntensity(neonIntensity)}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        display: 'block',
-        width: '100%',
-        height: '100%',
-        pointerEvents: 'none',
-        background: 'transparent'
-      }}
     />
   )
 }
