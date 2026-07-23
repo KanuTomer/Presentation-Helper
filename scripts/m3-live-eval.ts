@@ -75,9 +75,9 @@ const corpusFingerprint = createHash('sha256').update(corpusText).digest('hex')
 const promptFingerprint = createHash('sha256').update(presenterInstructions).update(JSON.stringify(responseJsonSchema)).digest('hex')
 
 const baseSettings: AppSettings = {
-  opacity: 0.92, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
+  neonIntensity: 0.65, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
   transcriptionModel: 'gpt-4o-mini-transcribe', askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H',
-  listenShortcut: 'Control+Shift+Space', projectSummary: ''
+  listenShortcut: 'Control+Shift+Space', projectSummary: '', approvedVocabulary: [], sessionBudgetUsd: 0.25
 }
 const requestConfiguration = {
   normal: { model: baseSettings.normalModel, ...responseRequestPolicy('normal') },

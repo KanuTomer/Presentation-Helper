@@ -18,7 +18,7 @@ import { appSettingsSchema, parseSettingsPatch, validateSettingsMutation, valida
 export { USAGE_PRICING_VERSION } from '../ai/pricing.js'
 export type { SettingsRecoveryWarning } from '../../shared/contracts.js'
 
-export const SETTINGS_SCHEMA_VERSION = 4
+export const SETTINGS_SCHEMA_VERSION = 5
 export const WINDOW_LAYOUT_REVISION = 1
 export { LISTENING_CONSENT_VERSION } from '../../shared/contracts.js'
 export const MAX_RECENT_USAGE_RECORDS = 100
@@ -193,6 +193,21 @@ const legacySettingsSchema = z.object({
   selectedAudioEndpointId: z.string().min(1).max(2_048).optional(),
   inrPerUsd: z.number().finite().min(1).max(1_000).optional()
 }).strict()
+const settingsV4Schema = z.object({
+  glassTint: z.number().finite().min(0.18).max(0.78),
+  clickThrough: z.boolean(),
+  modelMode: z.enum(['normal', 'strong']),
+  normalModel: z.string().trim().min(1).max(128),
+  strongModel: z.string().trim().min(1).max(128),
+  transcriptionModel: z.string().trim().min(1).max(128),
+  askShortcut: z.string().trim().min(1).max(128),
+  hideShortcut: z.string().trim().min(1).max(128),
+  listenShortcut: z.string().trim().min(1).max(128),
+  projectSummary: z.string(),
+  approvedVocabulary: z.array(z.string()).max(30),
+  selectedAudioEndpointId: z.string().min(1).max(2_048).optional(),
+  sessionBudgetUsd: z.number().finite().min(0.01).max(100)
+}).strict()
 const sessionBudgetReservationSchema = z.object({
   id: z.string().min(1).max(128),
   endpoint: z.enum(['responses', 'transcription']),
@@ -240,6 +255,13 @@ const storedDataV3Schema = z.object({
   settings: legacySettingsSchema,
   ...historicalStoredShape
 }).strict()
+const storedDataV4Schema = z.object({
+  schemaVersion: z.literal(4),
+  windowLayoutRevision: z.number().int().min(0).max(WINDOW_LAYOUT_REVISION),
+  settings: settingsV4Schema,
+  ...historicalStoredShape,
+  sessionBudget: sessionBudgetSchema
+}).strict()
 const legacyStoredDataSchema = z.object({
   settings: legacySettingsSchema, windowBounds: boundsSchema.optional(), documents: z.array(documentSchema),
   captureResults: z.array(captureResultSchema), usage: usageSummarySchema
@@ -254,7 +276,7 @@ const usageRecordInputSchema: z.ZodType<UsageRecordInput> = z.object({
 })
 
 const defaultSettings: AppSettings = {
-  glassTint: 0.42, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna',
+  neonIntensity: 0.65, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna',
   strongModel: 'gpt-5.6-terra', transcriptionModel: 'gpt-4o-mini-transcribe',
   askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', listenShortcut: 'Control+Shift+Space',
   projectSummary: '', approvedVocabulary: [], sessionBudgetUsd: 0.25
@@ -330,6 +352,14 @@ export class SettingsStore {
         return
       }
     }
+    if (rawVersion === 4) {
+      const versionFour = storedDataV4Schema.safeParse(raw)
+      if (versionFour.success) {
+        this.data = this.migrateVersionFour(versionFour.data)
+        await this.flush()
+        return
+      }
+    }
     if (rawVersion === undefined) {
       const legacy = legacyStoredDataSchema.safeParse(raw)
       if (legacy.success) {
@@ -338,7 +368,7 @@ export class SettingsStore {
         return
       }
     }
-    const warningCode: RecoveryReason = rawVersion !== undefined && rawVersion !== 2 && rawVersion !== 3 && rawVersion !== SETTINGS_SCHEMA_VERSION
+    const warningCode: RecoveryReason = rawVersion !== undefined && rawVersion !== 2 && rawVersion !== 3 && rawVersion !== 4 && rawVersion !== SETTINGS_SCHEMA_VERSION
       ? 'unsupported_schema'
       : 'invalid_shape'
     this.data = this.migrateOrRecover(raw, warningCode)
@@ -616,9 +646,21 @@ export class SettingsStore {
     }
   }
 
+  private migrateVersionFour(versionFour: z.infer<typeof storedDataV4Schema>): StoredData {
+    const { schemaVersion: _schemaVersion, settings, ...preserved } = versionFour
+    return {
+      ...preserved,
+      settings: recoverSettings({
+        ...settings,
+        neonIntensity: defaultSettings.neonIntensity
+      }),
+      schemaVersion: SETTINGS_SCHEMA_VERSION
+    }
+  }
+
   private migrateOrRecover(raw: unknown, reason: RecoveryReason): StoredData {
     if (!isRecord(raw)) return this.recoveredDefaults(reason)
-    if (raw.schemaVersion !== undefined && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
+    if (raw.schemaVersion !== undefined && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== 4 && raw.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
       return this.recoveredDefaults(reason)
     }
 
@@ -670,10 +712,10 @@ export const validateVocabulary = validateVocabularyTerms
 function migrateLegacySettings(value: z.infer<typeof legacySettingsSchema>): AppSettings {
   // Native opacity and INR conversion represented concepts that no longer
   // exist. All request, shortcut, audio, and project fields are recovered;
-  // the new glass tint and USD cap start from their documented defaults.
+  // the new neon intensity and USD cap start from their documented defaults.
   return recoverSettings({
     ...value,
-    glassTint: defaultSettings.glassTint,
+    neonIntensity: defaultSettings.neonIntensity,
     sessionBudgetUsd: defaultSettings.sessionBudgetUsd
   })
 }

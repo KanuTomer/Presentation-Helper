@@ -9,11 +9,11 @@ The preview covers typed questions, local document ingestion and retrieval, grou
 1. Open the repository's **Actions** page and select the newest successful Windows Beta run whose branch is `main`.
 2. Confirm the workflow commit is the current remote `main` commit and that the complete installer lifecycle step passed.
 3. Download and extract the `PresenterAI-Windows-beta` artifact. Do not use artifacts from PR #3 or either failed `986469b` workflow.
-4. Confirm the artifact contains the unsigned `PresenterAI-0.2.0-beta.1-setup.exe`, `SHA256SUMS.txt`, and redacted validation/lifecycle reports.
+4. Confirm the artifact contains the unsigned `PresenterAI-0.2.0-beta.3-setup.exe`, `SHA256SUMS.txt`, and redacted validation/lifecycle reports.
 5. In PowerShell, calculate the installer hash:
 
    ```powershell
-   Get-FileHash ".\PresenterAI-0.2.0-beta.1-setup.exe" -Algorithm SHA256
+   Get-FileHash ".\PresenterAI-0.2.0-beta.3-setup.exe" -Algorithm SHA256
    ```
 
 6. Compare the complete hexadecimal value with the matching entry in `SHA256SUMS.txt`. Stop if the filename or hash differs.
@@ -27,7 +27,7 @@ Use a disposable Windows account or VM where practical. The installer is unsigne
 3. Confirm the tray menu can show the overlay and quit the application completely.
 4. Test the fixed `Ctrl+Shift+I` recovery shortcut before enabling click-through.
 5. Verify Ask and Hide/Show shortcuts while another application has focus.
-6. Restart PresenterAI and confirm bounds, opacity, and non-audio preferences are restored.
+6. Restart PresenterAI and confirm bounds, neon intensity, and non-audio preferences are restored.
 7. Treat capture status only as requested, Electron-reported, or manually recorded. Do not infer that the overlay is absent from any recording or sharing path.
 
 Do not enable listening, accept listening consent, or run a Meet/OBS/capture-protection experiment in this preview. System loopback can include every sound on the selected output endpoint, and its physical/live gate is still incomplete.
@@ -67,7 +67,7 @@ For an independent upgrade check:
 
 1. Verify and install the previous successful `main` installer in the same controlled account.
 2. Add disposable settings and fixture documents, then quit from the tray.
-3. Install the verified `0.2.0-beta.1` artifact over it.
+3. Install the verified `0.2.0-beta.3` artifact over it.
 4. Confirm settings and indexed catalog remain usable, the helper health is reported, and source files are unchanged.
 5. Perform Delete All and final uninstall as described above.
 

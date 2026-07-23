@@ -3,7 +3,7 @@ import type { AppSettings } from '../src/shared/contracts'
 import { canonicalAccelerator, parseSettingsPatch, validateSettingsMutation } from '../src/main/settings/validation'
 
 const settings: AppSettings = {
-  glassTint: 0.42, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna',
+  neonIntensity: 0.65, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna',
   strongModel: 'gpt-5.6-terra', transcriptionModel: 'gpt-4o-mini-transcribe',
   askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', listenShortcut: 'Control+Shift+Space',
   projectSummary: '', approvedVocabulary: [], sessionBudgetUsd: 0.25
@@ -24,16 +24,18 @@ describe('runtime settings validation', () => {
   it('blocks operation-sensitive changes while allowing visual settings', () => {
     expect(() => validateSettingsMutation(settings, { selectedAudioEndpointId: 'next' }, true)).toThrow(/active/i)
     expect(() => validateSettingsMutation(settings, { listenShortcut: 'Control+Alt+Space' }, true)).toThrow(/active/i)
-    expect(() => validateSettingsMutation(settings, { glassTint: 0.5 }, true)).not.toThrow()
+    expect(() => validateSettingsMutation(settings, { neonIntensity: 0.5 }, true)).not.toThrow()
     expect(() => validateSettingsMutation(settings, { sessionBudgetUsd: 1 }, true)).toThrow(/active/i)
   })
 
   it('strictly bounds renderer patches and rejects unknown fields', () => {
-    expect(parseSettingsPatch({ sessionBudgetUsd: 83.5, glassTint: 0.42, projectSummary: '🧪'.repeat(4_000) }))
-      .toMatchObject({ sessionBudgetUsd: 83.5, glassTint: 0.42 })
+    expect(parseSettingsPatch({ sessionBudgetUsd: 83.5, neonIntensity: 0.65, projectSummary: '🧪'.repeat(4_000) }))
+      .toMatchObject({ sessionBudgetUsd: 83.5, neonIntensity: 0.65 })
     expect(() => parseSettingsPatch({ sessionBudgetUsd: 0 })).toThrow()
     expect(() => parseSettingsPatch({ sessionBudgetUsd: 101 })).toThrow()
-    expect(() => parseSettingsPatch({ glassTint: 0.17 })).toThrow()
+    expect(() => parseSettingsPatch({ neonIntensity: -0.01 })).toThrow()
+    expect(() => parseSettingsPatch({ neonIntensity: 1.01 })).toThrow()
+    expect(() => parseSettingsPatch({ glassTint: 0.42 })).toThrow()
     expect(() => parseSettingsPatch({ opacity: 0.8 })).toThrow()
     expect(() => parseSettingsPatch({ inrPerUsd: 84 })).toThrow()
     expect(() => parseSettingsPatch({ projectSummary: '🧪'.repeat(4_001) })).toThrow(/4,000/i)

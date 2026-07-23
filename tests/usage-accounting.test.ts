@@ -54,13 +54,14 @@ describe('audio usage accounting', () => {
       writes.push(store.setWindowBounds({ x: index, y: index, width: 560, height: 720 }))
       writes.push(store.addUsage(index, index * 2, 0.01))
     }
-    writes.push(store.updateSettings({ glassTint: 0.77 }))
+    writes.push(store.updateSettings({ neonIntensity: 0.77 }))
     await Promise.all(writes)
 
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
     expect(saved.windowBounds).toEqual({ x: 20, y: 20, width: 560, height: 720 })
     expect(saved.windowLayoutRevision).toBe(1)
-    expect(saved.settings.glassTint).toBe(0.77)
+    expect(saved.settings.neonIntensity).toBe(0.77)
+    expect(saved.settings).not.toHaveProperty('glassTint')
     expect(saved.usage.inputTokens).toBe(210)
     expect(saved.usage.outputTokens).toBe(420)
     expect(saved.usage.audioMinutes).toBeCloseTo(0.2)
@@ -140,7 +141,7 @@ describe('audio usage accounting', () => {
     const store = new SettingsStore({ clock: () => new Date('2026-07-16T13:00:00.000Z') })
     await store.initialize()
 
-    expect(store.settings).toMatchObject({ glassTint: 0.42, projectSummary: 'legacy project', sessionBudgetUsd: 0.25 })
+    expect(store.settings).toMatchObject({ neonIntensity: 0.65, projectSummary: 'legacy project', sessionBudgetUsd: 0.25 })
     expect(store.settings).not.toHaveProperty('opacity')
     expect(store.settings).not.toHaveProperty('inrPerUsd')
     expect(store.recoveryWarning).toBeUndefined()
@@ -183,7 +184,7 @@ describe('audio usage accounting', () => {
     await store.initialize()
     expect(store.recoveryWarning).toEqual({ code: 'invalid_json', recoveredAt: '2026-07-16T14:00:00.000Z' })
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-    expect(saved.schemaVersion).toBe(4)
+    expect(saved.schemaVersion).toBe(5)
     expect(saved.windowLayoutRevision).toBe(1)
     expect(saved.recoveryWarning).toEqual(store.recoveryWarning)
     expect(saved.recoveryWarning).not.toHaveProperty('message')
@@ -209,7 +210,7 @@ describe('audio usage accounting', () => {
     const { SettingsStore } = await import('../src/main/settings/store')
     const store = new SettingsStore({ clock: () => new Date('2026-07-16T14:30:00.000Z') })
     await store.initialize()
-    expect(store.settings).toMatchObject({ glassTint: 0.42, projectSummary: 'keep this valid value', approvedVocabulary: ['FTS5'] })
+    expect(store.settings).toMatchObject({ neonIntensity: 0.65, projectSummary: 'keep this valid value', approvedVocabulary: ['FTS5'] })
     expect(store.settings).not.toHaveProperty('inrPerUsd')
     expect(store.recoveryWarning).toEqual({ code: 'invalid_shape', recoveredAt: '2026-07-16T14:30:00.000Z' })
   })
@@ -278,7 +279,7 @@ describe('audio usage accounting', () => {
     await store.initialize()
 
     expect(store.recoveryWarning).toBeUndefined()
-    expect(store.settings).toMatchObject({ glassTint: 0.42, projectSummary: 'preserved summary', selectedAudioEndpointId: 'render-device', sessionBudgetUsd: 0.25 })
+    expect(store.settings).toMatchObject({ neonIntensity: 0.65, projectSummary: 'preserved summary', selectedAudioEndpointId: 'render-device', sessionBudgetUsd: 0.25 })
     expect(store.documents).toHaveLength(1)
     expect(store.captureResults).toHaveLength(1)
     expect(store.usageRecords).toHaveLength(1)
@@ -294,7 +295,7 @@ describe('audio usage accounting', () => {
     await store.setWindowLayout({ x: 1930, y: 80, width: 1100, height: 690 }, WINDOW_LAYOUT_REVISION)
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
     expect(saved).toMatchObject({
-      schemaVersion: 4, windowLayoutRevision: 1,
+      schemaVersion: 5, windowLayoutRevision: 1,
       windowBounds: { x: 1930, y: 80, width: 1100, height: 690 },
       settings: { projectSummary: 'preserved summary' }
     })
@@ -336,7 +337,7 @@ describe('audio usage accounting', () => {
     await store.initialize()
 
     expect(store.settings).toMatchObject({
-      glassTint: 0.42, sessionBudgetUsd: 0.25, modelMode: 'strong',
+      neonIntensity: 0.65, sessionBudgetUsd: 0.25, modelMode: 'strong',
       selectedAudioEndpointId: 'render-device', projectSummary: 'keep v3 summary'
     })
     expect(store.settings).not.toHaveProperty('opacity')
@@ -349,9 +350,89 @@ describe('audio usage accounting', () => {
     expect(store.sessionBudget).toMatchObject({ sessionId: 'migrated-session', actualUsd: 0, heldUsd: 0, capUsd: 0.25 })
 
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-    expect(saved.schemaVersion).toBe(4)
+    expect(saved.schemaVersion).toBe(5)
     expect(saved.settings).not.toHaveProperty('opacity')
     expect(saved.settings).not.toHaveProperty('inrPerUsd')
     expect(saved.sessionBudget).toMatchObject({ sessionId: 'migrated-session', actualUsd: 0, reservations: [] })
+  })
+
+  it('migrates version 4 to neon intensity without resetting the active session ledger', async () => {
+    userData = await mkdtemp(join(tmpdir(), 'presenter-settings-v4-'))
+    const now = '2026-07-22T08:00:00.000Z'
+    await writeFile(join(userData, 'presenterai.json'), JSON.stringify({
+      schemaVersion: 4,
+      windowLayoutRevision: 1,
+      settings: {
+        glassTint: 0.77, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna',
+        strongModel: 'gpt-5.6-terra', transcriptionModel: 'gpt-4o-mini-transcribe',
+        askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', listenShortcut: 'Control+Shift+Space',
+        selectedAudioEndpointId: 'render-device', projectSummary: 'keep v4 summary',
+        approvedVocabulary: ['FTS5'], sessionBudgetUsd: 0.75
+      },
+      windowBounds: { x: 40, y: 60, width: 1000, height: 700 },
+      documents: [{ id: 'doc-v4', name: 'v4.md', path: 'C:\\fixtures\\v4.md', kind: 'markdown', chunkCount: 2, addedAt: now }],
+      captureResults: [{
+        id: 'capture-v4', path: 'Snipping Tool', captureAppVersion: '11.2408',
+        controlResult: 'overlay-visible', protectedResult: 'overlay-absent', testedAt: now, notes: 'preserve v4 capture',
+        environment: {
+          windowsBuild: '26100', presenterVersion: '0.2.0-beta.2',
+          electronVersion: '43.1.0', gpu: 'fixture GPU', monitorCount: 2
+        }
+      }],
+      usage: {
+        inputTokens: 25, outputTokens: 10, audioMinutes: 0,
+        transcriptionInputTokens: 0, transcriptionAudioTokens: 0, transcriptionOutputTokens: 0,
+        estimatedUsd: 0.000085, pricingVersion: 'openai-2026-07-16'
+      },
+      usageRecords: [{
+        id: 'usage-v4', timestamp: now, endpoint: 'responses',
+        requestedModel: 'gpt-5.6-luna', returnedModel: 'gpt-5.6-luna-2026-06-01',
+        inputTokens: 25, outputTokens: 10, reasoningTokens: 0,
+        pricingVersion: 'openai-2026-07-16', priced: true, estimatedUsd: 0.000085
+      }],
+      usageRollups: [{
+        endpoint: 'transcription', model: 'gpt-4o-mini-transcribe',
+        requestCount: 2, unpricedRequestCount: 0, inputTokens: 120, outputTokens: 10,
+        reasoningTokens: 0, audioTokens: 90, durationMs: 5_000, estimatedUsd: 0.0004
+      }],
+      privacyConsent: { acceptedVersion: 4, acceptedAt: now },
+      sessionBudget: {
+        sessionId: 'preserved-session', startedAt: now, actualUsd: 0.02,
+        reservations: [{
+          id: 'held-request', endpoint: 'responses', requestedModel: 'gpt-5.6-luna',
+          maximumUsd: 0.03, reservedAt: now
+        }]
+      }
+    }), 'utf8')
+    const { SettingsStore } = await import('../src/main/settings/store')
+    const store = new SettingsStore()
+    await store.initialize()
+
+    expect(store.settings).toMatchObject({
+      neonIntensity: 0.65, sessionBudgetUsd: 0.75, selectedAudioEndpointId: 'render-device',
+      projectSummary: 'keep v4 summary'
+    })
+    expect(store.settings).not.toHaveProperty('glassTint')
+    expect(store.documents).toHaveLength(1)
+    expect(store.captureResults).toEqual([expect.objectContaining({ id: 'capture-v4', notes: 'preserve v4 capture' })])
+    expect(store.usageRecords).toEqual([expect.objectContaining({ id: 'usage-v4', inputTokens: 25, outputTokens: 10 })])
+    expect(store.usageRollups).toEqual([expect.objectContaining({
+      endpoint: 'transcription', model: 'gpt-4o-mini-transcribe', requestCount: 2, audioTokens: 90
+    })])
+    expect(store.windowBounds).toEqual({ x: 40, y: 60, width: 1000, height: 700 })
+    expect(store.sessionBudget).toMatchObject({
+      sessionId: 'preserved-session', capUsd: 0.75, actualUsd: 0.02, heldUsd: 0.03, remainingUsd: 0.7
+    })
+
+    const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
+    expect(saved.schemaVersion).toBe(5)
+    expect(saved.settings.neonIntensity).toBe(0.65)
+    expect(saved.settings).not.toHaveProperty('glassTint')
+    expect(saved.sessionBudget).toMatchObject({ sessionId: 'preserved-session', actualUsd: 0.02 })
+    expect(saved.captureResults).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'capture-v4' })]))
+    expect(saved.usageRecords).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'usage-v4' })]))
+    expect(saved.usageRollups).toEqual(expect.arrayContaining([expect.objectContaining({
+      endpoint: 'transcription', requestCount: 2
+    })]))
   })
 })

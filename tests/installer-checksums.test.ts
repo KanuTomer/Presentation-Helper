@@ -16,15 +16,15 @@ afterEach(async () => {
 describe('installer checksum manifest', () => {
   it('writes a SHA-256 entry for only the package-version installer', async () => {
     const directory = await createTemporaryDirectory()
-    await writeFile(join(directory, 'PresenterAI-0.2.0-beta.2-setup.exe'), 'current')
+    await writeFile(join(directory, 'PresenterAI-0.2.0-beta.3-setup.exe'), 'current')
     await writeFile(join(directory, 'PresenterAI-0.1.0-setup.exe'), 'previous')
     await writeFile(join(directory, 'unrelated.exe'), 'ignore me')
 
     const entries = await generateInstallerChecksums({ directory })
     const manifest = await readFile(join(directory, 'SHA256SUMS.txt'), 'utf8')
 
-    expect(entries.map((entry) => entry.filename)).toEqual(['PresenterAI-0.2.0-beta.2-setup.exe'])
-    expect(manifest).toBe(`${digest('current')}  PresenterAI-0.2.0-beta.2-setup.exe\n`)
+    expect(entries.map((entry) => entry.filename)).toEqual(['PresenterAI-0.2.0-beta.3-setup.exe'])
+    expect(manifest).toBe(`${digest('current')}  PresenterAI-0.2.0-beta.3-setup.exe\n`)
   })
 
   it('fails rather than writing an empty manifest', async () => {
