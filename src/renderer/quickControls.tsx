@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { AnswerFormat, ClickThroughStatus } from '../shared/contracts'
 
 export interface CopilotQuickControlsProps {
   answerFormat: AnswerFormat
-  neonIntensity: number
   clickThrough: ClickThroughStatus
   answerStyleDisabled?: boolean
+  children?: React.ReactNode
   onAnswerFormatChange(format: AnswerFormat): void
-  onNeonIntensityChange(value: number): void
   onSetClickThrough(enabled: boolean): Promise<void>
 }
 
@@ -21,16 +21,16 @@ function recoveryLabel(shortcut: ClickThroughStatus['recoveryShortcut']): string
 
 export function CopilotQuickControls({
   answerFormat,
-  neonIntensity,
   clickThrough,
   answerStyleDisabled = false,
+  children,
   onAnswerFormatChange,
-  onNeonIntensityChange,
   onSetClickThrough
 }: CopilotQuickControlsProps): React.JSX.Element {
   const [confirmingClickThrough, setConfirmingClickThrough] = useState(false)
   const [changingClickThrough, setChangingClickThrough] = useState(false)
   const clickThroughTrigger = useRef<HTMLButtonElement>(null)
+  const confirmationDialog = useRef<HTMLDivElement>(null)
   const confirmationCancel = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -55,9 +55,8 @@ export function CopilotQuickControls({
     }
   }
 
-  return <section className="quick-controls" aria-label="Copilot quick controls">
-    <div className="quick-control answer-style-control">
-      <span className="quick-control-label">Answer style</span>
+  return <>
+    <section className="quick-controls command-bar" aria-label="Copilot quick controls">
       <div className="answer-format" role="group" aria-label="Answer style">
         <button
           type="button"
@@ -78,27 +77,10 @@ export function CopilotQuickControls({
           &lt;/&gt; Code
         </button>
       </div>
-    </div>
-
-    <label className="quick-control neon-control">
-      <span className="quick-control-label">Neon intensity <output>{Math.round(neonIntensity * 100)}%</output></span>
-      <input
-        aria-label="Neon intensity"
-        type="range"
-        min="0"
-        max="1"
-        step="0.01"
-        value={neonIntensity}
-        onChange={(event) => onNeonIntensityChange(Number(event.target.value))}
-      />
-    </label>
-
-    <div className="quick-control click-through-control">
-      <span className="quick-control-label">Interaction</span>
       <button
         ref={clickThroughTrigger}
         type="button"
-        className={clickThrough.enabled ? 'click-through-active' : ''}
+        className={`click-through-control ${clickThrough.enabled ? 'click-through-active' : ''}`}
         disabled={changingClickThrough || (!clickThrough.enabled && !clickThrough.recoveryAvailable)}
         aria-pressed={clickThrough.enabled}
         title={!clickThrough.recoveryAvailable ? 'The emergency recovery shortcut is unavailable, so click-through is disabled.' : undefined}
@@ -107,34 +89,66 @@ export function CopilotQuickControls({
           else setConfirmingClickThrough(true)
         }}
       >
-        {clickThrough.enabled ? 'Click-through on' : 'Enable click-through'}
+        {clickThrough.enabled
+          ? 'Click-through on'
+          : clickThrough.recoveryAvailable
+            ? 'Enable click-through'
+            : 'Click-through unavailable'}
       </button>
-      {!clickThrough.recoveryAvailable && <small className="recovery-unavailable">Recovery shortcut unavailable</small>}
-    </div>
+      <span className="command-spacer" aria-hidden="true" />
+      {children && <div className="command-actions">{children}</div>}
+    </section>
 
-    {confirmingClickThrough && <div
-      className="click-through-confirmation"
-      role="alertdialog"
-      aria-modal="false"
-      aria-labelledby="click-through-confirmation-title"
-      aria-describedby="click-through-confirmation-description"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault()
-          closeConfirmation()
-        }
-      }}
-    >
-      <strong id="click-through-confirmation-title">Enable click-through?</strong>
-      <p id="click-through-confirmation-description">PresenterAI will ignore mouse input until you press <kbd>{recoveryLabel(clickThrough.recoveryShortcut)}</kbd> or choose <strong>Tray → Show PresenterAI</strong>.</p>
-      <div className="actions">
-        <button ref={confirmationCancel} type="button" onClick={closeConfirmation}>Cancel</button>
-        <button type="button" className="primary" disabled={changingClickThrough} onClick={() => void enableClickThrough()}>
-          {changingClickThrough ? 'Enabling…' : 'Enable click-through'}
-        </button>
-      </div>
-    </div>}
-  </section>
+    {confirmingClickThrough && createPortal(
+      <div className="modal-backdrop" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) closeConfirmation()
+      }}>
+        <div
+          ref={confirmationDialog}
+          className="click-through-confirmation"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="click-through-confirmation-title"
+          aria-describedby="click-through-confirmation-description"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              closeConfirmation()
+              return
+            }
+            if (event.key === 'Tab') {
+              const buttons = Array.from(
+                confirmationDialog.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []
+              )
+              const first = buttons[0]
+              const last = buttons.at(-1)
+              if (!first || !last) {
+                event.preventDefault()
+                return
+              }
+              if (event.shiftKey && (document.activeElement === first || !confirmationDialog.current?.contains(document.activeElement))) {
+                event.preventDefault()
+                last.focus()
+              } else if (!event.shiftKey && (document.activeElement === last || !confirmationDialog.current?.contains(document.activeElement))) {
+                event.preventDefault()
+                first.focus()
+              }
+            }
+          }}
+        >
+          <strong id="click-through-confirmation-title">Enable click-through?</strong>
+          <p id="click-through-confirmation-description">PresenterAI will ignore mouse input until you press <kbd>{recoveryLabel(clickThrough.recoveryShortcut)}</kbd> or choose <strong>Tray → Show PresenterAI</strong>.</p>
+          <div className="actions">
+            <button ref={confirmationCancel} type="button" onClick={closeConfirmation}>Cancel</button>
+            <button type="button" className="primary" disabled={changingClickThrough} onClick={() => void enableClickThrough()}>
+              {changingClickThrough ? 'Enabling…' : 'Enable click-through'}
+            </button>
+          </div>
+        </div>
+      </div>,
+      document.body
+    )}
+  </>
 }
 
 export function ClickThroughBanner({ status }: { status: ClickThroughStatus }): React.JSX.Element | null {

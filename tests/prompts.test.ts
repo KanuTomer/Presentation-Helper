@@ -1,5 +1,9 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { buildInput, presenterInstructions } from '../src/main/ai/prompts'
+import {
+  buildInput, developerInstructions, PRESENTER_PROMPT_FINGERPRINT, PRESENTER_PROMPT_REVISION,
+  presenterInstructions, responseJsonSchema
+} from '../src/main/ai/prompts'
 import type { RetrievedChunk } from '../src/main/retrieval'
 
 describe('M3 presenter prompt contract', () => {
@@ -19,6 +23,26 @@ describe('M3 presenter prompt contract', () => {
     expect(presenterInstructions).toContain('120-220 visible words')
     expect(presenterInstructions).toContain('exactly 3 items')
     expect(presenterInstructions).toContain('Check the combined visible word count')
+  })
+
+  it('defines a revisioned, directly speakable delivery style without affecting developer answers', () => {
+    expect(PRESENTER_PROMPT_REVISION).toBe('presenter-natural-delivery-v1')
+    expect(PRESENTER_PROMPT_FINGERPRINT).toBe(
+      createHash('sha256').update(presenterInstructions).update(JSON.stringify(responseJsonSchema)).digest('hex')
+    )
+    expect(presenterInstructions).toContain('spoken aloud immediately')
+    expect(presenterInstructions).toContain('calm, conversational')
+    expect(presenterInstructions).toContain('natural contractions')
+    expect(presenterInstructions).toContain('first-person project claims')
+    expect(presenterInstructions).toContain('canned greetings')
+    expect(presenterInstructions).toContain('restating the question')
+    expect(presenterInstructions).toContain('AI/meta language')
+    expect(presenterInstructions).toContain('corporate filler')
+    expect(presenterInstructions).toContain('repetition across fields')
+    expect(presenterInstructions).toContain('compact memory cues')
+    expect(presenterInstructions).toContain('respectful, natural spoken continuation')
+    expect(developerInstructions).not.toContain('spoken aloud immediately')
+    expect(developerInstructions).not.toContain('canned greetings')
   })
 
   it('labels retrieved excerpts as untrusted data instead of executable instructions', () => {

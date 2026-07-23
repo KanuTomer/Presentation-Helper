@@ -16,10 +16,10 @@ This gate reuses the immutable 20 audio captures designated in the M5 campaign. 
 - Persist only case IDs, pass/fail flags, model IDs, timings, token usage, price-version metadata, estimated cost, and failed IDs.
 - Never persist credentials, audio, transcripts, prompts, answers, or reasoning content.
 
-Latest offline preflight: 2026-07-18, 20-case corpus / 10 full-pipeline cases, **zero network requests**.
+Latest offline preflight: 2026-07-23, 20-case corpus / 10 full-pipeline cases, **zero network requests**.
 
-- Practical projected estimate: **$0.148247**.
-- Documented worst-case bound: **$0.644547**.
+- Practical projected estimate: **$0.149573**.
+- Documented worst-case bound: **$0.645873**.
 - Immutable live cap: **$0.15**.
 - `strictCampaignFeasible=false`.
 - `billableExecutionEnabled=false`.

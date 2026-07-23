@@ -215,4 +215,5 @@ jobs:
             docs/validation/milestone-8.md
             docs/validation/plan-alignment.md
             docs/validation/code-first-liquid-glass.md
+            docs/validation/clear-glass-compact-copilot.md
           if-no-files-found: error

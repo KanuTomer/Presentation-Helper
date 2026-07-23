@@ -9,10 +9,12 @@ import {
 const expected: ResumeExpectation = {
   corpusFingerprint: 'fixture-hash', corpusSize: 40, strongSmokeSize: 8,
   normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
+  promptRevision: 'presenter-natural-delivery-v1', promptFingerprint: 'prompt-hash',
   validCaseKeys: new Set(['normal:g01', 'normal:g02', 'strong:g01'])
 }
 const report = {
   schemaVersion: 2, corpusFingerprint: 'fixture-hash', corpusSize: 40, strongSmokeSize: 8,
+  promptRevision: 'presenter-natural-delivery-v1', promptFingerprint: 'prompt-hash',
   budget: { capUsd: 0.4, actualUsd: 0.001654 },
   approximatePriceMetadata: { luna: { input: 1, output: 6 }, terra: { input: 2.5, output: 15 } },
   results: [
@@ -49,6 +51,8 @@ describe('M3 evaluator runtime', () => {
 
   it('rejects corpus mismatches and duplicate cases', () => {
     expect(() => readResumeReport({ ...report, corpusFingerprint: 'changed' }, expected)).toThrow(/fingerprint/i)
+    expect(() => readResumeReport({ ...report, promptRevision: 'changed' }, expected)).toThrow(/prompt/i)
+    expect(() => readResumeReport({ ...report, promptFingerprint: 'changed' }, expected)).toThrow(/prompt/i)
     expect(() => readResumeReport({ ...report, results: [report.results[0], report.results[0]] }, expected)).toThrow(/duplicate/i)
   })
 

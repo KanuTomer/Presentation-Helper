@@ -1,6 +1,8 @@
-# Code-first, safe click-through, and hybrid liquid-glass validation
+# Historical beta.3 code-first, safe click-through, and hybrid liquid-glass validation
 
 Delivery target: `0.2.0-beta.3`.
+
+> Historical record: beta.4 supersedes the Acrylic/native-shape visual implementation documented here. See [Clear glass, compact Copilot, and natural presenter validation](clear-glass-compact-copilot.md) for the current surface.
 
 This change is a UX and presentation-layer hardening release. It does not accept any outstanding M0–M2 or M5–M8 manual gate, spend API credits, enable screen capture, or claim universal capture exclusion.
 

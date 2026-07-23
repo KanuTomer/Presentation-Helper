@@ -5,7 +5,9 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AppSettings, AssistantResponse, DocumentInfo, QuestionCategory } from '../src/shared/contracts.js'
 import { AiService, type AiRequestMetric, type AiSettingsProvider, type OpenAIClientLike, type OpenAIResponseLike } from '../src/main/ai/service.js'
-import { buildInput, presenterInstructions, responseJsonSchema } from '../src/main/ai/prompts.js'
+import {
+  buildInput, PRESENTER_PROMPT_FINGERPRINT, PRESENTER_PROMPT_REVISION, presenterInstructions, responseJsonSchema
+} from '../src/main/ai/prompts.js'
 import {
   conservativeInputTokens, maximumCallCostUsd, M3_EVAL_BUDGET_USD, M3_EVAL_OUTPUT_TOKEN_CAPS,
   M3_EVAL_PRICES, M3_TERRA_REPAIR_BUDGET_USD, staysWithinBudget, tokenCostUsd, type EvalModelMode
@@ -16,11 +18,14 @@ import {
 } from '../src/main/ai/evalRuntime.js'
 import { responseRequestPolicy } from '../src/main/ai/requestPolicy.js'
 
-const EVALUATION_REVISION = 'm3-terra-output-budget-v1'
-const PROMPT_REVISION = 'm3-final-v3'
+const EVALUATION_REVISION = 'm3-natural-delivery-v1'
+const PROMPT_REVISION = PRESENTER_PROMPT_REVISION
 const BASELINE_PROMPT_REVISION = 'm3-baseline-v1'
 const REQUEST_REVISION = 'm3-mode-specific-output-v1'
-const APPROVED_FINAL_REPAIR_KEYS = ['strong:g01', 'strong:g03', 'strong:c01', 'strong:c03', 'strong:x01'] as const
+// No failed-case repair selection has been reviewed for this prompt revision.
+// A future live run must start a fresh report and may only gain an explicit
+// repair allowlist after human review of its redacted failed IDs.
+const APPROVED_NATURAL_DELIVERY_REPAIR_KEYS: readonly string[] = []
 
 interface EvalCase {
   id: string
@@ -64,15 +69,21 @@ if (unknownOption) throw new Error(`Unknown evaluator option: ${unknownOption}`)
 if (rerunFailed && expectedCount === undefined) throw new Error('--rerun-failed requires --expected-count=N.')
 if (!rerunFailed && expectedCount !== undefined) throw new Error('--expected-count requires --rerun-failed.')
 if (preflightOnly && !rerunFailed) throw new Error('--preflight requires --rerun-failed.')
+if (rerunFailed && APPROVED_NATURAL_DELIVERY_REPAIR_KEYS.length === 0) {
+  throw new Error('No failed-case repair set has been reviewed for the natural-delivery prompt revision.')
+}
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const reportPath = resolve(root, 'artifacts/m3/m3-live-report.json')
+// A prompt change requires a fresh evidence set. Keep the accepted historical
+// report immutable instead of accidentally resuming its cases under new
+// instructions and presenting mixed-prompt results as a current live gate.
+const reportPath = resolve(root, 'artifacts/m3/m3-natural-delivery-live-report.json')
 const corpusText = await readFile(resolve(root, 'tests/fixtures/m3-eval-corpus.json'), 'utf8')
 const corpus = JSON.parse(corpusText) as EvalCase[]
 if (corpus.length !== 40) throw new Error(`Expected 40 M3 cases, found ${corpus.length}.`)
 const strongCases = corpus.filter((item) => item.strongSmoke)
 if (strongCases.length !== 8) throw new Error(`Expected 8 Terra smoke cases, found ${strongCases.length}.`)
 const corpusFingerprint = createHash('sha256').update(corpusText).digest('hex')
-const promptFingerprint = createHash('sha256').update(presenterInstructions).update(JSON.stringify(responseJsonSchema)).digest('hex')
+const promptFingerprint = PRESENTER_PROMPT_FINGERPRINT
 
 const baseSettings: AppSettings = {
   neonIntensity: 0.65, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
@@ -93,7 +104,8 @@ const validCaseKeys = new Set([
 const existingReport = await readJsonIfPresent(reportPath)
 const resume = readResumeReport(existingReport, {
   corpusFingerprint, corpusSize: corpus.length, strongSmokeSize: strongCases.length,
-  normalModel: baseSettings.normalModel, strongModel: baseSettings.strongModel, validCaseKeys
+  normalModel: baseSettings.normalModel, strongModel: baseSettings.strongModel,
+  promptRevision: PROMPT_REVISION, promptFingerprint, validCaseKeys
 })
 let results = resume.results as unknown as CaseResult[]
 let actualSpentUsd = resume.actualSpentUsd
@@ -105,7 +117,7 @@ let preservedCaseKeys = results.map((item) => caseKey(item.mode, item.id))
 if (rerunFailed) {
   if (!existingReport) throw new Error('--rerun-failed requires an existing redacted report.')
   const selection = selectFailedRerun(results as unknown as Array<Record<string, unknown>>, (existingReport as { failedCaseIds?: unknown }).failedCaseIds, validCaseKeys)
-  validateExplicitRepairSelection(selection.rerunCaseKeys, expectedCount!, APPROVED_FINAL_REPAIR_KEYS)
+  validateExplicitRepairSelection(selection.rerunCaseKeys, expectedCount!, APPROVED_NATURAL_DELIVERY_REPAIR_KEYS)
   rerunCaseKeys = selection.rerunCaseKeys
   const rerunSet = new Set(rerunCaseKeys)
   rerunPriorResults = results.filter((item) => rerunSet.has(caseKey(item.mode, item.id)))

@@ -45,10 +45,11 @@ const api: PresenterAPI = {
     return () => ipcRenderer.removeListener(channels.status, listener)
   },
   onFocusAsk: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.focusAsk, listener); return () => ipcRenderer.removeListener(channels.focusAsk, listener) },
-  onOpenSettings: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.openSettings, listener); return () => ipcRenderer.removeListener(channels.openSettings, listener) }
-  ,onOpenPrivacy: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.openPrivacy, listener); return () => ipcRenderer.removeListener(channels.openPrivacy, listener) }
-  ,onTranscriptDraft: (callback) => { const listener = (_event: Electron.IpcRendererEvent, draft: unknown) => { const parsed = parseTranscriptDraft(draft); if (parsed) callback(parsed) }; ipcRenderer.on(channels.transcriptDraft, listener); return () => ipcRenderer.removeListener(channels.transcriptDraft, listener) }
-  ,onError: (callback) => { const listener = (_event: Electron.IpcRendererEvent, error: Parameters<typeof callback>[0]) => callback(error); ipcRenderer.on(channels.appError, listener); return () => ipcRenderer.removeListener(channels.appError, listener) }
+  onOpenSettings: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.openSettings, listener); return () => ipcRenderer.removeListener(channels.openSettings, listener) },
+  onOpenPrivacy: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.openPrivacy, listener); return () => ipcRenderer.removeListener(channels.openPrivacy, listener) },
+  onSurfaceRestored: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.surfaceRestored, listener); return () => ipcRenderer.removeListener(channels.surfaceRestored, listener) },
+  onTranscriptDraft: (callback) => { const listener = (_event: Electron.IpcRendererEvent, draft: unknown) => { const parsed = parseTranscriptDraft(draft); if (parsed) callback(parsed) }; ipcRenderer.on(channels.transcriptDraft, listener); return () => ipcRenderer.removeListener(channels.transcriptDraft, listener) },
+  onError: (callback) => { const listener = (_event: Electron.IpcRendererEvent, error: Parameters<typeof callback>[0]) => callback(error); ipcRenderer.on(channels.appError, listener); return () => ipcRenderer.removeListener(channels.appError, listener) }
 }
 
 contextBridge.exposeInMainWorld('presenter', api)

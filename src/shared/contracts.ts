@@ -514,6 +514,7 @@ export interface PresenterAPI {
   onFocusAsk(callback: () => void): () => void
   onOpenSettings(callback: () => void): () => void
   onOpenPrivacy(callback: () => void): () => void
+  onSurfaceRestored(callback: () => void): () => void
   onTranscriptDraft(callback: (draft: TranscriptionDraft) => void): () => void
   onError(callback: (error: AiErrorInfo) => void): () => void
 }

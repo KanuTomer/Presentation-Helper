@@ -1,38 +1,78 @@
 # PresenterAI
 
-PresenterAI is a private, local-first Windows presentation copilot. It runs as a minimal Electron overlay, indexes presentation documents locally, sends only selected context to OpenAI, and can capture a bounded segment of system output audio through a small Windows helper.
+PresenterAI is a private, local-first Windows copilot for presentations, technical reviews, and coding discussions. It stays above the application you are presenting, retrieves supporting details from your local documents, and produces concise answers or copyable code without sending an entire document to the model.
 
-## Current implementation
+> PresenterAI is an unsigned development beta for Windows 11 x64. Capture exclusion and system-audio reliability still require validation on each target setup.
 
-- Frameless, always-on-top 1100px transparent overlay with Windows Acrylic where supported, a pointer-free WebGL2 liquid-material layer, fixed blue-violet neon intensity, hard-clipped rounded corners, one reliable content scroller, accessibility fallbacks, hide/show, tray controls, and migrated persisted bounds.
-- Windows capture-exclusion request through Electron `setContentProtection(true)`, with status and a visual capture-test pattern.
-- Sandboxed/context-isolated renderer and narrow, validated IPC surface.
-- OpenAI Responses API with `store:false`, local rolling context, cancellation, and grounded-evidence validation. Code is the default answer style and uses a dedicated developer schema with named, inert, copy-only source containers; Presenter remains a one-request override using the unchanged accepted presenter schema.
-- DPAPI-backed API-key encryption through Electron `safeStorage`; the renderer never receives the stored key.
-- Local PPTX, PDF, Markdown, and text parsing with SQLite FTS5 retrieval.
-- Self-contained C#/.NET 8 WASAPI loopback helper with protocol-v2 operation IDs, bounded in-memory capture, output-device selection, 16 kHz mono PCM finalization, restricted Ctrl+Shift+Space toggle detection, health reporting, and one idle restart. Capture is system output only; PresenterAI does not request microphone audio.
-- One application-wide typed/audio operation coordinator, bounded transcription through `gpt-4o-mini-transcribe`, editable memory-only transcript review, operation-scoped cancellation, temporary-file cleanup before draft display, and a persistent conservative USD session cap (default `$0.25`).
-- Fail-closed click-through on the Copilot screen: every enable confirms that mouse input will be ignored, and `Ctrl+Shift+I` or **Tray → Show PresenterAI** restores interaction. Click-through cannot activate if its emergency shortcut is unavailable.
+## What it does
 
-Application-specific Chrome process-tree capture and continuous listening remain disabled until their experimental gates are validated. Capture protection is never presented as a universal guarantee.
+- Starts in **Code** mode with structured, copyable source-code cards; **Presenter** mode produces short, natural answers designed to be spoken aloud.
+- Indexes PPTX, PDF, Markdown, and UTF-8 text locally with SQLite FTS5 and sends only selected evidence chunks to OpenAI.
+- Captures bounded **Windows system output**, not microphone audio, through a restricted .NET helper. The transcript is shown as an editable draft before it can be submitted.
+- Keeps the OpenAI key in Electron `safeStorage` (Windows DPAPI), keeps conversation state local, and sends Responses requests with `store:false`.
+- Provides a transparent always-on-top overlay, tray controls, configurable shortcuts, fail-closed click-through recovery, and a persistent per-session USD cap.
+- Makes no telemetry, analytics, account, cloud-database, or hosted-backend connection.
 
-## Development
+## How it works
 
-Requirements:
+1. **Set up** — add an OpenAI API key in Settings and optionally import presentation documents.
+2. **Ask** — type a question, or toggle system-audio capture and review the resulting transcript.
+3. **Generate** — choose Code or Presenter and submit with `Ctrl+Enter`; PresenterAI retrieves up to five relevant local chunks.
+4. **Review** — read the answer, copy code, and inspect the evidence or warning before speaking.
+
+## Run locally
+
+### Requirements
 
 - Windows 11 x64
-- Node.js 22 or newer
-- .NET 8 SDK for the audio helper
+- [Node.js 22 or newer](https://nodejs.org/)
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) for the system-audio helper
+- An OpenAI API key for transcription or generated answers
+
+### Install and start
 
 ```powershell
-npm install
+git clone https://github.com/KanuTomer/Presentation-Helper.git
+cd Presentation-Helper
+npm ci
 npm run helper:build
 npm run dev
 ```
 
-Without the .NET helper, the manual document-grounded copilot works normally; audio controls report that the helper is unavailable.
+On first run:
 
-Verification:
+1. Open **Settings**, save the API key, and use the connection test.
+2. Open **Documents** to import non-sensitive PPTX, PDF, Markdown, or text fixtures.
+3. Review and accept the listening disclosure before the first system-audio capture.
+4. Confirm that listening is off and test `Ctrl+Shift+I` before enabling click-through.
+5. Type a question in **Copilot** and press `Ctrl+Enter`.
+
+The typed/document workflow still runs if the helper is unavailable; only system-audio controls are disabled.
+
+## Shortcuts
+
+| Action | Default |
+|---|---|
+| Focus the composer | `Ctrl+Space` |
+| Hide or show PresenterAI | `Ctrl+Shift+H` |
+| Start or stop system-audio capture | `Ctrl+Shift+Space` |
+| Restore interaction after click-through | `Ctrl+Shift+I` |
+| Submit the reviewed question | `Ctrl+Enter` |
+| Cancel the active operation | `Esc` |
+
+Ask, hide/show, and listening shortcuts can be changed in Settings. `Ctrl+Shift+I` is fixed so click-through always has a known recovery path; **Tray → Show PresenterAI** is the second recovery method.
+
+## Build the Windows installer
+
+```powershell
+npm run package:win
+```
+
+The command builds the helper and Electron application, creates the unsigned NSIS installer under `release/`, and writes `SHA256SUMS.txt`. Windows SmartScreen, Smart App Control, or an organization’s App Control policy may block unsigned binaries. Do not disable Windows security to run PresenterAI; use a trusted development environment or a future signed build.
+
+## Development checks
+
+The standard offline gate does not call OpenAI:
 
 ```powershell
 npm audit --audit-level=high
@@ -40,46 +80,45 @@ npm run verify
 npm run eval:m4
 npm run eval:m6:preflight
 npm run eval:m7
-npm run helper:build
-npm run test:helper-smoke
 npm run test:e2e
+```
+
+Native and packaged checks:
+
+```powershell
+npm run test:helper-smoke
 npm run package:win
 npm run test:packaged-fts
 npm run test:packaged-helper
 npm run test:code-integrity-environment
-npm run test:installer:upgrade -- --previous "<path-to-previous-successful-main-installer>"
 ```
 
-Milestone 3 is accepted: the mocked safety suite and budget-bounded local live-model gate passed for both Normal and Strong modes. The redacted acceptance record is in [docs/validation/milestone-3.md](docs/validation/milestone-3.md); raw prompts, responses, and credentials are not retained.
+Live evaluation scripts are opt-in, billable, and excluded from ordinary development and CI.
 
-Milestone 4 is accepted offline: the versioned 50-case corpus reached 50/50 top-five recall, and the clean Windows CI runner built the installer and passed the packaged SQLite FTS5 probe. See [docs/validation/milestone-4.md](docs/validation/milestone-4.md) for the redacted gate record. This validation does not use OpenAI or consume API credits.
+## Privacy and limitations
 
-Milestones 5 and 6 have completed their source/offline implementation work. Their latest accepted evidence includes the .NET, Playwright, audit, packaged-helper, and accepted 50/50 M4 retrieval gates recorded in the validation documents. GitHub-hosted Windows runners expose no render endpoint, so CI runs the same published helper executable through two full protocol/finalization cycles using a dual-gated deterministic test backend and reports `wasapiCaptureValidated: false`; it never claims physical WASAPI passed. Code Integrity has also blocked unsigned local payloads (`0x800711C7`), so those isolated local failures do not clear the native acceptance gate. Formal M5/M6 acceptance remains blocked by the M0–M2 capture/fullscreen prerequisites and the user-assisted physical/Meet campaign.
+- Source documents and the FTS index stay on the computer. Only the current question, bounded local context, and selected evidence chunks are sent for an answer.
+- System audio is captured in bounded helper memory. A final temporary WAV is deleted after transcription, and the transcript remains an editable in-memory draft until submission.
+- The local USD cap limits PresenterAI requests, not the OpenAI account itself. Provider billing remains authoritative.
+- DPAPI primarily protects the stored key from other Windows users; it cannot isolate it from every process already running as the same user.
+- The transcription endpoint and Responses API have different retention rules. Review the current [OpenAI API data controls](https://developers.openai.com/api/docs/guides/your-data) before using sensitive material.
+- Image-only/scanned files, visual chart interpretation, OCR, Chrome-process audio isolation, microphone capture, continuous listening, and automatic screenshots are not supported.
+- `setContentProtection(true)` is requested on Windows, but that is not a universal security guarantee. Record every capture application/version in the [compatibility matrix](docs/capture-compatibility/matrix.md).
 
-The M6 live campaign is additionally safety-blocked before any network request. The current repair-branch preflight estimates **$0.148247**, but its documented model limits produce a **$0.644547** worst-case bound, which cannot satisfy the immutable **$0.15** cap. The preflight therefore reports `strictCampaignFeasible=false` and `billableExecutionEnabled=false`; M6 has spent **$0**. A separate user decision must revise the case count or cap before paid validation can run. See [docs/validation/milestone-5.md](docs/validation/milestone-5.md) and [docs/validation/milestone-6.md](docs/validation/milestone-6.md).
+## Validation status
 
-Milestone 7 is source complete and offline green at 50/50 deterministic cases. Milestone 8 is source complete/offline green, and its repaired cross-version installer lifecycle passed on both PR #4 and post-merge `main`. Neither milestone is formally accepted: M7 still depends on M6 and a separately authorized live evaluation, while M8 depends on M2–M7. See [docs/validation/milestone-7.md](docs/validation/milestone-7.md), [docs/validation/milestone-8.md](docs/validation/milestone-8.md), and [docs/validation/plan-alignment.md](docs/validation/plan-alignment.md).
+| Area | Current standing |
+|---|---|
+| [M0–M2: Windows shell and capture protection](docs/validation/milestones-0-2.md) | Implemented; fullscreen, multi-monitor, Meet, OBS, and capture-path matrices remain unsigned. |
+| [M3: typed presenter answers](docs/validation/milestone-3.md) | The accepted Luna/Terra report remains historical evidence. The natural spoken-delivery prompt is offline-green and awaits a separately authorized live revalidation. |
+| [M4: document retrieval](docs/validation/milestone-4.md) | Accepted offline at 50/50 top-five recall with packaged Electron FTS5. |
+| [M5–M6: capture and transcription](docs/validation/milestone-5.md) | Source and automated checks are green; physical device/Meet and billable live acceptance remain pending. |
+| [M7: context and grounding](docs/validation/milestone-7.md) | Source complete and offline green at 50/50; formal live acceptance remains pending. |
+| [M8: privacy, settings, and packaging](docs/validation/milestone-8.md) | Source complete/offline green; formal acceptance depends on M2–M7. |
+| M9: continuous listening | Not implemented and remains experimental. |
 
-PR [#3](https://github.com/KanuTomer/Presentation-Helper/pull/3) merged the M7/M8 source at commit `986469b`. Its PR and post-merge Windows workflows failed in the installer lifecycle because the harness tried to use a launch-result hook that the older baseline installer could not implement. That failure occurred before the upgraded application, Delete All, final uninstall, or artifact upload could be validated; it is not evidence that those later checks passed or that the current packaged application failed to launch. Do not distribute an installer from either failed workflow.
+See the [plan alignment record](docs/validation/plan-alignment.md), [beta.4 clear-glass record](docs/validation/clear-glass-compact-copilot.md), and [closed technical-preview guide](docs/manual/manual-mode-technical-preview.md) for the exact acceptance boundaries.
 
-Repair PR [#4](https://github.com/KanuTomer/Presentation-Helper/pull/4) initializes the legacy build through observable local state and retains strict result-file hooks for current builds. Its first Windows run exposed and led to a fix for a Delete All maintenance self-lock. Its second run exposed a harness race while NSIS was concurrently removing the installation tree. The final repair tolerates only a disappearing-path `ENOENT`, continues polling real residual files to the deadline, and keeps complete payload removal strict. [Repair run 29642064032](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29642064032) and [post-merge main run 29642541009](https://github.com/KanuTomer/Presentation-Helper/actions/runs/29642541009) both passed the complete lifecycle; the main run uploaded the installer, checksum manifest, M7/M8 records, and redacted lifecycle diagnostics.
+## Safety boundary
 
-The unsigned per-user NSIS installer is written to `release/`. Uninstalling it does not remove PresenterAI documents or settings. Windows Smart App Control or enterprise Code Integrity may refuse to launch a newly rebuilt unsigned executable; code signing remains outside this milestone and security controls must not be disabled. Beta.3 is not eligible for preview until its pull-request and post-merge `build-and-package` workflows are green. Until then, the artifact from green `main` run 29642541009 remains the latest eligible closed manual-mode technical preview. No public release is created.
-
-## Privacy model
-
-- Listening starts OFF on every launch.
-- System audio is accumulated in bounded helper memory during capture. Only the finalized 16 kHz mono WAV is written to a PresenterAI-owned temporary path, and it is deleted by the transcription stage before an editable draft is displayed.
-- Transcripts remain only in renderer memory. Retrieval and answer generation begin only after the user reviews the draft and submits the composer with Ctrl+Enter.
-- The active USD session ledger survives restart. Clear Usage does not reset it; only New Session starts a new allowance. This is a PresenterAI-side control, not an OpenAI account billing limit.
-- Full source documents remain local. Up to five retrieved excerpts are included in a normal reasoning request.
-- No analytics, telemetry, user account, hosted backend, or cloud database exists.
-- Bounded audio and selected document excerpts leave the computer when their respective API operations run. OpenAI's current endpoint table reports no application-state or abuse-monitoring retention for audio transcription, while ordinary Responses API abuse-monitoring retention may still apply. See [OpenAI API data controls](https://developers.openai.com/api/docs/guides/your-data#default-usage-policies-by-endpoint).
-
-## Capture compatibility
-
-Complete the checklist in [docs/capture-compatibility/matrix.md](docs/capture-compatibility/matrix.md) on every target Windows/Electron/Chrome/OBS combination. A successful API call is not equivalent to verified exclusion.
-
-Complete the physical-device and Meet checks in [docs/manual/windows-beta-validation.md](docs/manual/windows-beta-validation.md) before treating a build as a validated beta.
-
-After a green post-repair `main` workflow, a trusted tester may follow the narrower [manual-mode technical-preview guide](docs/manual/manual-mode-technical-preview.md). That preview covers typed questions, local documents, grounding, settings, and privacy controls only; it is not an independent audio or capture-protection validation.
+PresenterAI is intended for presentations and reviews where its use is permitted and disclosed. It does not include stealth activation, proctoring or examination evasion, hidden collaboration, process-tree browser capture, or claims of being “undetectable.”

@@ -3,7 +3,6 @@ import {
   type BrowserWindowConstructorOptions
 } from 'electron'
 import { join } from 'node:path'
-import { release as operatingSystemRelease } from 'node:os'
 import { is } from '@electron-toolkit/utils'
 import { channels } from '../../shared/channels.js'
 import { WINDOW_LAYOUT_REVISION, type SettingsStore } from '../settings/store.js'
@@ -19,7 +18,6 @@ export const OVERLAY_MIN_HEIGHT = 420
 export const OVERLAY_EDGE_MARGIN = 16
 const LEGACY_NARROW_WIDTH = 900
 export const CLICK_THROUGH_RECOVERY_SHORTCUT = 'Control+Shift+I'
-export const WINDOWS_11_22H2_BUILD = 22_621
 
 export interface WindowClickThroughStatus {
   enabled: boolean
@@ -36,10 +34,11 @@ export class WindowManager {
   private registeredConfigurableShortcuts = new Set<string>()
   private recoveryShortcutRegistered = false
   private boundsTimer?: NodeJS.Timeout
-  private shapeTimer?: NodeJS.Timeout
+  private displayListenersRegistered = false
   private clickThrough = false
   private quitting = false
   onClickThroughStatusChange?: ClickThroughStatusListener
+  private readonly handleDisplayChange = (): void => this.notifySurfaceRestored()
   constructor(private store: SettingsStore, private capture: CaptureProtection) {}
 
   create(): BrowserWindow {
@@ -48,7 +47,6 @@ export class WindowManager {
     const initialBounds = requiresLayoutMigration
       ? this.migrateLegacyBounds(this.store.windowBounds)
       : this.validBounds(this.store.windowBounds) ?? this.defaultBounds()
-    const acrylicSupported = supportsWindowsAcrylic()
     const windowOptions: BrowserWindowConstructorOptions = {
       ...initialBounds,
       minWidth: OVERLAY_MIN_WIDTH, minHeight: OVERLAY_MIN_HEIGHT, frame: false, transparent: true, alwaysOnTop: true,
@@ -56,22 +54,11 @@ export class WindowManager {
       hasShadow: false, roundedCorners: true,
       webPreferences: { preload: join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false }
     }
-    if (acrylicSupported) {
-      try {
-        this.window = new BrowserWindow({ ...windowOptions, backgroundMaterial: 'acrylic' })
-      } catch {
-        // Windows editions, hosted runners, or transparency policy can reject
-        // a backdrop despite reporting a recent build. Keep the transparent
-        // shader/CSS fallback usable instead of preventing the overlay launch.
-        this.window = new BrowserWindow(windowOptions)
-      }
-    } else {
-      this.window = new BrowserWindow(windowOptions)
-    }
+    this.window = new BrowserWindow(windowOptions)
     // Applying the Electron-supported screen-saver level after native window
     // creation keeps the transparent overlay topmost without changing focus.
     this.window.setAlwaysOnTop(true, 'screen-saver')
-    this.applyRoundedShape()
+    this.registerDisplayListeners()
     if (requiresLayoutMigration) void this.store.setWindowLayout(initialBounds, WINDOW_LAYOUT_REVISION)
     const hadPersistedClickThrough = this.store.settings.clickThrough
     // Reserve the fixed recovery shortcut before exposing the window. A stale
@@ -93,15 +80,15 @@ export class WindowManager {
       this.window?.hide()
     })
     this.window.on('closed', () => {
-      clearTimeout(this.shapeTimer)
+      this.unregisterDisplayListeners()
       this.window = undefined
     })
     this.window.on('move', () => this.persistBounds())
     this.window.on('resize', () => {
       this.persistBounds()
-      clearTimeout(this.shapeTimer)
-      this.shapeTimer = setTimeout(() => this.applyRoundedShape(), 16)
+      this.notifySurfaceRestored()
     })
+    this.window.on('restore', () => this.notifySurfaceRestored())
     this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     this.window.webContents.on('will-navigate', (event) => event.preventDefault())
     if (is.dev && process.env.ELECTRON_RENDERER_URL) this.window.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -244,24 +231,40 @@ export class WindowManager {
 
   private defaultBounds(): OverlayBounds { return defaultOverlayBounds(screen.getPrimaryDisplay().workArea) }
 
-  private applyRoundedShape(): void {
-    const window = this.window
-    if (process.platform !== 'win32' || !window || window.isDestroyed()) return
-    const { width, height } = window.getBounds()
-    try { window.setShape(roundedWindowShape(width, height)) } catch { /* roundedCorners and renderer clipping remain as fallbacks */ }
-  }
-
   private showInactiveTopmost(window: BrowserWindow): void {
     window.showInactive()
     // The screen-saver level is the Electron-supported topmost tier that
     // remains effective over fullscreen presentation windows.
     window.setAlwaysOnTop(true, 'screen-saver')
+    this.notifySurfaceRestored(window)
   }
 
   private showFocusedTopmost(window: BrowserWindow): void {
     window.show()
     window.setAlwaysOnTop(true, 'screen-saver')
     window.focus()
+    this.notifySurfaceRestored(window)
+  }
+
+  private notifySurfaceRestored(window = this.window): void {
+    if (!window || window.isDestroyed()) return
+    try { window.webContents.send(channels.surfaceRestored) } catch { /* renderer lifecycle notifications are best effort */ }
+  }
+
+  private registerDisplayListeners(): void {
+    if (this.displayListenersRegistered) return
+    screen.on('display-added', this.handleDisplayChange)
+    screen.on('display-removed', this.handleDisplayChange)
+    screen.on('display-metrics-changed', this.handleDisplayChange)
+    this.displayListenersRegistered = true
+  }
+
+  private unregisterDisplayListeners(): void {
+    if (!this.displayListenersRegistered) return
+    screen.removeListener('display-added', this.handleDisplayChange)
+    screen.removeListener('display-removed', this.handleDisplayChange)
+    screen.removeListener('display-metrics-changed', this.handleDisplayChange)
+    this.displayListenersRegistered = false
   }
 
   private ensureWindow(): BrowserWindow { return this.window && !this.window.isDestroyed() ? this.window : this.create() }
@@ -313,54 +316,4 @@ function availableDimension(size: number, minimum: number): number {
 function rectanglesIntersect(left: OverlayBounds, right: WorkArea): boolean {
   return left.x < right.x + right.width && left.x + left.width > right.x &&
     left.y < right.y + right.height && left.y + left.height > right.y
-}
-
-export function roundedWindowShape(width: number, height: number, radius = 24): OverlayBounds[] {
-  const safeWidth = Math.max(1, Math.floor(width))
-  const safeHeight = Math.max(1, Math.floor(height))
-  const safeRadius = Math.max(0, Math.min(Math.floor(radius), Math.floor(safeWidth / 2), Math.floor(safeHeight / 2)))
-  if (safeRadius === 0) return [{ x: 0, y: 0, width: safeWidth, height: safeHeight }]
-
-  const rows: Array<{ y: number; inset: number }> = []
-  for (let y = 0; y < safeHeight; y += 1) {
-    let inset = 0
-    if (y < safeRadius) {
-      const distance = safeRadius - y - 0.5
-      inset = Math.max(0, Math.ceil(safeRadius - Math.sqrt(Math.max(0, safeRadius ** 2 - distance ** 2))))
-    } else if (y >= safeHeight - safeRadius) {
-      const distance = y - (safeHeight - safeRadius) + 0.5
-      inset = Math.max(0, Math.ceil(safeRadius - Math.sqrt(Math.max(0, safeRadius ** 2 - distance ** 2))))
-    }
-    rows.push({ y, inset })
-  }
-
-  const rects: OverlayBounds[] = []
-  let start = rows[0]!
-  let previous = start
-  for (const row of rows.slice(1)) {
-    if (row.inset !== start.inset) {
-      rects.push({
-        x: start.inset, y: start.y,
-        width: Math.max(1, safeWidth - start.inset * 2),
-        height: previous.y - start.y + 1
-      })
-      start = row
-    }
-    previous = row
-  }
-  rects.push({
-    x: start.inset, y: start.y,
-    width: Math.max(1, safeWidth - start.inset * 2),
-    height: previous.y - start.y + 1
-  })
-  return rects
-}
-
-export function supportsWindowsAcrylic(
-  platform: NodeJS.Platform = process.platform,
-  osRelease = operatingSystemRelease()
-): boolean {
-  if (platform !== 'win32') return false
-  const build = Number(osRelease.split('.')[2])
-  return Number.isInteger(build) && build >= WINDOWS_11_22H2_BUILD
 }

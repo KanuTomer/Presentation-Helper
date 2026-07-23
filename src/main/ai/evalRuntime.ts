@@ -65,6 +65,8 @@ export interface ResumeExpectation {
   strongSmokeSize: number
   normalModel: string
   strongModel: string
+  promptRevision: string
+  promptFingerprint: string
   validCaseKeys: Set<string>
 }
 
@@ -82,6 +84,9 @@ export function readResumeReport(raw: unknown, expected: ResumeExpectation): Res
   if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3 && schemaVersion !== 4 && schemaVersion !== 5) throw new Error('Resume report schema is unsupported.')
   if (report.corpusSize !== expected.corpusSize || report.strongSmokeSize !== expected.strongSmokeSize) throw new Error('Resume report corpus size does not match.')
   if (schemaVersion !== 1 && report.corpusFingerprint !== expected.corpusFingerprint) throw new Error('Resume report corpus fingerprint does not match.')
+  if (report.promptRevision !== expected.promptRevision || report.promptFingerprint !== expected.promptFingerprint) {
+    throw new Error('Resume report prompt revision or fingerprint does not match.')
+  }
   const budget = report.budget as Record<string, unknown> | undefined
   if (budget?.capUsd !== M3_EVAL_BUDGET_USD) throw new Error('Resume report budget cap does not match.')
   const pricing = report.approximatePriceMetadata as { luna?: unknown; terra?: unknown } | undefined
