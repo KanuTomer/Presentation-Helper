@@ -1,5 +1,8 @@
 import { z } from 'zod'
-import { assistantResponseSchema, type AssistantResponse, type EvidenceIssue, type SupportLevel } from '../../shared/contracts.js'
+import {
+  assistantResponseSchema, type EvidenceIssue, type PresenterAssistantResponse,
+  type ProviderPresenterResponse, type SupportLevel
+} from '../../shared/contracts.js'
 import { RetrievalIndex, type RetrievedChunk } from '../retrieval/index.js'
 import { ConversationContext } from './conversation.js'
 import { validateGroundingResponse } from './grounding.js'
@@ -77,7 +80,10 @@ export async function evaluateM7Offline(input: unknown): Promise<M7OfflineReport
     if (chunks.map((chunk) => chunk.id).join('|') === expectedChunks.map((chunk) => chunk.id).join('|')) {
       productionPreparedSelections += 1
     }
-    const response = assistantResponseSchema.parse(responseForCase(item, chunks))
+    const response: PresenterAssistantResponse = {
+      responseStyle: 'presenter',
+      ...assistantResponseSchema.parse(responseForCase(item, chunks))
+    }
     const grounding = validateGroundingResponse(response, item.question, chunks)
     const semantic = evaluateM7AnswerSemantics(item, response)
     if (grounding.valid) groundingValid += 1
@@ -158,7 +164,7 @@ export function m7RequiredAnchor(item: M7EvalCase): string {
   return `m7-${item.id}-anchor`
 }
 
-export function evaluateM7AnswerSemantics(item: M7EvalCase, response: AssistantResponse): M7SemanticChecks {
+export function evaluateM7AnswerSemantics(item: M7EvalCase, response: PresenterAssistantResponse): M7SemanticChecks {
   const visible = [response.say, ...response.keyPoints, response.ifChallenged, response.warning ?? ''].join(' ')
   const normalized = visible.toLocaleLowerCase('en-US')
   const requiredAnchorPresent = item.support !== 'document-supported' || normalized.includes(m7RequiredAnchor(item))
@@ -186,7 +192,7 @@ export function evaluateM7AnswerSemantics(item: M7EvalCase, response: AssistantR
   }
 }
 
-function responseForCase(item: M7EvalCase, chunks: readonly RetrievedChunk[]): AssistantResponse {
+function responseForCase(item: M7EvalCase, chunks: readonly RetrievedChunk[]): ProviderPresenterResponse {
   const byId = new Map(chunks.map((item) => [item.id, item]))
   return {
     category: item.group === 'challenge' ? 'CHALLENGE' : 'FACTUAL',
@@ -209,8 +215,9 @@ function responseForCase(item: M7EvalCase, chunks: readonly RetrievedChunk[]): A
   }
 }
 
-function seedGeneralResponse(): AssistantResponse {
+function seedGeneralResponse(): PresenterAssistantResponse {
   return {
+    responseStyle: 'presenter',
     category: 'QUESTION', support: 'general-technical', evidenceIssue: 'none',
     say: 'A bounded prior response summary.', keyPoints: ['One.', 'Two.', 'Three.'],
     ifChallenged: 'This summary is reference only.', evidence: []

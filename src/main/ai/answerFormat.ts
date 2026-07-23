@@ -12,6 +12,6 @@ export function isCodeAnswerRequest(question: string): boolean {
   return CREATION_OR_EDIT_INTENT.test(normalized) && PROGRAMMING_ARTIFACT_OR_TECHNOLOGY.test(normalized)
 }
 
-export function resolveAnswerFormat(question: string, requested: AnswerFormat = 'auto'): 'presenter' | 'code' {
-  return requested === 'code' || isCodeAnswerRequest(question) ? 'code' : 'presenter'
+export function resolveAnswerFormat(_question: string, requested: AnswerFormat = 'presenter'): AnswerFormat {
+  return requested
 }

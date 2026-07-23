@@ -12,7 +12,7 @@ export class TypedAnswerController {
     private preview: TransmissionPreviewGate
   ) {}
 
-  async ask(question: string, answerFormat: AnswerFormat = 'auto'): Promise<AskResult> {
+  async ask(question: string, answerFormat: AnswerFormat = 'code'): Promise<AskResult> {
     let operation
     try { operation = this.operations.begin('typed', 'retrieving') }
     catch (error) { return { ok: false, error: toOperationError(error) } }

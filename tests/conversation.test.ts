@@ -3,6 +3,7 @@ import { ConversationContext, MAX_RESPONSE_SUMMARY_CODE_POINTS, MAX_RETAINED_QUE
 import type { AssistantResponse } from '../src/shared/contracts'
 
 const response: AssistantResponse = {
+  responseStyle: 'presenter',
   category: 'QUESTION', support: 'general-technical', evidenceIssue: 'none',
   say: 'A bounded answer.', keyPoints: ['One.', 'Two.', 'Three.'],
   ifChallenged: 'A bounded challenge response.', evidence: []

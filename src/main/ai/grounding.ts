@@ -20,7 +20,10 @@ export function validateGroundingResponse(
     if (response.evidence.length !== 0 || response.evidenceIssue !== 'none' || response.warning) {
       return invalid('general explanation carries project evidence or warning state')
     }
-    if (requiresProjectEvidence(question) || (response.category === 'FACTUAL' && hasProjectReference(question))) {
+    if (
+      requiresProjectEvidence(question) ||
+      (response.responseStyle === 'presenter' && response.category === 'FACTUAL' && hasProjectReference(question))
+    ) {
       return invalid('project-specific factual question was labeled general')
     }
   } else {

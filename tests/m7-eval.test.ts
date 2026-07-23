@@ -28,6 +28,7 @@ describe('M7 offline evaluation gate', () => {
   it('rejects unresolved follow-ups, named fabrications, weak challenges, and conflict side-picking', () => {
     const parsed = m7CorpusSchema.parse(corpus)
     const base: AssistantResponse = {
+      responseStyle: 'presenter',
       category: 'FACTUAL', support: 'general-technical', evidenceIssue: 'none', say: 'A generic answer.',
       keyPoints: ['One.', 'Two.', 'Three.'], ifChallenged: 'A generic defence.', evidence: []
     }

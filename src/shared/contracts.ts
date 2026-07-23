@@ -22,7 +22,7 @@ export const operationStates = [
 export type OperationState = (typeof operationStates)[number]
 export type OperationKind = 'typed' | 'audio'
 export type ModelMode = 'normal' | 'strong'
-export type AnswerFormat = 'auto' | 'code'
+export type AnswerFormat = 'presenter' | 'code'
 export type HelperLifecycle = 'missing' | 'starting' | 'ready' | 'capturing' | 'failed'
 export type CaptureTestOutcome = 'overlay-absent' | 'overlay-black' | 'overlay-visible' | 'unsupported' | 'untested'
 export const aiErrorCodes = [
@@ -85,7 +85,7 @@ export const transcriptionDraftSchema: z.ZodType<TranscriptionDraft> = z.object(
   endpointName: unicodeBoundedString(1, 512),
   createdAt: z.string().datetime()
 }).strict()
-export interface AssistantResponse {
+export interface ProviderPresenterResponse {
   category: QuestionCategory
   support: SupportLevel
   evidenceIssue: EvidenceIssue
@@ -97,7 +97,27 @@ export interface AssistantResponse {
   codeBlocks?: CodeBlock[]
 }
 
-export type CodeAssistantResponse = AssistantResponse & { codeBlocks: CodeBlock[] }
+export interface PresenterAssistantResponse extends ProviderPresenterResponse {
+  responseStyle: 'presenter'
+}
+
+export interface ProviderDeveloperResponse {
+  support: SupportLevel
+  evidenceIssue: EvidenceIssue
+  summary: string
+  codeBlocks: CodeBlock[]
+  implementationNotes: string[]
+  caveats: string[]
+  warning?: string
+  evidence: Evidence[]
+}
+
+export interface DeveloperAssistantResponse extends ProviderDeveloperResponse {
+  responseStyle: 'developer'
+}
+
+export type AssistantResponse = PresenterAssistantResponse | DeveloperAssistantResponse
+export type CodeAssistantResponse = DeveloperAssistantResponse
 
 export const codeBlockSchema = z.object({
   language: unicodeBoundedString(1, 32).regex(/^[\p{L}\p{N}][\p{L}\p{N}+.#_-]*$/u, 'Use a short programming-language identifier.'),
@@ -126,14 +146,39 @@ export const assistantResponseSchema = z.object({
   codeBlocks: z.array(codeBlockSchema).max(3).optional()
 })
 
-export const codeAssistantResponseSchema = assistantResponseSchema.extend({ codeBlocks: codeBlocksSchema })
+export const developerResponseSchema = z.object({
+  support: z.enum(supportLevels),
+  evidenceIssue: z.enum(evidenceIssues),
+  summary: unicodeBoundedString(1, 1_800),
+  codeBlocks: codeBlocksSchema,
+  implementationNotes: z.array(unicodeBoundedString(1, 500)).min(1).max(5),
+  caveats: z.array(unicodeBoundedString(1, 500)).max(3),
+  warning: unicodeBoundedString(1, 800).optional(),
+  evidence: z.array(z.object({
+    chunkId: z.string(), documentName: z.string(), location: z.string()
+  })).max(8)
+})
+
+/** @deprecated Prefer developerResponseSchema for provider output. */
+export const codeAssistantResponseSchema = developerResponseSchema
+
+export const presenterAssistantResponseSchema = assistantResponseSchema.extend({
+  responseStyle: z.literal('presenter')
+})
+export const developerAssistantResponseSchema = developerResponseSchema.extend({
+  responseStyle: z.literal('developer')
+})
+export const localAssistantResponseSchema: z.ZodType<AssistantResponse> = z.discriminatedUnion('responseStyle', [
+  presenterAssistantResponseSchema,
+  developerAssistantResponseSchema
+])
 
 export const questionSchema = z.string().trim().min(1, 'Enter a question first.').max(4_000, 'Questions are limited to 4,000 characters.')
 export const aiErrorInfoSchema = z.object({ code: z.enum(aiErrorCodes), message: z.string().min(1).max(800), retryable: z.boolean() })
 export type AiErrorInfo = z.infer<typeof aiErrorInfoSchema>
 export type AskResult = { ok: true; response: AssistantResponse } | { ok: false; error: AiErrorInfo }
 export const askResultSchema = z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(true), response: assistantResponseSchema }),
+  z.object({ ok: z.literal(true), response: localAssistantResponseSchema }),
   z.object({ ok: z.literal(false), error: aiErrorInfoSchema })
 ])
 
@@ -266,7 +311,7 @@ export interface CaptureProtectionStatus {
 }
 
 export interface AppSettings {
-  glassTint: number
+  neonIntensity: number
   clickThrough: boolean
   modelMode: ModelMode
   normalModel: string
@@ -279,6 +324,12 @@ export interface AppSettings {
   approvedVocabulary: string[]
   selectedAudioEndpointId?: string
   sessionBudgetUsd: number
+}
+
+export interface ClickThroughStatus {
+  enabled: boolean
+  recoveryShortcut: 'Control+Shift+I'
+  recoveryAvailable: boolean
 }
 
 export interface SessionBudgetStatus {
@@ -342,6 +393,7 @@ export interface AppStatus {
   answerRenderConfirmed?: boolean
   transcriptRenderConfirmed?: boolean
   transcriptRenderLatencyMs?: number
+  clickThrough: ClickThroughStatus
   capture: CaptureProtectionStatus
   listening: boolean
   audioSource: string
@@ -447,8 +499,7 @@ export interface PresenterAPI {
   acknowledgeTransmissionPreview(operationId: string, stage: OutboundTransmissionPreview['stage']): Promise<void>
   deleteAllLocalData(confirmation: string): Promise<DeleteAllLocalDataResult>
   dismissSettingsRecoveryWarning(): Promise<void>
-  setClickThrough(enabled: boolean): Promise<void>
-  setGlassTint(value: number): Promise<void>
+  setClickThrough(enabled: boolean): Promise<ClickThroughStatus>
   showSettings(): Promise<void>
   toggleListening(): Promise<OperationActionResult>
   copyCode(code: string): Promise<void>

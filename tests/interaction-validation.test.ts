@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { parseAnswerFormat, parseClipboardCode } from '../src/main/ipc/interactionValidation'
 
 describe('renderer interaction validation', () => {
-  it('accepts only Auto and Code answer formats', () => {
-    expect(parseAnswerFormat(undefined)).toBe('auto')
-    expect(parseAnswerFormat('auto')).toBe('auto')
+  it('accepts Presenter and Code while mapping legacy Auto safely', () => {
+    expect(parseAnswerFormat(undefined)).toBe('code')
+    expect(parseAnswerFormat('auto')).toBe('presenter')
     expect(parseAnswerFormat('code')).toBe('code')
-    expect(() => parseAnswerFormat('presenter')).toThrow('Invalid answer format')
+    expect(parseAnswerFormat('presenter')).toBe('presenter')
     expect(() => parseAnswerFormat({ value: 'code' })).toThrow('Invalid answer format')
   })
 

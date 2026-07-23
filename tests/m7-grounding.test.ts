@@ -8,6 +8,7 @@ import type { RetrievedChunk } from '../src/main/retrieval'
 const chunkA = chunk('a')
 const chunkB = chunk('b')
 const base: AssistantResponse = {
+  responseStyle: 'presenter',
   category: 'FACTUAL', support: 'document-supported', evidenceIssue: 'none',
   say: 'The project fact is supported by the supplied local evidence.',
   keyPoints: ['Use supplied evidence.', 'Keep claims bounded.', 'Expose limitations.'],
