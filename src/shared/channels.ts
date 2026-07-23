@@ -5,7 +5,7 @@ export const channels = {
   selectDocuments: 'documents:select', listDocuments: 'documents:list', removeDocument: 'documents:remove',
   searchDocuments: 'documents:search', inspectDocument: 'documents:inspect',
   clearAllDocuments: 'documents:clear-all',
-  clickThrough: 'window:click-through', glassTint: 'window:glass-tint', showSettings: 'window:show-settings',
+  clickThrough: 'window:click-through', showSettings: 'window:show-settings',
   toggleListening: 'audio:toggle', transcriptDraft: 'audio:transcript-draft', appError: 'app:error',
   copyCode: 'clipboard:copy-code',
   refreshAudioDevices: 'audio:refresh-devices', ackListeningIndicator: 'audio:indicator-rendered', ackAnswerVisible: 'audio:answer-rendered', ackTranscriptVisible: 'audio:transcript-rendered',

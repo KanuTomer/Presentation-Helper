@@ -1,5 +1,9 @@
-import { BrowserWindow, Menu, Tray, app, globalShortcut, nativeImage, screen } from 'electron'
+import {
+  BrowserWindow, Menu, Tray, app, globalShortcut, nativeImage, screen,
+  type BrowserWindowConstructorOptions
+} from 'electron'
 import { join } from 'node:path'
+import { release as operatingSystemRelease } from 'node:os'
 import { is } from '@electron-toolkit/utils'
 import { channels } from '../../shared/channels.js'
 import { WINDOW_LAYOUT_REVISION, type SettingsStore } from '../settings/store.js'
@@ -14,18 +18,28 @@ export const OVERLAY_MIN_WIDTH = 680
 export const OVERLAY_MIN_HEIGHT = 420
 export const OVERLAY_EDGE_MARGIN = 16
 const LEGACY_NARROW_WIDTH = 900
+export const CLICK_THROUGH_RECOVERY_SHORTCUT = 'Control+Shift+I'
+export const WINDOWS_11_22H2_BUILD = 22_621
+
+export interface WindowClickThroughStatus {
+  enabled: boolean
+  recoveryShortcut: typeof CLICK_THROUGH_RECOVERY_SHORTCUT
+  recoveryAvailable: boolean
+}
+
+export type ClickThroughStatusListener = (status: WindowClickThroughStatus) => void
 
 export class WindowManager {
   window?: BrowserWindow
   private tray?: Tray
   shortcutWarnings: string[] = []
-  private registeredShortcuts = new Set<string>()
+  private registeredConfigurableShortcuts = new Set<string>()
+  private recoveryShortcutRegistered = false
   private boundsTimer?: NodeJS.Timeout
+  private shapeTimer?: NodeJS.Timeout
   private clickThrough = false
   private quitting = false
-  private glassTint = 0.42
-  private glassTintCssKey?: string
-  private glassTintCssRevision = 0
+  onClickThroughStatusChange?: ClickThroughStatusListener
   constructor(private store: SettingsStore, private capture: CaptureProtection) {}
 
   create(): BrowserWindow {
@@ -34,22 +48,40 @@ export class WindowManager {
     const initialBounds = requiresLayoutMigration
       ? this.migrateLegacyBounds(this.store.windowBounds)
       : this.validBounds(this.store.windowBounds) ?? this.defaultBounds()
-    this.window = new BrowserWindow({
+    const acrylicSupported = supportsWindowsAcrylic()
+    const windowOptions: BrowserWindowConstructorOptions = {
       ...initialBounds,
       minWidth: OVERLAY_MIN_WIDTH, minHeight: OVERLAY_MIN_HEIGHT, frame: false, transparent: true, alwaysOnTop: true,
       skipTaskbar: true, resizable: true, movable: true, show: false, backgroundColor: '#00000000',
       hasShadow: false, roundedCorners: true,
-      ...(process.platform === 'win32' ? { backgroundMaterial: 'none' as const } : {}),
       webPreferences: { preload: join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false }
-    })
+    }
+    if (acrylicSupported) {
+      try {
+        this.window = new BrowserWindow({ ...windowOptions, backgroundMaterial: 'acrylic' })
+      } catch {
+        // Windows editions, hosted runners, or transparency policy can reject
+        // a backdrop despite reporting a recent build. Keep the transparent
+        // shader/CSS fallback usable instead of preventing the overlay launch.
+        this.window = new BrowserWindow(windowOptions)
+      }
+    } else {
+      this.window = new BrowserWindow(windowOptions)
+    }
     // Applying the Electron-supported screen-saver level after native window
     // creation keeps the transparent overlay topmost without changing focus.
     this.window.setAlwaysOnTop(true, 'screen-saver')
-    this.glassTint = this.clampGlassTint(this.store.settings.glassTint)
-    this.window.webContents.once('did-finish-load', () => this.applyGlassTint())
+    this.applyRoundedShape()
     if (requiresLayoutMigration) void this.store.setWindowLayout(initialBounds, WINDOW_LAYOUT_REVISION)
-    this.clickThrough = this.store.settings.clickThrough
-    this.window.setIgnoreMouseEvents(this.clickThrough, { forward: true })
+    const hadPersistedClickThrough = this.store.settings.clickThrough
+    // Reserve the fixed recovery shortcut before exposing the window. A stale
+    // persisted value is cleared below rather than restored automatically.
+    this.registerShortcuts()
+    // Click-through is runtime-only. Every enable must follow the renderer's
+    // explicit confirmation, so even a previously clean shutdown starts
+    // interactive and clears the stale persisted value.
+    this.setClickThrough(false)
+    if (hadPersistedClickThrough) void this.store.updateSettings({ clickThrough: false }).catch(() => undefined)
     this.capture.setEnabled(this.window, true)
     this.window.once('ready-to-show', () => {
       if (!this.window) return
@@ -60,21 +92,30 @@ export class WindowManager {
       event.preventDefault()
       this.window?.hide()
     })
-    this.window.on('closed', () => { this.window = undefined })
-    this.window.on('move', () => this.persistBounds()); this.window.on('resize', () => this.persistBounds())
+    this.window.on('closed', () => {
+      clearTimeout(this.shapeTimer)
+      this.window = undefined
+    })
+    this.window.on('move', () => this.persistBounds())
+    this.window.on('resize', () => {
+      this.persistBounds()
+      clearTimeout(this.shapeTimer)
+      this.shapeTimer = setTimeout(() => this.applyRoundedShape(), 16)
+    })
     this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     this.window.webContents.on('will-navigate', (event) => event.preventDefault())
     if (is.dev && process.env.ELECTRON_RENDERER_URL) this.window.loadURL(process.env.ELECTRON_RENDERER_URL)
     else this.window.loadFile(join(__dirname, '../renderer/index.html'))
     if (!this.tray) this.createTray()
-    this.registerShortcuts()
     return this.window
   }
 
-  setClickThrough(enabled: boolean): void { this.clickThrough = enabled; this.window?.setIgnoreMouseEvents(enabled, { forward: true }) }
-  setGlassTint(value: number): void {
-    this.glassTint = this.clampGlassTint(value)
-    this.applyGlassTint()
+  setClickThrough(enabled: boolean): void {
+    if (enabled && !this.recoveryShortcutRegistered) {
+      this.applyClickThrough(false)
+      throw new Error(`Click-through requires the ${CLICK_THROUGH_RECOVERY_SHORTCUT} recovery shortcut.`)
+    }
+    this.applyClickThrough(enabled)
   }
   focusAsk(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); window.webContents.send(channels.focusAsk) }
   openSettings(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); window.webContents.send(channels.openSettings) }
@@ -87,8 +128,15 @@ export class WindowManager {
   showTransmissionPreview(): void { this.showInactiveTopmost(this.ensureWindow()) }
   get hasTray(): boolean { return Boolean(this.tray) }
   get isClickThrough(): boolean { return this.clickThrough }
+  get clickThroughStatus(): WindowClickThroughStatus {
+    return {
+      enabled: this.clickThrough,
+      recoveryShortcut: CLICK_THROUGH_RECOVERY_SHORTCUT,
+      recoveryAvailable: this.recoveryShortcutRegistered
+    }
+  }
   toggleVisibility(): void { const window = this.ensureWindow(); window.isVisible() ? window.hide() : this.showInactiveTopmost(window) }
-  emergencyUnlock(): void { this.setClickThrough(false); void this.store.updateSettings({ clickThrough: false }) }
+  emergencyUnlock(): void { this.setClickThrough(false); void this.store.updateSettings({ clickThrough: false }).catch(() => undefined) }
   showFromTray(): void { this.emergencyUnlock(); this.showFocusedTopmost(this.ensureWindow()) }
   openSettingsFromTray(): void { this.emergencyUnlock(); this.openSettings() }
   prepareToQuit(): void { this.quitting = true }
@@ -113,23 +161,52 @@ export class WindowManager {
   }
 
   private registerShortcutSet(askShortcut: string, hideShortcut: string): boolean {
-    for (const shortcut of this.registeredShortcuts) globalShortcut.unregister(shortcut)
-    this.registeredShortcuts.clear(); this.shortcutWarnings = []
+    const recoveryAvailable = this.ensureRecoveryShortcut()
+    const recoveryWarnings = recoveryAvailable
+      ? []
+      : [`Could not register ${CLICK_THROUGH_RECOVERY_SHORTCUT}. Click-through was disabled for safety.`]
+    const attemptedWarnings = this.replaceConfigurableShortcuts(askShortcut, hideShortcut)
+    this.shortcutWarnings = [...recoveryWarnings, ...attemptedWarnings]
+    return recoveryAvailable && attemptedWarnings.length === 0
+  }
+
+  private replaceConfigurableShortcuts(askShortcut: string, hideShortcut: string): string[] {
+    for (const shortcut of this.registeredConfigurableShortcuts) globalShortcut.unregister(shortcut)
+    this.registeredConfigurableShortcuts.clear()
+    const warnings: string[] = []
     const register = (shortcut: string, action: () => void): void => {
-      if (!globalShortcut.register(shortcut, action)) this.shortcutWarnings.push(`Could not register ${shortcut}. Choose another shortcut in Settings.`)
-      else this.registeredShortcuts.add(shortcut)
+      if (!globalShortcut.register(shortcut, action)) warnings.push(`Could not register ${shortcut}. Choose another shortcut in Settings.`)
+      else this.registeredConfigurableShortcuts.add(shortcut)
     }
     register(askShortcut, () => this.focusAsk())
     register(hideShortcut, () => this.toggleVisibility())
-    const emergencyShortcut = 'Control+Shift+I'
-    if (!globalShortcut.register(emergencyShortcut, () => this.emergencyUnlock())) {
-      this.shortcutWarnings.push(`Could not register ${emergencyShortcut}. Click-through was disabled for safety.`)
-      // This must be synchronous at the window layer; persistence follows in
-      // the background so a failed recovery shortcut can never lock the user
-      // out of a click-through overlay loaded from prior settings.
-      this.emergencyUnlock()
-    } else this.registeredShortcuts.add(emergencyShortcut)
-    return this.shortcutWarnings.length === 0
+    return warnings
+  }
+
+  private ensureRecoveryShortcut(): boolean {
+    if (this.recoveryShortcutRegistered) return true
+    if (globalShortcut.register(CLICK_THROUGH_RECOVERY_SHORTCUT, () => this.emergencyUnlock())) {
+      this.recoveryShortcutRegistered = true
+      this.notifyClickThroughStatus()
+      return true
+    }
+    // This must be synchronous at the window layer; persistence follows in
+    // the background so a failed recovery shortcut can never lock the user
+    // out of a click-through overlay loaded from prior settings.
+    this.applyClickThrough(false)
+    void this.store.updateSettings({ clickThrough: false }).catch(() => undefined)
+    return false
+  }
+
+  private applyClickThrough(enabled: boolean): void {
+    const changed = this.clickThrough !== enabled
+    this.clickThrough = enabled
+    this.window?.setIgnoreMouseEvents(enabled, { forward: true })
+    if (changed) this.notifyClickThroughStatus()
+  }
+
+  private notifyClickThroughStatus(): void {
+    try { this.onClickThroughStatusChange?.(this.clickThroughStatus) } catch { /* observer errors must not affect window safety */ }
   }
 
   private createTray(): void {
@@ -167,24 +244,11 @@ export class WindowManager {
 
   private defaultBounds(): OverlayBounds { return defaultOverlayBounds(screen.getPrimaryDisplay().workArea) }
 
-  private clampGlassTint(value: number): number { return Math.min(0.78, Math.max(0.18, value)) }
-
-  private applyGlassTint(): void {
+  private applyRoundedShape(): void {
     const window = this.window
-    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
-    const revision = ++this.glassTintCssRevision
-    const previousKey = this.glassTintCssKey
-    const css = `:root { --glass-tint: ${this.glassTint.toFixed(2)}; }`
-    void window.webContents.insertCSS(css).then(async (key) => {
-      if (!this.window || this.window.isDestroyed() || revision !== this.glassTintCssRevision) {
-        await window.webContents.removeInsertedCSS(key).catch(() => undefined)
-        return
-      }
-      this.glassTintCssKey = key
-      if (previousKey && previousKey !== key) {
-        await window.webContents.removeInsertedCSS(previousKey).catch(() => undefined)
-      }
-    }).catch(() => undefined)
+    if (process.platform !== 'win32' || !window || window.isDestroyed()) return
+    const { width, height } = window.getBounds()
+    try { window.setShape(roundedWindowShape(width, height)) } catch { /* roundedCorners and renderer clipping remain as fallbacks */ }
   }
 
   private showInactiveTopmost(window: BrowserWindow): void {
@@ -249,4 +313,54 @@ function availableDimension(size: number, minimum: number): number {
 function rectanglesIntersect(left: OverlayBounds, right: WorkArea): boolean {
   return left.x < right.x + right.width && left.x + left.width > right.x &&
     left.y < right.y + right.height && left.y + left.height > right.y
+}
+
+export function roundedWindowShape(width: number, height: number, radius = 24): OverlayBounds[] {
+  const safeWidth = Math.max(1, Math.floor(width))
+  const safeHeight = Math.max(1, Math.floor(height))
+  const safeRadius = Math.max(0, Math.min(Math.floor(radius), Math.floor(safeWidth / 2), Math.floor(safeHeight / 2)))
+  if (safeRadius === 0) return [{ x: 0, y: 0, width: safeWidth, height: safeHeight }]
+
+  const rows: Array<{ y: number; inset: number }> = []
+  for (let y = 0; y < safeHeight; y += 1) {
+    let inset = 0
+    if (y < safeRadius) {
+      const distance = safeRadius - y - 0.5
+      inset = Math.max(0, Math.ceil(safeRadius - Math.sqrt(Math.max(0, safeRadius ** 2 - distance ** 2))))
+    } else if (y >= safeHeight - safeRadius) {
+      const distance = y - (safeHeight - safeRadius) + 0.5
+      inset = Math.max(0, Math.ceil(safeRadius - Math.sqrt(Math.max(0, safeRadius ** 2 - distance ** 2))))
+    }
+    rows.push({ y, inset })
+  }
+
+  const rects: OverlayBounds[] = []
+  let start = rows[0]!
+  let previous = start
+  for (const row of rows.slice(1)) {
+    if (row.inset !== start.inset) {
+      rects.push({
+        x: start.inset, y: start.y,
+        width: Math.max(1, safeWidth - start.inset * 2),
+        height: previous.y - start.y + 1
+      })
+      start = row
+    }
+    previous = row
+  }
+  rects.push({
+    x: start.inset, y: start.y,
+    width: Math.max(1, safeWidth - start.inset * 2),
+    height: previous.y - start.y + 1
+  })
+  return rects
+}
+
+export function supportsWindowsAcrylic(
+  platform: NodeJS.Platform = process.platform,
+  osRelease = operatingSystemRelease()
+): boolean {
+  if (platform !== 'win32') return false
+  const build = Number(osRelease.split('.')[2])
+  return Number.isInteger(build) && build >= WINDOWS_11_22H2_BUILD
 }
