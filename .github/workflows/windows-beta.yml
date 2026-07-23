@@ -214,4 +214,5 @@ jobs:
             docs/validation/milestone-7.md
             docs/validation/milestone-8.md
             docs/validation/plan-alignment.md
+            docs/validation/code-first-liquid-glass.md
           if-no-files-found: error

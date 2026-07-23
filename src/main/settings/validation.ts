@@ -36,7 +36,7 @@ const vocabularySchema = z.array(z.string()).max(30).transform((value, context) 
 
 /** Strict persistence and IPC boundary for the renderer-visible settings object. */
 export const appSettingsSchema = z.object({
-  glassTint: z.number().finite().min(0.18).max(0.78),
+  neonIntensity: z.number().finite().min(0).max(1),
   clickThrough: z.boolean(),
   modelMode: z.enum(['normal', 'strong']),
   normalModel: modelSchema,

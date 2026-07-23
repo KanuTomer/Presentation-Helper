@@ -27,7 +27,9 @@ export class ConversationContext {
     const boundedQuestion = boundCodePoints(question, MAX_RETAINED_QUESTION_CODE_POINTS)
     if (!boundedQuestion) return false
     const summary = boundCodePoints(
-      [response.say, response.ifChallenged, response.warning].filter(Boolean).join(' '),
+      response.responseStyle === 'developer'
+        ? [response.summary, ...response.implementationNotes, ...response.caveats, response.warning].filter(Boolean).join(' ')
+        : [response.say, response.ifChallenged, response.warning].filter(Boolean).join(' '),
       MAX_RESPONSE_SUMMARY_CODE_POINTS
     )
     this.turns.push(Object.freeze({ question: boundedQuestion, summary }))

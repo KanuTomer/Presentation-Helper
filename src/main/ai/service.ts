@@ -2,7 +2,7 @@ import OpenAI, { toFile } from 'openai'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import {
-  assistantResponseSchema, codeAssistantResponseSchema, questionSchema, type AiErrorCode, type AiErrorInfo,
+  assistantResponseSchema, developerResponseSchema, questionSchema, type AiErrorCode, type AiErrorInfo,
   type AnswerFormat, type AppSettings, type AssistantResponse, type DocumentInfo
 } from '../../shared/contracts.js'
 import type { RetrievedChunk } from '../retrieval/index.js'
@@ -11,7 +11,7 @@ import { validateGroundingResponse } from './grounding.js'
 import { attachPreparedAnswer, prepareAnswer, preparedAnswerFromChunks, type PreparedAnswer } from './preparedAnswer.js'
 import { resolveAnswerFormat } from './answerFormat.js'
 import {
-  buildInput, codePresenterInstructions, codeResponseJsonSchema, presenterInstructions, responseJsonSchema
+  buildInput, developerInstructions, developerResponseJsonSchema, presenterInstructions, responseJsonSchema
 } from './prompts.js'
 import { codeResponseRequestPolicy, responseRequestPolicy } from './requestPolicy.js'
 import {
@@ -256,14 +256,14 @@ export class AiService {
       const requestBody = {
         model: requestedModel,
         reasoning: { effort: policy.reasoningEffort },
-        instructions: codeAnswer ? codePresenterInstructions : presenterInstructions,
+        instructions: codeAnswer ? developerInstructions : presenterInstructions,
         input: buildInput(prepared.question, selectedChunks, prepared.conversationPrompt, prepared.projectSummary),
         max_output_tokens: policy.maxOutputTokens, store: false,
         text: {
           ...(policy.verbosity ? { verbosity: policy.verbosity } : {}),
           format: {
-            type: 'json_schema', name: codeAnswer ? 'presenter_code_response' : 'presenter_response', strict: true,
-            schema: codeAnswer ? codeResponseJsonSchema : responseJsonSchema
+            type: 'json_schema', name: codeAnswer ? 'developer_response' : 'presenter_response', strict: true,
+            schema: codeAnswer ? developerResponseJsonSchema : responseJsonSchema
           }
         }
       }
@@ -278,9 +278,16 @@ export class AiService {
       let raw: unknown
       try { raw = JSON.parse(response.output_text) } catch { throw malformedResponse() }
       normalizeProviderNulls(raw)
-      const validation = (codeAnswer ? codeAssistantResponseSchema : assistantResponseSchema).safeParse(raw)
-      if (!validation.success) throw malformedResponse()
-      const parsed = validation.data
+      let parsed: AssistantResponse
+      if (codeAnswer) {
+        const validation = developerResponseSchema.safeParse(raw)
+        if (!validation.success) throw malformedResponse()
+        parsed = { responseStyle: 'developer', ...validation.data }
+      } else {
+        const validation = assistantResponseSchema.safeParse(raw)
+        if (!validation.success) throw malformedResponse()
+        parsed = { responseStyle: 'presenter', ...validation.data }
+      }
       const citedIds = parsed.evidence.map((item) => item.chunkId)
       if (new Set(citedIds).size !== citedIds.length || citedIds.some((chunkId) => !allowed.has(chunkId))) {
         throw malformedResponse()

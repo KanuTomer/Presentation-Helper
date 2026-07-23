@@ -3,13 +3,14 @@ import type { AppSettings, AssistantResponse } from '../src/shared/contracts'
 import { AiService, type AiSettingsProvider, type OpenAIClientLike } from '../src/main/ai/service'
 
 const settings: AppSettings = {
-  glassTint: 0.42, sessionBudgetUsd: 0.25, clickThrough: false, modelMode: 'normal',
+  neonIntensity: 0.65, sessionBudgetUsd: 0.25, clickThrough: false, modelMode: 'normal',
   normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra', transcriptionModel: 'gpt-4o-mini-transcribe',
   askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', listenShortcut: 'Control+Shift+Space',
   projectSummary: '', approvedVocabulary: []
 }
 
 const validResponse: AssistantResponse = {
+  responseStyle: 'presenter',
   category: 'QUESTION', support: 'general-technical', evidenceIssue: 'none',
   say: 'A bounded answer based on general technical knowledge.',
   keyPoints: ['One clear point.', 'A second clear point.', 'A third clear point.'],

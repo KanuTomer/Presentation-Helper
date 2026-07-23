@@ -13,7 +13,7 @@ import {
 import { estimateTranscriptionUsd, USAGE_PRICING_VERSION } from '../src/main/settings/store'
 
 const settings: AppSettings = {
-  glassTint: 0.42,
+  neonIntensity: 0.65,
   sessionBudgetUsd: 0.25,
   clickThrough: false,
   modelMode: 'normal',

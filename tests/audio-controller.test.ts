@@ -18,6 +18,7 @@ import { LocalDataDeletionService } from '../src/main/settings/dataDeletion'
 vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
 
 const answer: AssistantResponse = {
+  responseStyle: 'presenter',
   category: 'QUESTION', support: 'general-technical', evidenceIssue: 'none',
   say: 'A grounded answer.', keyPoints: ['One.', 'Two.', 'Three.'],
   ifChallenged: 'Use the supplied evidence.', evidence: []
@@ -111,7 +112,7 @@ function pcmWave(durationMs: number): Buffer {
 
 function appSettings(): AppSettings {
   return {
-    glassTint: 0.42, sessionBudgetUsd: 0.25, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
+    neonIntensity: 0.65, sessionBudgetUsd: 0.25, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
     transcriptionModel: 'gpt-4o-mini-transcribe', askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H',
     listenShortcut: 'Control+Shift+Space', projectSummary: '', approvedVocabulary: []
   }

@@ -108,10 +108,11 @@ const settings: {
   addTranscriptionUsage(usage: TranscriptionUsage, model: string): Promise<void>
 } = {
   settings: {
-    opacity: 0.92, clickThrough: false, modelMode: 'normal', normalModel: M6_ANSWER_MODEL,
+    neonIntensity: 0.65, clickThrough: false, modelMode: 'normal', normalModel: M6_ANSWER_MODEL,
     strongModel: 'gpt-5.6-terra', transcriptionModel: M6_TRANSCRIPTION_MODEL,
     askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', listenShortcut: 'Control+Shift+Space',
-    projectSummary: '', approvedVocabulary: ['OpenTelemetry', 'PostgreSQL', 'rendezvous hashing']
+    projectSummary: '', approvedVocabulary: ['OpenTelemetry', 'PostgreSQL', 'rendezvous hashing'],
+    sessionBudgetUsd: 0.25
   },
   documents,
   async addUsage() {},

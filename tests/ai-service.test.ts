@@ -7,11 +7,12 @@ import {
 import type { RetrievedChunk } from '../src/main/retrieval'
 
 const settings: AppSettings = {
-  glassTint: 0.42, sessionBudgetUsd: 0.25, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
+  neonIntensity: 0.65, sessionBudgetUsd: 0.25, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
   transcriptionModel: 'gpt-4o-mini-transcribe', askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H',
   listenShortcut: 'Control+Shift+Space', projectSummary: '', approvedVocabulary: []
 }
 const response: AssistantResponse = {
+  responseStyle: 'presenter',
   category: 'FACTUAL', support: 'general-technical', evidenceIssue: 'none',
   say: 'Use evidence that is actually available.', keyPoints: ['State what is known.', 'Name the limitation.', 'Avoid unsupported claims.'],
   ifChallenged: 'Explain that no project result was supplied.', evidence: []
@@ -262,7 +263,11 @@ describe('manual AI service', () => {
 
 describe('structured code AI service', () => {
   const codeResponse = {
-    ...response,
+    support: 'general-technical', evidenceIssue: 'none',
+    summary: 'Use a controlled input and filtered local options.',
+    implementationNotes: ['Add keyboard navigation and ARIA combobox behavior before production use.'],
+    caveats: ['This sample was not executed in the target application.'],
+    evidence: [],
     codeBlocks: [{
       language: 'tsx', title: null,
       code: 'export function SearchDropdown(): JSX.Element {\n  return <input aria-label="Search" />\n}'
@@ -272,18 +277,19 @@ describe('structured code AI service', () => {
   it('automatically uses one stateless code-schema request for a programming creation question', async () => {
     const create = vi.fn(async () => apiResponse(codeResponse))
     const { service } = harness(create)
-    const result = await service.ask('Can you design the code for a dropdown search box in React?')
+    const result = await service.ask('Can you design the code for a dropdown search box in React?', { answerFormat: 'code' })
 
-    expect(result.codeBlocks).toEqual([{
+    expect(result.responseStyle).toBe('developer')
+    expect(result.responseStyle === 'developer' && result.codeBlocks).toEqual([{
       language: 'tsx',
       code: 'export function SearchDropdown(): JSX.Element {\n  return <input aria-label="Search" />\n}'
     }])
     expect(create).toHaveBeenCalledOnce()
     expect(create.mock.calls[0]?.[0]).toMatchObject({
       model: 'gpt-5.6-luna', reasoning: { effort: 'none' }, max_output_tokens: 2_000, store: false,
-      text: { format: { type: 'json_schema', name: 'presenter_code_response', strict: true } }
+      text: { format: { type: 'json_schema', name: 'developer_response', strict: true } }
     })
-    expect(String(create.mock.calls[0]?.[0].instructions)).toContain('put every source-code fragment in CODE BLOCKS')
+    expect(String(create.mock.calls[0]?.[0].instructions)).toContain('private coding copilot')
   })
 
   it('uses the Strong code budget and low verbosity for an explicit Code override', async () => {
@@ -293,17 +299,44 @@ describe('structured code AI service', () => {
     await service.ask('Explain eventual consistency.', { answerFormat: 'code' })
     expect(create.mock.calls[0]?.[0]).toMatchObject({
       model: 'gpt-5.6-terra', reasoning: { effort: 'low' }, max_output_tokens: 3_000,
-      text: { verbosity: 'low', format: { name: 'presenter_code_response' } }
+      text: { verbosity: 'low', format: { name: 'developer_response' } }
     })
   })
 
-  it('applies automatic code routing to direct generate calls used by audio transcripts', async () => {
+  it('applies the explicit code route to direct generate calls', async () => {
     const create = vi.fn(async () => apiResponse(codeResponse))
     const { service } = harness(create)
-    await service.generate('Write a JavaScript function to sort these values.', [])
+    await service.generate('Write a JavaScript function to sort these values.', [], { answerFormat: 'code' })
     expect(create.mock.calls[0]?.[0]).toMatchObject({
-      max_output_tokens: 2_000, text: { format: { name: 'presenter_code_response' } }
+      max_output_tokens: 2_000, text: { format: { name: 'developer_response' } }
     })
+  })
+
+  it('applies forged and duplicate citation rejection to developer responses', async () => {
+    const chunk = {
+      id: 'doc-code:text:api:part:1', documentId: 'doc-code',
+      text: 'The project exposes a typed search API.',
+      kind: 'text', part: 1, partCount: 1,
+      documentName: 'developer-guide.txt', location: 'Search API', score: -1
+    } as RetrievedChunk
+    const forged = harness(async () => apiResponse({
+      ...codeResponse,
+      support: 'document-supported',
+      evidence: [{ chunkId: 'forged', documentName: 'fake.txt', location: 'Nowhere' }]
+    }), [chunk])
+    await expect(forged.service.ask('Generate code using our project search API.', { answerFormat: 'code' }))
+      .rejects.toMatchObject({ code: 'malformed_response' })
+
+    const duplicate = harness(async () => apiResponse({
+      ...codeResponse,
+      support: 'document-supported',
+      evidence: [
+        { chunkId: chunk.id, documentName: 'wrong.txt', location: 'Wrong' },
+        { chunkId: chunk.id, documentName: 'wrong.txt', location: 'Wrong' }
+      ]
+    }), [chunk])
+    await expect(duplicate.service.ask('Generate code using our project search API.', { answerFormat: 'code' }))
+      .rejects.toMatchObject({ code: 'malformed_response' })
   })
 
   it('rejects oversized aggregate code and still records returned usage', async () => {
@@ -316,7 +349,7 @@ describe('structured code AI service', () => {
       ]
     }))
     const { service, usage } = harness(create)
-    await expect(service.ask('Generate code for a web component.')).rejects.toMatchObject({ code: 'malformed_response' })
+    await expect(service.ask('Generate code for a web component.', { answerFormat: 'code' })).rejects.toMatchObject({ code: 'malformed_response' })
     expect(create).toHaveBeenCalledOnce()
     expect(usage).toHaveBeenCalledWith(50, 30)
   })
@@ -330,7 +363,7 @@ describe('structured code AI service', () => {
         ? apiResponse({ ...codeResponse, codeBlocks: [{ language: 'js', title: null, code: secretCode }] })
         : apiResponse(response)
     })
-    await service.ask('Write a JavaScript function for a dropdown.')
+    await service.ask('Write a JavaScript function for a dropdown.', { answerFormat: 'code' })
     await service.ask('What is eventual consistency?')
     expect(String(requests[1]?.input)).not.toContain(secretCode)
   })

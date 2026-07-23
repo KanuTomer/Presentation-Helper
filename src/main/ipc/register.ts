@@ -23,6 +23,7 @@ import { LocalDataDeletionService } from '../settings/dataDeletion.js'
 import { ShortcutSettingsTransaction } from '../settings/shortcutTransaction.js'
 import { scheduleRelaunchAfterDeletion } from './relaunchAfterDeletion.js'
 import { parseAnswerFormat, parseClipboardCode } from './interactionValidation.js'
+import { applyClickThroughTransaction } from '../windows/clickThroughTransaction.js'
 
 interface Services {
   store: SettingsStore
@@ -47,7 +48,8 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   const status = (): AppStatus => {
     const { escapeWarning, ...operationStatus } = audio.operations.snapshot()
     return {
-      ...operationStatus, capture: capture.status(windows.window), listening: audio.listening,
+      ...operationStatus, clickThrough: windows.clickThroughStatus,
+      capture: capture.status(windows.window), listening: audio.listening,
       audioSource: audio.activeEndpoint?.name ?? audio.devices.find((device) => device.id === store.settings.selectedAudioEndpointId)?.name ?? 'Windows default output (WASAPI loopback)',
       temporaryAudioExists: Boolean(audio.temporaryAudio), helperAvailable: audio.helper.available, helperState: audio.helper.state,
       helperError: audio.helper.lastError ?? audio.warning, audioDevices: audio.devices, selectedAudioEndpointId: store.settings.selectedAudioEndpointId,
@@ -60,6 +62,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     }
   }
   const broadcast = (): void => windows.window?.webContents.send(channels.status, status())
+  windows.onClickThroughStatusChange = broadcast
   audio.onState = broadcast
   audio.onTranscriptDraft = (draft) => windows.window?.webContents.send(channels.transcriptDraft, transcriptionDraftSchema.parse(draft))
   audio.onError = (error) => windows.window?.webContents.send(channels.appError, error)
@@ -81,7 +84,6 @@ export function registerIpc(services: Services): RegisteredIpcServices {
       if (audio.helper.available) {
         await audio.configureShortcut(defaults.listenShortcut)
       }
-      windows.setGlassTint(defaults.glassTint)
       windows.setClickThrough(defaults.clickThrough)
     }
   })
@@ -97,6 +99,11 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     const patch = parseSettingsPatch(value)
     const previous = store.settings
     validateSettingsMutation(previous, patch, audio.operations.isBusy)
+    if (Object.prototype.hasOwnProperty.call(patch, 'clickThrough')) {
+      if (Object.keys(patch).length !== 1) throw new Error('Change click-through separately from other settings.')
+      await applyClickThrough(Boolean(patch.clickThrough))
+      return store.settings
+    }
     const next = { ...previous, ...patch }
     const shortcutsChanged = ['askShortcut', 'hideShortcut', 'listenShortcut']
       .some((key) => Object.prototype.hasOwnProperty.call(patch, key))
@@ -108,8 +115,6 @@ export function registerIpc(services: Services): RegisteredIpcServices {
           rollbackPersistence: () => store.updateSettings(previous)
         })
       : await store.updateSettings(patch)
-    windows.setGlassTint(settings.glassTint)
-    windows.setClickThrough(settings.clickThrough)
     if (Object.prototype.hasOwnProperty.call(patch, 'selectedAudioEndpointId')) {
       try { await audio.refreshDevices() }
       catch (error) {
@@ -119,6 +124,11 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     broadcast()
     return settings
   })
+  const applyClickThrough = async (enabled: boolean) => {
+    const result = await applyClickThroughTransaction(windows, store, enabled)
+    broadcast()
+    return result
+  }
   handle(channels.getApiKeyStatus, () => secrets.status())
   handle<[string]>(channels.saveApiKey, (_event, key) => secrets.saveKey(key))
   handle(channels.deleteApiKey, () => secrets.deleteKey())
@@ -171,8 +181,10 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     const page = await retrieval.inspectDocument(parsed.documentId, parsed.offset, parsed.limit)
     return documentInspectionPageSchema.parse(page)
   })
-  handle<[boolean]>(channels.clickThrough, async (_event, enabled) => { windows.setClickThrough(enabled); await store.updateSettings({ clickThrough: enabled }) })
-  handle<[number]>(channels.glassTint, async (_event, value) => { windows.setGlassTint(value); await store.updateSettings({ glassTint: value }) })
+  handle<[unknown]>(channels.clickThrough, (_event, enabled) => {
+    if (typeof enabled !== 'boolean') throw new Error('Invalid click-through state.')
+    return applyClickThrough(enabled)
+  })
   handle(channels.showSettings, () => windows.openSettings())
   handle(channels.toggleListening, () => audio.toggleListening())
   handle<[unknown]>(channels.copyCode, (_event, value) => {

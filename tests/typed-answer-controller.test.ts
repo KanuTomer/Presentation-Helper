@@ -7,6 +7,7 @@ import type { TransmissionPreviewGate } from '../src/main/privacy/transmissionPr
 import type { AssistantResponse } from '../src/shared/contracts'
 
 const response: AssistantResponse = {
+  responseStyle: 'presenter',
   category: 'QUESTION', support: 'general-technical', evidenceIssue: 'none', say: 'A bounded response.',
   keyPoints: ['First point.', 'Second point.', 'Third point.'], ifChallenged: 'A bounded defence.', evidence: []
 }

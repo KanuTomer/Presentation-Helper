@@ -95,8 +95,8 @@ test('reuses the system-audio toggle after a completed terminal path', async () 
   expect(await recoveryShortcut()).toBe(true)
 })
 
-test('creates a protected overlay with hardened web preferences and clamped bounds', async () => {
-  const state = await application.evaluate(({ BrowserWindow, screen }) => {
+test('creates a protected Acrylic overlay with hardened preferences, rounded transparency, and clamped bounds', async () => {
+  const state = await application.evaluate(async ({ BrowserWindow, screen }) => {
     const window = BrowserWindow.getAllWindows()[0]!
     const bounds = window.getBounds()
     const contentBounds = window.getContentBounds()
@@ -105,10 +105,18 @@ test('creates a protected overlay with hardened web preferences and clamped boun
       bounds.x >= workArea.x && bounds.x + bounds.width <= workArea.x + workArea.width &&
       bounds.y >= workArea.y && bounds.y + bounds.height <= workArea.y + workArea.height
     ))
+    const image = await window.webContents.capturePage()
+    const bitmap = image.toBitmap()
+    const imageSize = image.getSize()
+    const alphaAt = (x: number, y: number): number => bitmap[(y * imageSize.width + x) * 4 + 3] ?? 255
     return {
       alwaysOnTop: window.isAlwaysOnTop(), movable: window.isMovable(), resizable: window.isResizable(),
       protected: window.isContentProtected(), hasShadow: window.hasShadow(), contained, bounds, contentBounds, workAreas,
-      preferences: window.webContents.getLastWebPreferences()
+      preferences: window.webContents.getLastWebPreferences(),
+      cornerAlphas: [
+        alphaAt(0, 0), alphaAt(imageSize.width - 1, 0),
+        alphaAt(0, imageSize.height - 1), alphaAt(imageSize.width - 1, imageSize.height - 1)
+      ]
     }
   })
   expect(state).toMatchObject({
@@ -120,18 +128,35 @@ test('creates a protected overlay with hardened web preferences and clamped boun
   expect(state.contentBounds.width).toBeGreaterThanOrEqual(680)
   expect(state.contentBounds.width).toBeLessThanOrEqual(1116)
   expect(Math.abs(state.bounds.width - state.contentBounds.width)).toBeLessThanOrEqual(16)
+  expect(state.cornerAlphas, `native Acrylic bled into rounded corners: ${state.cornerAlphas.join(', ')}`).toEqual([0, 0, 0, 0])
 })
 
-test('shows the wide glass composer and supports a per-request Code override', async () => {
+test('starts code-first and exposes responsive neon and Presenter override controls', async () => {
   await page.getByRole('button', { name: 'copilot' }).click()
-  const auto = page.getByRole('button', { name: 'Auto' })
+  const presenter = page.getByRole('button', { name: 'Presenter', exact: true })
   const code = page.getByRole('button', { name: '</> Code' })
-  await expect(auto).toHaveAttribute('aria-pressed', 'true')
+  await expect(code).toHaveAttribute('aria-pressed', 'true')
+  await expect(presenter).toHaveAttribute('aria-pressed', 'false')
+  await presenter.click()
+  await expect(presenter).toHaveAttribute('aria-pressed', 'true')
   await code.click()
   await expect(code).toHaveAttribute('aria-pressed', 'true')
-  await expect(auto).toHaveAttribute('aria-pressed', 'false')
+
+  const neon = page.getByRole('slider', { name: 'Neon intensity' })
+  await neon.fill('0')
+  await expect.poll(async () => page.locator('.shell').evaluate((element) => getComputedStyle(element).getPropertyValue('--neon-intensity').trim())).toBe('0')
+  const zeroEmission = await page.locator('.primary').first().evaluate((element) => getComputedStyle(element).boxShadow)
+  expect(zeroEmission).toContain('rgba(79, 70, 229, 0)')
+  await neon.fill('1')
+  const fullEmission = await page.locator('.primary').first().evaluate((element) => getComputedStyle(element).boxShadow)
+  expect(fullEmission).not.toBe(zeroEmission)
+  expect(fullEmission).not.toContain('rgba(79, 70, 229, 0)')
+  await neon.fill('0.65')
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getSettings())).neonIntensity).toBe(0.65)
+
   const shell = page.locator('.shell')
   await expect(shell).toHaveCSS('border-radius', '24px')
+  await expect(page.locator('.liquid-glass-layer')).toHaveCount(1)
 })
 
 test('scrolls every long tab by wheel and keyboard at wide and minimum sizes', async () => {
@@ -189,6 +214,31 @@ test('keeps wheel and touchpad-style deltas inside nested code scrolling surface
   await page.locator('.e2e-code-card').evaluate((element) => element.remove())
 })
 
+test('keeps quick controls and rounded clipping usable across scale factors', async () => {
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1100, 720))
+  await page.getByRole('button', { name: 'copilot', exact: true }).click()
+  for (const scale of [1, 1.25, 1.5, 2]) {
+    await application.evaluate(({ BrowserWindow }, zoomFactor) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(zoomFactor)
+    }, scale)
+    await page.waitForTimeout(120)
+    const layout = await page.evaluate(() => {
+      const shell = document.querySelector<HTMLElement>('.shell')!
+      const controls = document.querySelector<HTMLElement>('.quick-controls')!
+      return {
+        shellRadius: getComputedStyle(shell).borderRadius,
+        rootOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        controlOverflow: controls.scrollWidth - controls.clientWidth,
+        clickThroughVisible: Boolean(document.querySelector('.click-through-control'))
+      }
+    })
+    expect(layout).toEqual({
+      shellRadius: '24px', rootOverflow: 0, controlOverflow: 0, clickThroughVisible: true
+    })
+  }
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(1))
+})
+
 test('provides tray recovery, hide/show, and emergency click-through escape', async () => {
   const initial = await e2eState()
   expect(initial).toMatchObject({ tray: true, emergencyShortcut: true, clickThrough: false })
@@ -203,8 +253,14 @@ test('provides tray recovery, hide/show, and emergency click-through escape', as
   await application.evaluate(() => (globalThis as any).__presenterE2E.toggleVisibility())
   await expect.poll(async () => (await e2eState()).visible).toBe(true)
 
-  await page.evaluate(() => window.presenter.setClickThrough(true))
+  await page.getByRole('button', { name: 'copilot', exact: true }).click()
+  await page.getByRole('button', { name: 'Enable click-through' }).click()
+  const confirmation = page.getByRole('alertdialog', { name: 'Enable click-through?' })
+  await expect(confirmation).toContainText('Ctrl+Shift+I')
+  await expect(confirmation).toContainText('Tray → Show PresenterAI')
+  await confirmation.getByRole('button', { name: 'Enable click-through' }).click()
   await expect.poll(async () => (await e2eState()).clickThrough).toBe(true)
+  await expect(page.locator('.click-through-banner')).toContainText('CLICK-THROUGH ON · Ctrl+Shift+I')
   await application.evaluate(() => (globalThis as any).__presenterE2E.traySettings())
   await expect.poll(async () => (await e2eState()).clickThrough).toBe(false)
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()

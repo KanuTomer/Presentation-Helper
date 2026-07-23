@@ -6,6 +6,7 @@ import type { AssistantResponse } from '../src/shared/contracts'
 import { ResponseCard, evidenceSupport } from '../src/renderer/responseCard'
 
 const base: AssistantResponse = {
+  responseStyle: 'presenter',
   category: 'FACTUAL', support: 'general-technical', evidenceIssue: 'none',
   say: 'A concise answer.', keyPoints: ['One', 'Two', 'Three'],
   ifChallenged: 'Explain the evidence boundary.', evidence: []
@@ -37,11 +38,22 @@ describe('response evidence badges', () => {
 })
 
 describe('structured code cards', () => {
+  const developerBase: AssistantResponse = {
+    responseStyle: 'developer',
+    support: 'general-technical',
+    evidenceIssue: 'none',
+    summary: 'Use a controlled input and a locally filtered list.',
+    codeBlocks: [{ language: 'tsx', code: 'export const Example = () => null' }],
+    implementationNotes: ['Add ARIA combobox behavior and keyboard navigation before production use.'],
+    caveats: ['The sample has not been executed in the target application.'],
+    evidence: []
+  }
+
   it('renders inert highlighted code with exact whitespace and copies the original source', async () => {
     const code = 'export function SearchDropdown() {\n  const unsafe = "<script>alert(1)</script>"\n\n  return unsafe\n}\n'
     const copy = vi.fn(async () => undefined)
     const { container } = render(<ResponseCard
-      response={{ ...base, codeBlocks: [{ language: 'tsx', title: 'SearchDropdown.tsx', code }] }}
+      response={{ ...developerBase, codeBlocks: [{ language: 'tsx', title: 'SearchDropdown.tsx', code }] }}
       onCopyCode={copy}
     />)
 
@@ -56,9 +68,9 @@ describe('structured code cards', () => {
     expect(await screen.findByText('Code copied.')).toBeTruthy()
   })
 
-  it('renders multiple blocks before the presenter key points and disables copying without a narrow handler', () => {
+  it('renders summary, multiple blocks, implementation notes, and caveats in developer order', () => {
     const { container } = render(<ResponseCard response={{
-      ...base,
+      ...developerBase,
       codeBlocks: [
         { language: 'tsx', title: 'Component.tsx', code: 'export const Component = () => null' },
         { language: 'css', title: 'component.css', code: '.component { display: block; }' }
@@ -70,8 +82,14 @@ describe('structured code cards', () => {
       expect((button as HTMLButtonElement).disabled).toBe(true)
     }
 
+    const summary = container.querySelector('.developer-summary')
     const firstCode = container.querySelector('.code-block-card')
-    const keyPoints = Array.from(container.querySelectorAll('h3')).find((heading) => heading.textContent === 'KEY POINTS')
-    expect(firstCode?.compareDocumentPosition(keyPoints!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    const notes = Array.from(container.querySelectorAll('h3')).find((heading) => heading.textContent === 'IMPLEMENTATION NOTES')
+    const caveats = Array.from(container.querySelectorAll('h3')).find((heading) => heading.textContent === 'CAVEATS')
+    expect(summary?.compareDocumentPosition(firstCode!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(firstCode?.compareDocumentPosition(notes!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(notes?.compareDocumentPosition(caveats!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(screen.queryByText('SAY')).toBeNull()
+    expect(screen.queryByText('IF CHALLENGED')).toBeNull()
   })
 })
