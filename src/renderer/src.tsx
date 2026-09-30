@@ -10,7 +10,9 @@ import { AiErrorPanel } from './aiError'
 import { DocumentsView } from './documents'
 import { ToggleListenButton, OperationBanner, StageTimingSummary } from './operationUi'
 import { ResponseCard } from './responseCard'
-import { LiquidGlassLayer } from './liquidGlass'
+import { SnapshotButton } from './snapshot'
+import { MODEL_REGISTRY } from '../shared/models'
+import { QuietGlassLayer } from './quietGlass'
 import { answerFormatAfterSubmission, ClickThroughBanner, CopilotQuickControls } from './quickControls'
 import { ApprovedVocabularyEditor } from './vocabularyEditor'
 import { StatusRefreshGuard } from './statusRefresh'
@@ -24,12 +26,12 @@ type View = 'copilot' | 'documents' | 'settings' | 'privacy' | 'capture'
 
 export const blankStatus: AppStatus = {
   operation: 'idle', operationTimings: {}, listening: false, audioSource: 'System output (WASAPI loopback)', temporaryAudioExists: false, helperAvailable: false,
-  helperState: 'missing', audioDevices: [], shortcutWarnings: [], capture: { requested: false, electronReported: false, verifiedResults: [] },
+  helperState: 'missing', audioDevices: [], shortcutWarnings: [], shortcutRegistrations: [], capture: { requested: false, electronReported: false, verifiedResults: [] },
   clickThrough: { enabled: false, recoveryShortcut: 'Control+Shift+I', recoveryAvailable: false },
   privacyConsent: { requiredVersion: LISTENING_CONSENT_VERSION, satisfied: false },
-  sessionBudget: {
-    sessionId: 'loading', startedAt: new Date(0).toISOString(), capUsd: 0.25,
-    actualUsd: 0, heldUsd: 0, remainingUsd: 0.25, pricingVersion: 'loading', blocked: false
+  sessionUsage: {
+    sessionId: 'loading', startedAt: new Date(0).toISOString(),
+    actualUsd: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, unpricedRequests: 0, pricingVersion: 'loading'
   }
 }
 
@@ -163,7 +165,7 @@ export function App(): React.JSX.Element {
     if (neonSaveTimer.current) clearTimeout(neonSaveTimer.current)
     neonSaveTimer.current = setTimeout(() => {
       void window.presenter.updateSettings({ neonIntensity: bounded }).catch((error) => {
-        showAiError({ code: 'unknown', message: (error as Error).message || 'The neon intensity could not be saved.', retryable: false })
+        showAiError({ code: 'unknown', message: (error as Error).message || 'The accent intensity could not be saved.', retryable: false })
         void refresh()
       })
     }, 120)
@@ -184,7 +186,7 @@ export function App(): React.JSX.Element {
     className={`shell ${status.listening ? 'is-listening' : ''}`}
     style={{ '--neon-intensity': neonIntensity } as React.CSSProperties}
   >
-    <LiquidGlassLayer neonIntensity={neonIntensity} />
+      <QuietGlassLayer />
     {status.outboundPreview && <TransmissionPreviewPanel
       preview={status.outboundPreview}
       onRendered={(operationId, stage) => window.presenter.acknowledgeTransmissionPreview(operationId, stage)}
@@ -208,7 +210,7 @@ export function App(): React.JSX.Element {
 
     <section className="content no-drag" tabIndex={0} aria-label={`${view} content`} onKeyDown={handleContentScrollKey}>
       {status.settingsRecoveryWarning && <Notice tone="warning"><strong>Settings were recovered safely.</strong> The prior file was {status.settingsRecoveryWarning.code.replaceAll('_', ' ')}. <button onClick={async () => { await window.presenter.dismissSettingsRecoveryWarning(); await refresh() }}>Dismiss</button></Notice>}
-      {view === 'copilot' && <Copilot question={question} setQuestion={setQuestionFromUser} transcriptDraft={transcriptDraft} resolveTranscript={(choice) => {
+      {view === 'copilot' && <Copilot onSnapshotResponse={(value) => { setResponse(value); setAiError(undefined); void refresh() }} question={question} setQuestion={setQuestionFromUser} transcriptDraft={transcriptDraft} resolveTranscript={(choice) => {
         if (!transcriptDraft) return
         if (choice !== 'discard') setQuestionFromUser(mergeTranscriptDraft(questionRef.current, transcriptDraft.draft.text, choice))
         setTranscriptDraft(undefined); setTimeout(() => input.current?.focus(), 0)
@@ -225,7 +227,7 @@ export function App(): React.JSX.Element {
   </main>
 }
 
-function Copilot(props: { question: string; setQuestion(v: string): void; transcriptDraft?: { draft: TranscriptionDraft; conflict: boolean }; resolveTranscript(choice: 'replace' | 'append' | 'discard'): void; answerFormat: AnswerFormat; setAnswerFormat(v: AnswerFormat): void; onSetClickThrough(enabled: boolean): Promise<void>; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; retry(): void; response?: AssistantResponse; aiError?: AiErrorInfo; openSettings(): void; openPrivacy(): void; hasKey: boolean; status: AppStatus; onAudioError(error: AiErrorInfo): void }) {
+function Copilot(props: { onSnapshotResponse(response: AssistantResponse): void; question: string; setQuestion(v: string): void; transcriptDraft?: { draft: TranscriptionDraft; conflict: boolean }; resolveTranscript(choice: 'replace' | 'append' | 'discard'): void; answerFormat: AnswerFormat; setAnswerFormat(v: AnswerFormat): void; onSetClickThrough(enabled: boolean): Promise<void>; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; retry(): void; response?: AssistantResponse; aiError?: AiErrorInfo; openSettings(): void; openPrivacy(): void; hasKey: boolean; status: AppStatus; onAudioError(error: AiErrorInfo): void }) {
   const busy = props.status.operation !== 'idle' && props.status.operation !== 'error'
   const canSubmit = props.hasKey && Boolean(props.question.trim()) && !busy && !props.transcriptDraft?.conflict
   const retryIsSafe = props.status.operationKind !== 'audio' && !['busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio', 'invalid_transcript', 'capture_timeout', 'transcript_display_unavailable'].includes(props.aiError?.code ?? '')
@@ -243,6 +245,7 @@ function Copilot(props: { question: string; setQuestion(v: string): void; transc
       >
         <button className="primary" disabled={!canSubmit} title={busy ? 'Another operation is active.' : props.transcriptDraft?.conflict ? 'Resolve the pending transcript first.' : undefined} onClick={() => void props.ask()}>{props.answerFormat === 'code' ? 'Generate code' : 'Ask presenter'} <kbd>Ctrl↵</kbd></button>
         <ToggleListenButton status={props.status} onError={props.onAudioError} />
+        <SnapshotButton disabled={busy} canSend={props.hasKey} onOpenSettings={props.openSettings} sessionId={props.status.sessionUsage.sessionId} onResponse={props.onSnapshotResponse} onError={props.onAudioError} />
       </CopilotQuickControls>
     </div>
     {props.aiError && <AiErrorPanel error={props.aiError} allowRetry={retryIsSafe} onRetry={props.retry} onOpenSettings={props.openSettings} onOpenPrivacy={props.openPrivacy} />}
@@ -263,9 +266,9 @@ function Settings({ settings, status, recordingMs, apiKeyStatus, onNeonIntensity
     {failure && <Notice tone="danger">{failure}</Notice>}
     <fieldset className="appearance-settings"><legend>Appearance</legend>
       <label className="neon-control">
-        <span>Neon intensity <output>{Math.round(settings.neonIntensity * 100)}%</output></span>
+        <span>Accent intensity <output>{Math.round(settings.neonIntensity * 100)}%</output></span>
         <input
-          aria-label="Neon intensity"
+          aria-label="Accent intensity"
           type="range"
           min="0"
           max="1"
@@ -274,15 +277,18 @@ function Settings({ settings, status, recordingMs, apiKeyStatus, onNeonIntensity
           onChange={(event) => onNeonIntensityChange(Number(event.target.value))}
         />
       </label>
-      <p className="muted">Controls only the blue-violet caustics and rim light. Text and panel opacity stay fixed.</p>
+      <p className="muted">Controls static blue-violet rims and button accents only. Text and reading surfaces stay fixed.</p>
     </fieldset>
     <fieldset><legend>OpenAI API key</legend><p>{apiKeyStatus.configured ? 'A masked, DPAPI-encrypted key is stored for this Windows user.' : 'No API key is stored.'}</p>{apiKeyStatus.updatedAt && <small>Last replaced {new Date(apiKeyStatus.updatedAt).toLocaleString()}</small>}<p className="muted">Protection: {apiKeyStatus.protection === 'windows-dpapi' ? 'Windows DPAPI' : 'secure storage unavailable'}. DPAPI primarily protects against other Windows users, not every process already running as you.</p><input ref={keyInput} type="password" autoComplete="off" placeholder="sk-…" /><div className="actions"><button className="primary" onClick={async () => { const value = keyInput.current?.value.trim() ?? ''; if (keyInput.current) keyInput.current.value = ''; try { await window.presenter.saveApiKey(value); setMessage('Key saved.'); await onChange() } catch (e) { setFailure((e as Error).message || 'The API key could not be saved.') } }}>Save key</button><button disabled={!apiKeyStatus.configured} onClick={async () => { try { setMessage((await window.presenter.testApiKey()).message) } catch (e) { setFailure((e as Error).message || 'The API key could not be tested.') } }}>Test</button><button disabled={!apiKeyStatus.configured} onClick={async () => { try { await window.presenter.deleteApiKey(); await onChange() } catch (e) { setFailure((e as Error).message || 'The API key could not be deleted.') } }}>Delete</button></div>{message && <small>{message}</small>}</fieldset>
     <fieldset><legend>Answer model</legend><select value={settings.modelMode} onChange={(e) => void update({ modelMode: e.target.value as AppSettings['modelMode'] })}><option value="normal">Normal · {settings.normalModel}</option><option value="strong">Strong · {settings.strongModel}</option></select></fieldset>
     <fieldset><legend>System audio output</legend><p className="muted">PresenterAI captures all sound played through the selected Windows output device. It does not listen to the microphone.</p><div className="helper-health"><span className={`health-dot ${status.helperState}`} /><strong>{status.helperState}</strong></div>{status.operation === 'listening' && <p>Recording: {(recordingMs / 1000).toFixed(1)} seconds</p>}<Info label="Active capture endpoint" value={status.activeAudioEndpoint?.name ?? 'None — listening is off'} />{status.helperError && <Notice tone={status.helperState === 'failed' ? 'danger' : 'warning'}>{status.helperError}</Notice>}{status.helperState === 'missing' && <p className="muted">Reinstall PresenterAI or run the packaged build so the Windows helper is available.</p>}{status.helperState === 'failed' && <p className="muted">An unsigned helper may have been blocked by Windows Smart App Control or App Control. PresenterAI never disables that protection. Retry after using a trusted-signed build or an authorized development environment.</p>}<label>Preferred output device<select value={settings.selectedAudioEndpointId ?? ''} disabled={!status.helperAvailable} onChange={(e) => void update({ selectedAudioEndpointId: e.target.value || undefined })}><option value="">Windows default output</option>{status.audioDevices.map((device) => <option value={device.id} key={device.id}>{device.name}{device.isDefault ? ' (default)' : ''}</option>)}</select></label><button onClick={async () => { setFailure(''); try { await window.presenter.refreshAudioDevices(); await onChange() } catch (e) { setFailure((e as Error).message || 'The Windows audio helper could not be retried.') } }}>{status.helperState === 'failed' ? 'Retry helper' : 'Refresh devices'}</button>{status.shortcutWarnings.map((warning) => <Notice tone="warning" key={warning}>{warning}</Notice>)}</fieldset>
     <ApprovedVocabularyEditor terms={settings.approvedVocabulary} onChange={(approvedVocabulary) => update({ approvedVocabulary })} />
     <fieldset><legend>Project summary</legend><textarea value={settings.projectSummary} onChange={(e) => void update({ projectSummary: e.target.value })} placeholder="Optional user-authored facts that may be sent with each request." /></fieldset>
-    <ShortcutSettingsPanel askShortcut={settings.askShortcut} hideShortcut={settings.hideShortcut} listenShortcut={settings.listenShortcut} disabled={busy} onChange={update} />
-    <fieldset><legend>Session spending limit</legend><label>Maximum USD per session<input type="number" min="0.01" max="100" step="0.01" value={settings.sessionBudgetUsd} onChange={(event) => void update({ sessionBudgetUsd: Number(event.target.value) })} /></label><p className="muted">Default: $0.25. PresenterAI reserves a conservative maximum before each request. This limits only requests sent by PresenterAI; it is not an OpenAI account-level billing limit.</p></fieldset>
+    <ShortcutSettingsPanel askShortcut={settings.askShortcut} hideShortcut={settings.hideShortcut} listenShortcut={settings.listenShortcut} disabled={busy} onChange={update} registrations={status.shortcutRegistrations} onRetry={async () => { await window.presenter.retryShortcuts(); await onChange() }} />
+    <fieldset><legend>Model and reasoning</legend>{(['normal', 'strong'] as const).map((mode) => <div key={mode}>
+      <label>{mode === 'normal' ? 'Normal model' : 'Strong model'}<select value={mode === 'normal' ? settings.normalModel : settings.strongModel} onChange={(event) => void update(mode === 'normal' ? { normalModel: event.target.value } : { strongModel: event.target.value })}>{MODEL_REGISTRY.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label>
+      <label>{mode === 'normal' ? 'Normal reasoning' : 'Strong reasoning'}<select value={(mode === 'normal' ? settings.normalReasoning : settings.strongReasoning) ?? 'medium'} onChange={(event) => void update(mode === 'normal' ? { normalReasoning: event.target.value as 'low' | 'medium' | 'high' } : { strongReasoning: event.target.value as 'low' | 'medium' | 'high' })}>{['low', 'medium', 'high'].map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label>
+    </div>)}<p className="muted">No application spending cap. Reasoning and output tokens are billable. Models never switch automatically; account-level limits still apply.</p></fieldset>
     <StageTimingSummary timings={status.operationTimings} indicatorLatencyMs={status.indicatorLatencyMs} transcriptRenderLatencyMs={status.transcriptRenderLatencyMs} />
   </div>
 }
@@ -301,7 +307,7 @@ function Privacy({ status, recordingMs, documents, usage, settings, onNewSession
     <ListeningConsentPanel consent={status.privacyConsent} disabled={busy} onAccept={async (version) => { await window.presenter.acceptListeningConsent(version); await onChange() }} />
     <div className="info-grid"><Info label="Listening" value={status.operation === 'listening' ? `ACTIVE · ${(recordingMs / 1000).toFixed(1)}s` : 'OFF'} /><Info label="Active audio endpoint" value={status.activeAudioEndpoint?.name ?? 'None'} /><Info label="Preferred audio source" value={status.audioSource} /><Info label="Audio helper" value={status.helperState} /><Info label="Temporary audio" value={status.temporaryAudioExists ? 'Exists during capture/transcription only' : 'None'} /><Info label="Last capture" value={status.lastCapture ? `${(status.lastCapture.durationMs / 1000).toFixed(1)}s · ${status.lastCapture.sampleRate} Hz mono · ${status.lastCapture.endpointName}` : 'None this session'} /><Info label="Last answer render" value={status.answerRenderConfirmed === undefined ? 'Not measured' : status.answerRenderConfirmed ? 'Confirmed visible' : 'Not confirmed'} /><Info label="Approved vocabulary" value={`${settings?.approvedVocabulary.length ?? 0} terms`} /><Info label="Local documents" value={`${documents.length} indexed`} /></div>
     <PrivacyDisclosure />
-    <SessionBudgetPanel budget={status.sessionBudget} disabled={busy} onNewSession={onNewSession} />
+    <SessionBudgetPanel budget={status.sessionUsage} disabled={busy} onNewSession={onNewSession} />
     {usageView && <UsageEstimatePanel usage={usageView} />}
     <StageTimingSummary timings={status.operationTimings} indicatorLatencyMs={status.indicatorLatencyMs} transcriptRenderLatencyMs={status.transcriptRenderLatencyMs} />
     <RetentionControls busy={busy} onDeleteAllSuccess={onDeleteAllSuccess} actions={{

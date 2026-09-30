@@ -10,7 +10,9 @@ PresenterAI is a private, local-first Windows copilot for presentations, technic
 - Indexes PPTX, PDF, Markdown, and UTF-8 text locally with SQLite FTS5 and sends only selected evidence chunks to OpenAI.
 - Captures bounded **Windows system output**, not microphone audio, through a restricted .NET helper. The transcript is shown as an editable draft before it can be submitted.
 - Keeps the OpenAI key in Electron `safeStorage` (Windows DPAPI), keeps conversation state local, and sends Responses requests with `store:false`.
-- Provides a transparent always-on-top overlay, tray controls, configurable shortcuts, fail-closed click-through recovery, and a persistent per-session USD cap.
+- Solves visible math problems, coding exercises, and errors through **Snapshot → Preview → Send → Solution**. No cropping or extra prompt is required.
+- Offers GPT-6 Luna/Sol/Astra, GPT-6.1 Sol, and GPT-5.6 Luna/Terra with independently selected Normal/Strong reasoning levels.
+- Provides a transparent always-on-top overlay, tray controls, configurable shortcuts, fail-closed click-through recovery, and USD usage estimates without application spending caps.
 - Makes no telemetry, analytics, account, cloud-database, or hosted-backend connection.
 
 ## How it works
@@ -19,6 +21,8 @@ PresenterAI is a private, local-first Windows copilot for presentations, technic
 2. **Ask** — type a question, or toggle system-audio capture and review the resulting transcript.
 3. **Generate** — choose Code or Presenter and submit with `Ctrl+Enter`; PresenterAI retrieves up to five relevant local chunks.
 4. **Review** — read the answer, copy code, and inspect the evidence or warning before speaking.
+
+For a screen problem, press **Snapshot**, review the complete monitor image, then **Send**. Use **Retake** or **Discard** if it contains unwanted information. On multiple displays, select the monitor first. Math screenshots produce a mathematical solution even in Code mode; unclear screens produce a focused clarification.
 
 ## Run locally
 
@@ -99,10 +103,11 @@ Live evaluation scripts are opt-in, billable, and excluded from ordinary develop
 
 - Source documents and the FTS index stay on the computer. Only the current question, bounded local context, and selected evidence chunks are sent for an answer.
 - System audio is captured in bounded helper memory. A final temporary WAV is deleted after transcription, and the transcript remains an editable in-memory draft until submission.
-- The local USD cap limits PresenterAI requests, not the OpenAI account itself. Provider billing remains authoritative.
+- There is no PresenterAI spending cap or small production output-token ceiling. Reasoning tokens are billable and included in output-token usage. USD figures are estimates; unknown returned model pricing is shown as Unpriced. Use OpenAI account/project billing controls if you need a spending limit.
+- Screenshots stay in memory, are sent only after **Send**, and are cleared after completion, cancellation, ten minutes, or New Session. The entire selected monitor may contain sensitive information; inspect it before sending.
 - DPAPI primarily protects the stored key from other Windows users; it cannot isolate it from every process already running as the same user.
 - The transcription endpoint and Responses API have different retention rules. Review the current [OpenAI API data controls](https://developers.openai.com/api/docs/guides/your-data) before using sensitive material.
-- Image-only/scanned files, visual chart interpretation, OCR, Chrome-process audio isolation, microphone capture, continuous listening, and automatic screenshots are not supported.
+- Document OCR, Chrome-process audio isolation, microphone capture, continuous listening, and automatic screenshots are not supported. Explicit snapshots use model vision; screen text can be misread, so review the interpreted problem and result.
 - `setContentProtection(true)` is requested on Windows, but that is not a universal security guarantee. Record every capture application/version in the [compatibility matrix](docs/capture-compatibility/matrix.md).
 
 ## Validation status

@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import type {
-  AppSettings, CaptureCompatibilityResult, DocumentInfo, SessionBudgetStatus, SettingsRecoveryWarning, UsageSummary
+  AppSettings, CaptureCompatibilityResult, DocumentInfo, SessionUsageStatus, SettingsRecoveryWarning, UsageSummary
 } from '../../shared/contracts.js'
 import { LISTENING_CONSENT_VERSION } from '../../shared/contracts.js'
 import type { TranscriptionUsage } from '../ai/transcription.js'
@@ -18,7 +18,7 @@ import { appSettingsSchema, parseSettingsPatch, validateSettingsMutation, valida
 export { USAGE_PRICING_VERSION } from '../ai/pricing.js'
 export type { SettingsRecoveryWarning } from '../../shared/contracts.js'
 
-export const SETTINGS_SCHEMA_VERSION = 5
+export const SETTINGS_SCHEMA_VERSION = 6
 export const WINDOW_LAYOUT_REVISION = 1
 export { LISTENING_CONSENT_VERSION } from '../../shared/contracts.js'
 export const MAX_RECENT_USAGE_RECORDS = 100
@@ -89,19 +89,15 @@ export interface SessionBudgetReservationInput {
   maximumUsd: number
 }
 
-export class SessionBudgetExceededError extends Error {
-  readonly code = 'session_budget_exceeded'
-  constructor(readonly requestedUsd: number, readonly remainingUsd: number) {
-    super('This request could exceed the remaining PresenterAI session budget. Start a new session or increase the cap.')
-    this.name = 'SessionBudgetExceededError'
-  }
-}
-
 interface StoredSessionBudget {
   sessionId: string
   startedAt: string
   actualUsd: number
   reservations: SessionBudgetReservation[]
+  inputTokens?: number
+  outputTokens?: number
+  reasoningTokens?: number
+  unpricedRequests?: number
 }
 
 interface StoredData {
@@ -218,8 +214,9 @@ const sessionBudgetReservationSchema = z.object({
 const sessionBudgetSchema: z.ZodType<StoredSessionBudget> = z.object({
   sessionId: z.string().min(1).max(128),
   startedAt: isoTimestamp,
-  actualUsd: z.number().finite().nonnegative().max(100),
-  reservations: z.array(sessionBudgetReservationSchema).max(10_000)
+  actualUsd: finiteNonnegative,
+  reservations: z.array(sessionBudgetReservationSchema).max(10_000),
+  inputTokens: tokenCount.optional(), outputTokens: tokenCount.optional(), reasoningTokens: tokenCount.optional(), unpricedRequests: tokenCount.optional()
 }).strict()
 const historicalStoredShape = {
   windowBounds: boundsSchema.optional(),
@@ -262,6 +259,12 @@ const storedDataV4Schema = z.object({
   ...historicalStoredShape,
   sessionBudget: sessionBudgetSchema
 }).strict()
+const storedDataV5Schema = z.object({
+  schemaVersion: z.literal(5), windowLayoutRevision: z.number().int().min(0).max(WINDOW_LAYOUT_REVISION),
+  ...historicalStoredShape,
+  settings: appSettingsSchema.omit({ normalReasoning: true, strongReasoning: true }).extend({ sessionBudgetUsd: z.number().finite().min(0.01).max(100) }),
+  sessionBudget: sessionBudgetSchema
+}).strict()
 const legacyStoredDataSchema = z.object({
   settings: legacySettingsSchema, windowBounds: boundsSchema.optional(), documents: z.array(documentSchema),
   captureResults: z.array(captureResultSchema), usage: usageSummarySchema
@@ -276,10 +279,10 @@ const usageRecordInputSchema: z.ZodType<UsageRecordInput> = z.object({
 })
 
 const defaultSettings: AppSettings = {
-  neonIntensity: 0.65, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna',
-  strongModel: 'gpt-5.6-terra', transcriptionModel: 'gpt-4o-mini-transcribe',
+  neonIntensity: 0.65, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-6-luna',
+  strongModel: 'gpt-6.1-sol', normalReasoning: 'medium', strongReasoning: 'medium', transcriptionModel: 'gpt-4o-mini-transcribe',
   askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', listenShortcut: 'Control+Shift+Space',
-  projectSummary: '', approvedVocabulary: [], sessionBudgetUsd: 0.25
+  projectSummary: '', approvedVocabulary: []
 }
 const defaultUsage = (): UsageSummary => ({
   inputTokens: 0, outputTokens: 0, audioMinutes: 0,
@@ -336,6 +339,13 @@ export class SettingsStore {
     }
 
     const rawVersion = isRecord(raw) ? raw.schemaVersion : undefined
+    if (rawVersion === 5) {
+      const previous = storedDataV5Schema.safeParse(raw)
+      if (previous.success) {
+        this.data = { ...previous.data, schemaVersion: SETTINGS_SCHEMA_VERSION, settings: recoverSettings(previous.data.settings), sessionBudget: { ...previous.data.sessionBudget, reservations: [] } }
+        await this.flush(); return
+      }
+    }
     if (rawVersion === 2) {
       const versionTwo = storedDataV2Schema.safeParse(raw)
       if (versionTwo.success) {
@@ -368,7 +378,7 @@ export class SettingsStore {
         return
       }
     }
-    const warningCode: RecoveryReason = rawVersion !== undefined && rawVersion !== 2 && rawVersion !== 3 && rawVersion !== 4 && rawVersion !== SETTINGS_SCHEMA_VERSION
+    const warningCode: RecoveryReason = rawVersion !== undefined && rawVersion !== 2 && rawVersion !== 3 && rawVersion !== 4 && rawVersion !== 5 && rawVersion !== SETTINGS_SCHEMA_VERSION
       ? 'unsupported_schema'
       : 'invalid_shape'
     this.data = this.migrateOrRecover(raw, warningCode)
@@ -384,11 +394,10 @@ export class SettingsStore {
   get usageLedger(): UsageLedger {
     return { summary: this.usage, recent: this.usageRecords, rollups: this.usageRollups }
   }
-  get sessionBudgetStatus(): SessionBudgetStatus {
-    return buildSessionBudgetStatus(this.data.sessionBudget, this.data.settings.sessionBudgetUsd)
+  get sessionUsageStatus(): SessionUsageStatus {
+    const value = this.data.sessionBudget
+    return { sessionId: value.sessionId, startedAt: value.startedAt, actualUsd: value.actualUsd, inputTokens: value.inputTokens ?? 0, outputTokens: value.outputTokens ?? 0, reasoningTokens: value.reasoningTokens ?? 0, unpricedRequests: value.unpricedRequests ?? 0, pricingVersion: USAGE_PRICING_VERSION }
   }
-  /** Backward-compatible internal alias while callers move to the explicit status name. */
-  get sessionBudget(): SessionBudgetStatus { return this.sessionBudgetStatus }
   get recoveryWarning(): SettingsRecoveryWarning | undefined {
     return this.data.recoveryWarning && { ...this.data.recoveryWarning }
   }
@@ -434,75 +443,11 @@ export class SettingsStore {
     await this.flush()
   }
 
-  /** Persist a worst-case cost before a provider request can be dispatched. */
-  async reserveSessionBudget(
-    endpoint: BillableEndpoint,
-    requestedModel: string,
-    maximumUsd: number
-  ): Promise<SessionBudgetReservation> {
-    const parsed = sessionBudgetReservationSchema.omit({ id: true, reservedAt: true }).parse({
-      endpoint, requestedModel, maximumUsd
-    })
-    const status = this.sessionBudgetStatus
-    if (parsed.maximumUsd > status.remainingUsd + 1e-12) {
-      throw new SessionBudgetExceededError(parsed.maximumUsd, status.remainingUsd)
-    }
-    const reservation: SessionBudgetReservation = {
-      ...parsed, id: this.idGenerator(), reservedAt: this.clock().toISOString()
-    }
-    if (this.data.sessionBudget.reservations.some((candidate) => candidate.id === reservation.id)) {
-      throw new Error('The session budget reservation ID already exists.')
-    }
-    this.data.sessionBudget.reservations.push(reservation)
-    await this.flush()
-    return structuredClone(reservation)
-  }
 
-  /**
-   * Replace a conservative hold with exact priced usage. Callers intentionally
-   * leave a reservation unsettled when usage is absent or the returned model
-   * is not in the exact local price table.
-   */
-  async settleSessionBudget(
-    reservationId: string,
-    actualUsd: number,
-    keepReservation = false
-  ): Promise<SessionBudgetStatus> {
-    const actual = z.number().finite().nonnegative().max(100).parse(actualUsd)
-    const index = this.data.sessionBudget.reservations.findIndex((candidate) => candidate.id === reservationId)
-    if (index < 0) throw new Error('The session budget reservation is no longer active.')
-    const reservation = this.data.sessionBudget.reservations[index]!
-    if (keepReservation) return this.sessionBudgetStatus
-    if (actual > reservation.maximumUsd + 1e-12) {
-      throw new Error('Actual request cost exceeded its conservative reservation; the hold was retained.')
-    }
-    this.data.sessionBudget.reservations.splice(index, 1)
-    this.data.sessionBudget.actualUsd = addUsd(this.data.sessionBudget.actualUsd, actual)
-    await this.flush()
-    return this.sessionBudgetStatus
-  }
-
-  /** Release a reservation only when dispatch is known not to have occurred. */
-  async releaseSessionBudget(reservationId: string): Promise<SessionBudgetStatus> {
-    const index = this.data.sessionBudget.reservations.findIndex((candidate) => candidate.id === reservationId)
-    if (index < 0) throw new Error('The session budget reservation is no longer active.')
-    this.data.sessionBudget.reservations.splice(index, 1)
-    await this.flush()
-    return this.sessionBudgetStatus
-  }
-
-  /** Confirm that a missing-usage or unpriced request remains fully held. */
-  retainSessionBudget(reservationId: string): SessionBudgetStatus {
-    if (!this.data.sessionBudget.reservations.some((candidate) => candidate.id === reservationId)) {
-      throw new Error('The session budget reservation is no longer active.')
-    }
-    return this.sessionBudgetStatus
-  }
-
-  async startNewSession(): Promise<SessionBudgetStatus> {
+  async startNewSession(): Promise<SessionUsageStatus> {
     this.data.sessionBudget = defaultSessionBudget(this.clock, this.idGenerator)
     await this.flush()
-    return this.sessionBudgetStatus
+    return this.sessionUsageStatus
   }
 
   async recordUsage(value: UsageRecordInput): Promise<UsageRecord> {
@@ -564,6 +509,7 @@ export class SettingsStore {
   async clearListeningConsent(): Promise<void> { delete this.data.privacyConsent; await this.flush() }
   async clearUsage(): Promise<void> {
     this.data.usage = defaultUsage(); this.data.usageRecords = []; this.data.usageRollups = []
+    this.data.sessionBudget = defaultSessionBudget(this.clock, this.idGenerator)
     await this.flush()
   }
   async clearSessionUsage(): Promise<void> { await this.clearUsage() }
@@ -590,6 +536,12 @@ export class SettingsStore {
   }
 
   private appendUsageRecord(record: UsageRecord): void {
+    const session = this.data.sessionBudget
+    session.actualUsd = addUsd(session.actualUsd, record.estimatedUsd)
+    session.inputTokens = (session.inputTokens ?? 0) + record.inputTokens
+    session.outputTokens = (session.outputTokens ?? 0) + record.outputTokens
+    session.reasoningTokens = (session.reasoningTokens ?? 0) + (record.reasoningTokens ?? 0)
+    session.unpricedRequests = (session.unpricedRequests ?? 0) + (record.priced ? 0 : 1)
     if (record.endpoint === 'responses') {
       this.data.usage.inputTokens += record.inputTokens
       this.data.usage.outputTokens += record.outputTokens
@@ -654,13 +606,14 @@ export class SettingsStore {
         ...settings,
         neonIntensity: defaultSettings.neonIntensity
       }),
+      sessionBudget: { ...preserved.sessionBudget, reservations: [] },
       schemaVersion: SETTINGS_SCHEMA_VERSION
     }
   }
 
   private migrateOrRecover(raw: unknown, reason: RecoveryReason): StoredData {
     if (!isRecord(raw)) return this.recoveredDefaults(reason)
-    if (raw.schemaVersion !== undefined && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== 4 && raw.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
+    if (raw.schemaVersion !== undefined && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== 4 && raw.schemaVersion !== 5 && raw.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
       return this.recoveredDefaults(reason)
     }
 
@@ -679,6 +632,7 @@ export class SettingsStore {
     data.usageRecords = parseArrayItems(usageRecordSchema, raw.usageRecords).slice(-MAX_RECENT_USAGE_RECORDS)
     data.usageRollups = parseArrayItems(usageRollupSchema, raw.usageRollups)
     data.sessionBudget = parseOptional(sessionBudgetSchema, raw.sessionBudget) ?? data.sessionBudget
+    data.sessionBudget.reservations = []
     data.privacyConsent = parseOptional(consentSchema, raw.privacyConsent)
     data.recoveryWarning = recoveryWarning(reason, this.clock())
 
@@ -715,8 +669,7 @@ function migrateLegacySettings(value: z.infer<typeof legacySettingsSchema>): App
   // the new neon intensity and USD cap start from their documented defaults.
   return recoverSettings({
     ...value,
-    neonIntensity: defaultSettings.neonIntensity,
-    sessionBudgetUsd: defaultSettings.sessionBudgetUsd
+    neonIntensity: defaultSettings.neonIntensity
   })
 }
 
@@ -750,21 +703,6 @@ function parseOptional<T>(schema: z.ZodType<T>, value: unknown): T | undefined {
   if (value === undefined) return undefined
   const parsed = schema.safeParse(value)
   return parsed.success ? parsed.data : undefined
-}
-
-function buildSessionBudgetStatus(session: StoredSessionBudget, capUsd: number): SessionBudgetStatus {
-  const heldUsd = session.reservations.reduce((total, reservation) => addUsd(total, reservation.maximumUsd), 0)
-  const remainingUsd = Math.max(0, addUsd(capUsd, -session.actualUsd, -heldUsd))
-  return {
-    sessionId: session.sessionId,
-    startedAt: session.startedAt,
-    capUsd,
-    actualUsd: session.actualUsd,
-    heldUsd,
-    remainingUsd,
-    pricingVersion: USAGE_PRICING_VERSION,
-    blocked: remainingUsd <= 1e-12
-  }
 }
 
 function addUsd(...values: number[]): number {

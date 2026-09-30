@@ -2,7 +2,7 @@ import OpenAI, { toFile } from 'openai'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import {
-  assistantResponseSchema, developerResponseSchema, questionSchema, type AiErrorCode, type AiErrorInfo,
+  assistantResponseSchema, developerResponseSchema, solutionResponseSchema, questionSchema, type AiErrorCode, type AiErrorInfo,
   type AnswerFormat, type AppSettings, type AssistantResponse, type DocumentInfo
 } from '../../shared/contracts.js'
 import type { RetrievedChunk } from '../retrieval/index.js'
@@ -13,16 +13,13 @@ import { resolveAnswerFormat } from './answerFormat.js'
 import {
   buildInput, developerInstructions, developerResponseJsonSchema, presenterInstructions, responseJsonSchema
 } from './prompts.js'
-import { codeResponseRequestPolicy, responseRequestPolicy } from './requestPolicy.js'
+import { findModel } from '../../shared/models.js'
+import { snapshotInstructions, snapshotResponseJsonSchema } from './snapshotPrompt.js'
 import {
   buildTerminologyHint, normalizeTranscript, parseTranscriptionMetadata, parseTranscriptionResponse,
   type TranscriptionResult, type TranscriptionUsage
 } from './transcription.js'
-import {
-  estimateKnownModelTokens, maximumKnownModelCost,
-  TRANSCRIPTION_RESERVATION_INPUT_TOKENS, TRANSCRIPTION_RESERVATION_OUTPUT_TOKENS,
-  type BillableEndpoint
-} from './pricing.js'
+import type { BillableEndpoint } from './pricing.js'
 
 export interface OpenAIResponseLike {
   output_text?: string
@@ -80,6 +77,8 @@ export interface AiRequestMetric {
 }
 export interface AiServiceOptions {
   clientFactory?: () => Promise<OpenAIClientLike>
+  /** Isolated historical evaluators only. Never supplied by production IPC. */
+  historicalEvaluationPolicy?: { reasoningEffort: 'none' | 'low'; maxOutputTokens: number; verbosity?: 'low' }
   onMetric?: (metric: AiRequestMetric) => void
   onTranscriptionMetric?: (metric: TranscriptionMetric) => void
 }
@@ -111,6 +110,7 @@ export interface AskOptions {
 export interface GenerateOptions {
   signal?: AbortSignal
   answerFormat?: AnswerFormat
+  snapshotDataUrl?: string
 }
 
 export class AiServiceError extends Error {
@@ -148,7 +148,6 @@ export class AiService {
     let usage: TranscriptionUsage = emptyTranscriptionUsage()
     let outcome: TranscriptionMetric['outcome'] = 'unknown'
     let requestDispatched = false
-    let budgetReservationId: string | undefined
     try {
       throwIfAborted(options.signal)
       // The string form remains available for isolated service tests and tools.
@@ -158,10 +157,6 @@ export class AiService {
         ? await readFile(source, { signal: options.signal })
         : Buffer.from(source.bytes)
       throwIfAborted(options.signal)
-      budgetReservationId = await this.reserveBudget(
-        'transcription', requestedModel,
-        TRANSCRIPTION_RESERVATION_INPUT_TOKENS, TRANSCRIPTION_RESERVATION_OUTPUT_TOKENS
-      )
       const client = await this.client()
       const hint = options.terminologyHint ?? this.transcriptionTerminologyHint(options.approvedVocabulary)
       const file = await toFile(bytes, typeof source === 'string' ? 'reviewer.wav' : source.filename ?? 'reviewer.wav', { type: 'audio/wav' })
@@ -179,11 +174,6 @@ export class AiService {
         usage = metadata.usage
       }
       await this.recordTranscriptionUsage(requestedModel, returnedModel, usage, options.durationMs)
-      await this.settleBudgetFromUsage(
-        budgetReservationId, 'transcription', returnedModel,
-        usage.inputTokens, usage.outputTokens, usage.type === 'tokens'
-      )
-      budgetReservationId = undefined
       // Cancellation suppresses transcript/retrieval use, but a provider
       // response that already arrived may be billable and its returned usage
       // must be recorded first.
@@ -196,8 +186,6 @@ export class AiService {
       outcome = 'success'
       return { text, ...(returnedModel ? { model: returnedModel } : {}), latencyMs: performance.now() - startedAt, usage }
     } catch (error) {
-      await this.finishUnsettledBudget(budgetReservationId, requestDispatched)
-      budgetReservationId = undefined
       const mapped = asAiServiceError(error)
       outcome = mapped.code
       throw mapped
@@ -214,6 +202,13 @@ export class AiService {
     if (options.signal) throwIfAborted(options.signal)
     const prepared = this.prepare(validated.data, options.signal)
     if (options.signal) throwIfAborted(options.signal)
+    return attachPreparedAnswer(prepared)
+  }
+  retrieveSnapshot(question: string, signal: AbortSignal): RetrievedChunk[] {
+    const previous = this.context.snapshot().previousQuestion ?? ''
+    const contextQuery = [previous, this.settings.settings.projectSummary].filter(Boolean).join('\n')
+    const prepared = prepareAnswer({ question, context: this.context, projectSummary: this.settings.settings.projectSummary,
+      search: () => contextQuery ? this.retrieval.search(Array.from(contextQuery).slice(0, 4_000).join(''), 5) : [], signal })
     return attachPreparedAnswer(prepared)
   }
   async ask(question: string, options: AskOptions = {}): Promise<AssistantResponse> {
@@ -244,31 +239,37 @@ export class AiService {
     const requestedModel = settings.modelMode === 'strong' ? settings.strongModel : settings.normalModel
     const answerFormat = resolveAnswerFormat(validated.data, options.answerFormat)
     const codeAnswer = answerFormat === 'code'
-    const policy = codeAnswer ? codeResponseRequestPolicy(settings.modelMode) : responseRequestPolicy(settings.modelMode)
+    const reasoningEffort = (settings.modelMode === 'strong' ? settings.strongReasoning : settings.normalReasoning) ?? 'medium'
     let response: OpenAIResponseLike | undefined
     let outcome: AiRequestMetric['outcome'] = 'unknown'
     let requestDispatched = false
-    let budgetReservationId: string | undefined
     try {
+      const model = findModel(requestedModel)
+      if (this.options.historicalEvaluationPolicy && (!this.options.clientFactory || !['gpt-5.6-luna', 'gpt-5.6-terra'].includes(requestedModel))) throw new AiServiceError('unknown', 'Historical evaluation policy requires an isolated GPT-5.6 evaluation client.', false)
+      if (!model || !model.reasoning.includes(reasoningEffort) || !model.structuredOutputs || (options.snapshotDataUrl && !model.imageInput)) {
+        throw new AiServiceError('unknown', 'The selected model or reasoning level is not supported. Choose a reviewed model in Settings.', false)
+      }
       const prepared = this.resolvePrepared(validated.data, chunks, operation.signal)
       const selectedChunks = [...prepared.chunks]
       const allowed = new Map(selectedChunks.map((chunk) => [chunk.id, chunk]))
       const requestBody = {
         model: requestedModel,
-        reasoning: { effort: policy.reasoningEffort },
-        instructions: codeAnswer ? developerInstructions : presenterInstructions,
-        input: buildInput(prepared.question, selectedChunks, prepared.conversationPrompt, prepared.projectSummary),
-        max_output_tokens: policy.maxOutputTokens, store: false,
+        reasoning: { effort: this.options.historicalEvaluationPolicy?.reasoningEffort ?? reasoningEffort },
+        instructions: options.snapshotDataUrl ? snapshotInstructions : codeAnswer ? developerInstructions : presenterInstructions,
+        input: options.snapshotDataUrl ? [{ role: 'user', content: [
+          { type: 'input_text', text: buildInput(prepared.question, selectedChunks, prepared.conversationPrompt, prepared.projectSummary) },
+          { type: 'input_image', image_url: options.snapshotDataUrl, detail: 'auto' }
+        ] }] : buildInput(prepared.question, selectedChunks, prepared.conversationPrompt, prepared.projectSummary),
+        store: false,
+        ...(this.options.historicalEvaluationPolicy ? { max_output_tokens: this.options.historicalEvaluationPolicy.maxOutputTokens } : {}),
         text: {
-          ...(policy.verbosity ? { verbosity: policy.verbosity } : {}),
+          ...(this.options.historicalEvaluationPolicy?.verbosity ? { verbosity: this.options.historicalEvaluationPolicy.verbosity } : {}),
           format: {
-            type: 'json_schema', name: codeAnswer ? 'developer_response' : 'presenter_response', strict: true,
-            schema: codeAnswer ? developerResponseJsonSchema : responseJsonSchema
+            type: 'json_schema', name: options.snapshotDataUrl ? 'snapshot_solution' : codeAnswer ? 'developer_response' : 'presenter_response', strict: true,
+            schema: options.snapshotDataUrl ? snapshotResponseJsonSchema : codeAnswer ? developerResponseJsonSchema : responseJsonSchema
           }
         }
       }
-      const inputTokenUpperBound = Buffer.byteLength(JSON.stringify(requestBody), 'utf8')
-      budgetReservationId = await this.reserveBudget('responses', requestedModel, inputTokenUpperBound, policy.maxOutputTokens)
       const client = await this.client()
       requestDispatched = true
       response = await client.responses.create(requestBody, { signal: operation.signal })
@@ -279,7 +280,11 @@ export class AiService {
       try { raw = JSON.parse(response.output_text) } catch { throw malformedResponse() }
       normalizeProviderNulls(raw)
       let parsed: AssistantResponse
-      if (codeAnswer) {
+      if (options.snapshotDataUrl) {
+        const validation = solutionResponseSchema.safeParse(raw)
+        if (!validation.success) throw malformedResponse()
+        parsed = { responseStyle: 'solution', ...validation.data }
+      } else if (codeAnswer) {
         const validation = developerResponseSchema.safeParse(raw)
         if (!validation.success) throw malformedResponse()
         parsed = { responseStyle: 'developer', ...validation.data }
@@ -295,9 +300,9 @@ export class AiService {
       parsed.evidence = parsed.evidence.map((item) => {
         const chunk = allowed.get(item.chunkId)!; return { chunkId: chunk.id, documentName: chunk.documentName, location: chunk.location }
       })
-      if (!validateGroundingResponse(parsed, prepared.question, selectedChunks).valid) throw malformedResponse()
+      if (!validateGroundingResponse(parsed, parsed.responseStyle === 'solution' ? parsed.interpretedProblem : prepared.question, selectedChunks).valid) throw malformedResponse()
       ensureCurrentOperation(operation, this.active)
-      this.context.add(prepared.question, parsed, prepared.contextRevision)
+      this.context.add(parsed.responseStyle === 'solution' ? parsed.interpretedProblem : prepared.question, parsed, prepared.contextRevision)
       outcome = 'success'
       return parsed
     } catch (error) {
@@ -306,13 +311,6 @@ export class AiService {
       const inputTokens = response?.usage?.input_tokens ?? 0
       const outputTokens = response?.usage?.output_tokens ?? 0
       const reasoningTokens = response?.usage?.output_tokens_details?.reasoning_tokens ?? 0
-      if (budgetReservationId) {
-        if (!requestDispatched) await this.finishUnsettledBudget(budgetReservationId, false)
-        else await this.settleBudgetFromUsage(
-          budgetReservationId, 'responses', response?.model, inputTokens, outputTokens, Boolean(response?.usage)
-        )
-        budgetReservationId = undefined
-      }
       if (response?.usage) {
         if (this.settings.recordUsage) {
           await this.settings.recordUsage({
@@ -351,53 +349,6 @@ export class AiService {
       return
     }
     await this.settings.addTranscriptionUsage(usage, returnedModel ?? requestedModel).catch(() => undefined)
-  }
-  private async reserveBudget(
-    endpoint: BillableEndpoint,
-    requestedModel: string,
-    inputTokenUpperBound: number,
-    outputTokenUpperBound: number
-  ): Promise<string | undefined> {
-    if (!this.settings.reserveSessionBudget) return undefined
-    const estimate = maximumKnownModelCost(endpoint, requestedModel, inputTokenUpperBound, outputTokenUpperBound)
-    if (!estimate.priced) {
-      throw new AiServiceError('unpriced_model', 'The selected model is not in PresenterAI’s reviewed price table, so the session cap cannot authorize this request.', false)
-    }
-    try {
-      return (await this.settings.reserveSessionBudget(endpoint, requestedModel, estimate.estimatedUsd)).id
-    } catch (error) {
-      const value = error as { code?: string; message?: string }
-      if (value.code === 'session_budget_exceeded') {
-        throw new AiServiceError('session_budget_exceeded', value.message ?? 'This request could exceed the remaining PresenterAI session budget.', false)
-      }
-      throw error
-    }
-  }
-  private async settleBudgetFromUsage(
-    reservationId: string | undefined,
-    endpoint: BillableEndpoint,
-    returnedModel: string | undefined,
-    inputTokens: number,
-    outputTokens: number,
-    usagePresent: boolean
-  ): Promise<void> {
-    if (!reservationId || !this.settings.settleSessionBudget) return
-    const estimate = returnedModel && usagePresent
-      ? estimateKnownModelTokens(endpoint, returnedModel, inputTokens, outputTokens)
-      : undefined
-    if (!estimate?.priced) {
-      this.settings.retainSessionBudget?.(reservationId)
-      return
-    }
-    await this.settings.settleSessionBudget(reservationId, estimate.estimatedUsd, false).catch(() => undefined)
-  }
-  private async finishUnsettledBudget(reservationId: string | undefined, requestDispatched: boolean): Promise<void> {
-    if (!reservationId) return
-    if (!requestDispatched && this.settings.releaseSessionBudget) {
-      await this.settings.releaseSessionBudget(reservationId).catch(() => undefined)
-      return
-    }
-    this.settings.retainSessionBudget?.(reservationId)
   }
   private prepare(question: string, signal?: AbortSignal): PreparedAnswer {
     return prepareAnswer({
@@ -458,7 +409,7 @@ export function asAiServiceError(error: unknown): AiServiceError {
 }
 function malformedResponse(): AiServiceError { return new AiServiceError('malformed_response', 'OpenAI returned an invalid structured response. Please retry.', true) }
 function outputLimitResponse(): AiServiceError {
-  return new AiServiceError('output_limit', 'OpenAI used the response budget before completing the answer. Retry, shorten the question, or use Normal mode.', true)
+  return new AiServiceError('output_limit', 'The provider reached its output limit before completing the structured answer. No application token ceiling was applied. You can retry explicitly or simplify the task.', true)
 }
 function invalidTranscriptResponse(): AiServiceError {
   return new AiServiceError('invalid_transcript', 'OpenAI returned an empty or invalid transcript. Try recording the question again.', true)

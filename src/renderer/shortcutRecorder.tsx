@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import type { ShortcutRegistrationStatus } from '../shared/contracts'
 
 export interface ShortcutSettings {
   askShortcut: string
@@ -95,11 +96,15 @@ export function ShortcutSettingsPanel({
   hideShortcut,
   listenShortcut,
   disabled = false,
-  onChange
+  onChange, registrations = [], onRetry
 }: ShortcutSettings & {
   disabled?: boolean
   onChange(patch: ShortcutSettingsPatch): Promise<void> | void
+  registrations?: ShortcutRegistrationStatus[]
+  onRetry?(): Promise<void>
 }): React.JSX.Element {
+  const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState('')
   const restoreDisabled = askShortcut === DEFAULT_SHORTCUTS.askShortcut &&
     hideShortcut === DEFAULT_SHORTCUTS.hideShortcut && listenShortcut === DEFAULT_SHORTCUTS.listenShortcut
 
@@ -109,9 +114,17 @@ export function ShortcutSettingsPanel({
     <ShortcutRecorder label="Hide/show" value={hideShortcut} disabled={disabled} onCommit={(value) => onChange({ hideShortcut: value })} />
     <ShortcutRecorder label="Toggle system-audio listening" value={listenShortcut} disabled={disabled} onCommit={(value) => onChange({ listenShortcut: value })} />
     <div className="actions">
+      {onRetry && <button type="button" disabled={disabled || retrying} onClick={async () => {
+        setRetrying(true); setRetryError('')
+        try { await onRetry() } catch (error) { setRetryError(error instanceof Error ? error.message : 'Shortcuts could not be retried.') }
+        finally { setRetrying(false) }
+      }}>{retrying ? 'Retrying…' : 'Retry shortcuts'}</button>}
       <button type="button" disabled={disabled || restoreDisabled} onClick={() => void onChange({ ...DEFAULT_SHORTCUTS })}>Restore defaults</button>
     </div>
-    <p className="muted">Ctrl+Shift+I always restores interaction if click-through is enabled.</p>
+    <ul className="shortcut-registration-status" aria-label="Shortcut registration status">{registrations.map((item) => <li key={item.purpose}>{item.purpose}: <kbd>{item.accelerator}</kbd> — {item.status}</li>)}</ul>
+    {retryError && <p className="notice danger" role="alert">{retryError}</p>}
+    {registrations.some((item) => item.status === 'unavailable') && <p className="notice warning">Quit duplicate PresenterAI copies, then retry or change a configurable shortcut. Windows does not identify the conflicting application.</p>}
+    <p className="muted">Ctrl+Shift+I restores interaction when registered. Click-through stays disabled without emergency recovery; Tray → Show PresenterAI also restores interaction.</p>
   </fieldset>
 }
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import type { SessionBudgetStatus } from '../shared/contracts'
+import type { SessionUsageStatus } from '../shared/contracts'
 
 export interface PrivacyConsentView {
   requiredVersion: number
@@ -123,7 +123,8 @@ export function PrivacyDisclosure(): React.JSX.Element {
     <ul>
       <li>Bounded system-output audio is sent only for transcription and is deleted locally when that request reaches a terminal state.</li>
       <li>The transcript is shown as an editable in-memory draft. It is not sent for retrieval or answering until you explicitly submit it.</li>
-      <li>Only the current question, bounded background, and selected local evidence chunks are sent for an answer.</li>
+      <li>Only the current question, bounded background, and selected local evidence chunks are sent for an answer. An explicitly sent snapshot also includes the full selected monitor image.</li>
+      <li>Snapshots have no crop step. Inspect the complete image before Send. Images are memory-only and cleared after completion, cancellation, ten minutes, or New Session.</li>
       <li>Responses use <code>store:false</code>; PresenterAI creates no OpenAI Conversation and keeps no cloud meeting history.</li>
       <li>OpenAI may retain Responses API abuse-monitoring logs for up to 30 days under its ordinary API controls. The published transcription endpoint table currently lists no application-state or abuse-monitoring retention.</li>
       <li>API content is not used to train OpenAI models unless the account owner explicitly opts in.</li>
@@ -142,14 +143,12 @@ export function UsageEstimatePanel({ usage }: { usage: UsageEstimateView }): Rea
   </section>
 }
 
-export function SessionBudgetPanel({ budget, disabled, onNewSession }: { budget: SessionBudgetStatus; disabled: boolean; onNewSession(): Promise<void> | void }): React.JSX.Element {
-  const spentOrHeld = Math.min(budget.capUsd, budget.actualUsd + budget.heldUsd)
-  const percent = budget.capUsd > 0 ? Math.min(100, (spentOrHeld / budget.capUsd) * 100) : 100
-  return <section className="usage session-budget" aria-label="Session spending limit">
-    <div className="budget-heading"><strong>Current PresenterAI session</strong><span>{budget.blocked ? 'Blocked by cap' : `$${budget.remainingUsd.toFixed(4)} remaining`}</span></div>
-    <progress max={100} value={percent} aria-label="Session budget used or reserved" />
-    <div className="info-grid"><PreviewInfo label="Actual estimate" value={`$${budget.actualUsd.toFixed(4)}`} /><PreviewInfo label="Held reserve" value={`$${budget.heldUsd.toFixed(4)}`} /><PreviewInfo label="Session cap" value={`$${budget.capUsd.toFixed(2)}`} /></div>
-    <small>Started {new Date(budget.startedAt).toLocaleString()} · {budget.pricingVersion}. Clear Usage does not reset this ledger.</small>
+export function SessionBudgetPanel({ budget, disabled, onNewSession }: { budget: SessionUsageStatus; disabled: boolean; onNewSession(): Promise<void> | void }): React.JSX.Element {
+  return <section className="usage session-budget" aria-label="Session USD estimates">
+    <div className="budget-heading"><strong>Current PresenterAI session</strong><span>${budget.actualUsd.toFixed(4)} estimated</span></div>
+    <div className="info-grid"><PreviewInfo label="Input tokens" value={String(budget.inputTokens)} /><PreviewInfo label="Output tokens" value={String(budget.outputTokens)} /><PreviewInfo label="Reasoning tokens (included in output)" value={String(budget.reasoningTokens)} /></div>
+    {budget.unpricedRequests > 0 && <p>{budget.unpricedRequests} request(s): Unpriced. Their cost is not included in this estimate.</p>}
+    <small>Started {new Date(budget.startedAt).toLocaleString()} · {budget.pricingVersion}. No application spending cap; OpenAI billing controls apply. New Session resets these totals.</small>
     <button type="button" disabled={disabled} onClick={() => void onNewSession()}>New Session</button>
   </section>
 }

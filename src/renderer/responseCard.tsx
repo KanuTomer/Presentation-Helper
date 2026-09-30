@@ -1,6 +1,7 @@
 import React from 'react'
 import type { AssistantResponse, SupportLevel } from '../shared/contracts'
 import { CodeBlockCard, type CopyCodeHandler } from './codeBlockCard'
+import { MathEquation } from './mathEquation'
 
 export type EvidenceSupport = SupportLevel
 
@@ -14,6 +15,17 @@ const labels: Record<EvidenceSupport, string> = {
 
 export function ResponseCard({ response, onCopyCode }: { response: AssistantResponse; onCopyCode?: CopyCodeHandler }): React.JSX.Element {
   const support = evidenceSupport(response)
+  if (response.responseStyle === 'solution') return <article className="response-card snapshot-solution">
+    <div className="response-labels"><span className="category">{response.task.toUpperCase()}</span><span className={`support-badge ${support}`}>{labels[support]}</span></div>
+    <h3>INTERPRETED PROBLEM</h3><p>{response.interpretedProblem}</p>
+    <p>{response.explanation}</p>
+    {response.equations.map((expression, index) => <MathEquation key={index} expression={expression} />)}
+    {response.steps.length > 0 && <ol>{response.steps.map((step, index) => <li key={index}>{step}</li>)}</ol>}
+    {response.codeBlocks.map((block, index) => <CodeBlockCard key={index} block={block} onCopy={onCopyCode} />)}
+    {response.finalResult && <><h3>RESULT</h3><p>{response.finalResult}</p></>}
+    {response.clarification && <div className="warning-box">{response.clarification}</div>}
+    <small>Screen observations are not document citations.</small><ResponseEvidence response={response} />
+  </article>
   if (response.responseStyle === 'developer') {
     return <article className="response-card developer-response">
       <div className="response-labels"><span className="category">CODE</span><span className={`support-badge ${support}`} aria-label="Evidence support">{labels[support]}</span></div>

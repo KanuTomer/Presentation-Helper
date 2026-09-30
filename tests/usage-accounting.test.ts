@@ -90,13 +90,13 @@ describe('audio usage accounting', () => {
       inputTokens: 1_000, outputTokens: 100, audioTokens: 900, durationMs: 30_000
     })
 
-    expect(priced).toMatchObject({ priced: true, estimatedUsd: 0.004, reasoningTokens: 200 })
+    expect(priced).toMatchObject({ priced: true, estimatedUsd: 0.0008, reasoningTokens: 200 })
     expect(unknown).toMatchObject({ priced: false, estimatedUsd: 0 })
     expect(transcription).toMatchObject({ priced: true, estimatedUsd: 0.00175, audioTokens: 900 })
     expect(store.usage).toMatchObject({
       inputTokens: 1_100, outputTokens: 550, audioMinutes: 0.5,
       transcriptionInputTokens: 1_000, transcriptionAudioTokens: 900, transcriptionOutputTokens: 100,
-      estimatedUsd: 0.00575
+      estimatedUsd: 0.00255
     })
     expect(store.usageLedger.recent).toHaveLength(3)
     expect(store.usageLedger.recent[0]).not.toHaveProperty('prompt')
@@ -141,7 +141,7 @@ describe('audio usage accounting', () => {
     const store = new SettingsStore({ clock: () => new Date('2026-07-16T13:00:00.000Z') })
     await store.initialize()
 
-    expect(store.settings).toMatchObject({ neonIntensity: 0.65, projectSummary: 'legacy project', sessionBudgetUsd: 0.25 })
+    expect(store.settings).toMatchObject({ neonIntensity: 0.65, projectSummary: 'legacy project' })
     expect(store.settings).not.toHaveProperty('opacity')
     expect(store.settings).not.toHaveProperty('inrPerUsd')
     expect(store.recoveryWarning).toBeUndefined()
@@ -184,7 +184,7 @@ describe('audio usage accounting', () => {
     await store.initialize()
     expect(store.recoveryWarning).toEqual({ code: 'invalid_json', recoveredAt: '2026-07-16T14:00:00.000Z' })
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-    expect(saved.schemaVersion).toBe(5)
+    expect(saved.schemaVersion).toBe(6)
     expect(saved.windowLayoutRevision).toBe(1)
     expect(saved.recoveryWarning).toEqual(store.recoveryWarning)
     expect(saved.recoveryWarning).not.toHaveProperty('message')
@@ -279,7 +279,7 @@ describe('audio usage accounting', () => {
     await store.initialize()
 
     expect(store.recoveryWarning).toBeUndefined()
-    expect(store.settings).toMatchObject({ neonIntensity: 0.65, projectSummary: 'preserved summary', selectedAudioEndpointId: 'render-device', sessionBudgetUsd: 0.25 })
+    expect(store.settings).toMatchObject({ neonIntensity: 0.65, projectSummary: 'preserved summary', selectedAudioEndpointId: 'render-device' })
     expect(store.documents).toHaveLength(1)
     expect(store.captureResults).toHaveLength(1)
     expect(store.usageRecords).toHaveLength(1)
@@ -295,7 +295,7 @@ describe('audio usage accounting', () => {
     await store.setWindowLayout({ x: 1930, y: 80, width: 1100, height: 690 }, WINDOW_LAYOUT_REVISION)
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
     expect(saved).toMatchObject({
-      schemaVersion: 5, windowLayoutRevision: 1,
+      schemaVersion: 6, windowLayoutRevision: 1,
       windowBounds: { x: 1930, y: 80, width: 1100, height: 690 },
       settings: { projectSummary: 'preserved summary' }
     })
@@ -337,7 +337,7 @@ describe('audio usage accounting', () => {
     await store.initialize()
 
     expect(store.settings).toMatchObject({
-      neonIntensity: 0.65, sessionBudgetUsd: 0.25, modelMode: 'strong',
+      neonIntensity: 0.65, modelMode: 'strong',
       selectedAudioEndpointId: 'render-device', projectSummary: 'keep v3 summary'
     })
     expect(store.settings).not.toHaveProperty('opacity')
@@ -347,10 +347,10 @@ describe('audio usage accounting', () => {
     expect(store.windowBounds).toEqual({ x: 20, y: 40, width: 1100, height: 720 })
     expect(store.windowLayoutRevision).toBe(1)
     expect(store.privacyConsent).toMatchObject({ requiredVersion: 4, acceptedVersion: 3, satisfied: false })
-    expect(store.sessionBudget).toMatchObject({ sessionId: 'migrated-session', actualUsd: 0, heldUsd: 0, capUsd: 0.25 })
+    expect(store.sessionUsageStatus).toMatchObject({ sessionId: 'migrated-session', actualUsd: 0 })
 
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-    expect(saved.schemaVersion).toBe(5)
+    expect(saved.schemaVersion).toBe(6)
     expect(saved.settings).not.toHaveProperty('opacity')
     expect(saved.settings).not.toHaveProperty('inrPerUsd')
     expect(saved.sessionBudget).toMatchObject({ sessionId: 'migrated-session', actualUsd: 0, reservations: [] })
@@ -409,7 +409,7 @@ describe('audio usage accounting', () => {
     await store.initialize()
 
     expect(store.settings).toMatchObject({
-      neonIntensity: 0.65, sessionBudgetUsd: 0.75, selectedAudioEndpointId: 'render-device',
+      neonIntensity: 0.65, selectedAudioEndpointId: 'render-device',
       projectSummary: 'keep v4 summary'
     })
     expect(store.settings).not.toHaveProperty('glassTint')
@@ -420,12 +420,12 @@ describe('audio usage accounting', () => {
       endpoint: 'transcription', model: 'gpt-4o-mini-transcribe', requestCount: 2, audioTokens: 90
     })])
     expect(store.windowBounds).toEqual({ x: 40, y: 60, width: 1000, height: 700 })
-    expect(store.sessionBudget).toMatchObject({
-      sessionId: 'preserved-session', capUsd: 0.75, actualUsd: 0.02, heldUsd: 0.03, remainingUsd: 0.7
+    expect(store.sessionUsageStatus).toMatchObject({
+      sessionId: 'preserved-session', actualUsd: 0.02
     })
 
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-    expect(saved.schemaVersion).toBe(5)
+    expect(saved.schemaVersion).toBe(6)
     expect(saved.settings.neonIntensity).toBe(0.65)
     expect(saved.settings).not.toHaveProperty('glassTint')
     expect(saved.sessionBudget).toMatchObject({ sessionId: 'preserved-session', actualUsd: 0.02 })

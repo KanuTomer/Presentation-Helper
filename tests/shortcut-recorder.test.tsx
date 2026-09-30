@@ -12,6 +12,15 @@ import {
 afterEach(cleanup)
 
 describe('shortcut recorder', () => {
+  it('exposes unavailable registration guidance and an idle retry action', async () => {
+    const retry = vi.fn().mockRejectedValue(new Error('Still unavailable.'))
+    render(<ShortcutSettingsPanel {...DEFAULT_SHORTCUTS} onChange={vi.fn()} onRetry={retry} registrations={[{ purpose: 'recovery', accelerator: 'Control+Shift+I', status: 'unavailable' }]} />)
+    expect(screen.getByText(/Windows does not identify/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry shortcuts' }))
+    await screen.findByRole('alert')
+    expect(retry).toHaveBeenCalledOnce()
+    expect((screen.getByRole('button', { name: 'Retry shortcuts' }) as HTMLButtonElement).disabled).toBe(false)
+  })
   it('canonicalizes the supported keyboard subset', () => {
     expect(acceleratorFromKeyboardEvent({ key: ' ', ctrlKey: true, shiftKey: true, altKey: false })).toBe('Control+Shift+Space')
     expect(acceleratorFromKeyboardEvent({ key: 'f24', ctrlKey: false, shiftKey: false, altKey: true })).toBe('Alt+F24')

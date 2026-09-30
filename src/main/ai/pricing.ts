@@ -1,4 +1,5 @@
-export const USAGE_PRICING_VERSION = 'openai-2026-07-22'
+import { MODEL_REGISTRY } from '../../shared/models.js'
+export const USAGE_PRICING_VERSION = 'openai-2026-09-30'
 export const MINI_TRANSCRIBE_INPUT_USD_PER_MILLION = 1.25
 export const MINI_TRANSCRIBE_OUTPUT_USD_PER_MILLION = 5
 export const TRANSCRIPTION_RESERVATION_INPUT_TOKENS = 16_000
@@ -23,8 +24,7 @@ export interface TokenPriceResult {
  * reviewed and added explicitly before PresenterAI assigns them a cost.
  */
 export const KNOWN_MODEL_PRICES: Readonly<Record<string, TokenPrice>> = Object.freeze({
-  'gpt-5.6-luna': { endpoint: 'responses', inputUsdPerMillion: 1, outputUsdPerMillion: 6 },
-  'gpt-5.6-terra': { endpoint: 'responses', inputUsdPerMillion: 2.5, outputUsdPerMillion: 15 },
+  ...Object.fromEntries(MODEL_REGISTRY.map((model) => [model.id, { endpoint: 'responses' as const, inputUsdPerMillion: model.inputUsdPerMillion, outputUsdPerMillion: model.outputUsdPerMillion }])),
   'gpt-4o-mini-transcribe': {
     endpoint: 'transcription',
     inputUsdPerMillion: MINI_TRANSCRIBE_INPUT_USD_PER_MILLION,

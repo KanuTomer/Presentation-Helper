@@ -2,6 +2,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { spawn } from 'node:child_process'
 
 let application: ElectronApplication
 let page: Page
@@ -55,6 +56,22 @@ test('registers renderer IPC before delayed helper initialization completes', as
   await expect.poll(async () => Boolean((await e2eState()).audioInitialized), {
     timeout: 30_000, message: 'audio initialization did not reach a terminal state'
   }).toBe(true)
+})
+
+test('reports real registration, retries while idle, and rejects a second instance of the same profile', async () => {
+  const statuses = await page.evaluate(() => window.presenter.retryShortcuts())
+  expect(statuses).toHaveLength(3)
+  expect(statuses.every((item) => item.status === 'registered')).toBe(true)
+  const env = { ...process.env, PRESENTERAI_E2E_USER_DATA: userData, PRESENTERAI_E2E: '1', PRESENTERAI_E2E_AUDIO_BACKEND: 'synthetic-test' }
+  delete env.OPENAI_API_KEY
+  const second = spawn(application.process().spawnfile, [resolve('.')], { env, stdio: 'ignore' })
+  const code = await new Promise<number | null>((accept, reject) => {
+    const timer = setTimeout(() => { second.kill(); reject(new Error('Second instance did not exit.')) }, 10000)
+    second.once('error', (error) => { clearTimeout(timer); reject(error) })
+    second.once('exit', (value) => { clearTimeout(timer); accept(value) })
+  })
+  expect(code).toBe(0)
+  expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1)
 })
 
 test('reuses the system-audio toggle after a completed terminal path', async () => {
@@ -147,7 +164,7 @@ test('creates a protected transparent overlay with hardened preferences, smooth 
   expect(state.interiorAlpha, 'the transparent-corner sample was invalid because the clipped renderer interior was also transparent').toBeGreaterThan(32)
 })
 
-test('starts code-first, keeps the command bar compact, and exposes Neon intensity in Settings', async () => {
+test('starts code-first, keeps the command bar compact, and exposes Accent intensity in Settings', async () => {
   await page.getByRole('button', { name: 'copilot' }).click()
   const presenter = page.getByRole('button', { name: 'Presenter', exact: true })
   const code = page.getByRole('button', { name: '</> Code' })
@@ -157,24 +174,24 @@ test('starts code-first, keeps the command bar compact, and exposes Neon intensi
   await expect(presenter).toHaveAttribute('aria-pressed', 'true')
   await code.click()
   await expect(code).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByRole('slider', { name: 'Neon intensity' })).toHaveCount(0)
+  await expect(page.getByRole('slider', { name: 'Accent intensity' })).toHaveCount(0)
   await expect(page.locator('.command-bar')).toHaveCSS('min-height', '40px')
   expect(await page.locator('.command-bar').evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(44)
 
   await page.getByRole('button', { name: 'settings', exact: true }).click()
-  const neon = page.getByRole('slider', { name: 'Neon intensity' })
+  const neon = page.getByRole('slider', { name: 'Accent intensity' })
   await expect(neon.locator('xpath=ancestor::fieldset/legend')).toHaveText('Appearance')
   await neon.fill('0')
   await expect.poll(async () => page.locator('.shell').evaluate((element) => getComputedStyle(element).getPropertyValue('--neon-intensity').trim())).toBe('0')
   await page.getByRole('button', { name: 'copilot', exact: true }).click()
   const zeroEmission = await page.locator('.primary').first().evaluate((element) => getComputedStyle(element).boxShadow)
-  expect(zeroEmission).toContain('rgba(79, 70, 229, 0)')
+  expect(zeroEmission).toContain('rgba(160, 158, 255, 0)')
   await page.getByRole('button', { name: 'settings', exact: true }).click()
   await neon.fill('1')
   await page.getByRole('button', { name: 'copilot', exact: true }).click()
   const fullEmission = await page.locator('.primary').first().evaluate((element) => getComputedStyle(element).boxShadow)
   expect(fullEmission).not.toBe(zeroEmission)
-  expect(fullEmission).not.toContain('rgba(79, 70, 229, 0)')
+  expect(fullEmission).not.toContain('rgba(160, 158, 255, 0)')
   await page.getByRole('button', { name: 'settings', exact: true }).click()
   await neon.fill('0.65')
   await expect.poll(async () => (await page.evaluate(() => window.presenter.getSettings())).neonIntensity).toBe(0.65)
@@ -182,7 +199,8 @@ test('starts code-first, keeps the command bar compact, and exposes Neon intensi
 
   const shell = page.locator('.shell')
   await expect(shell).toHaveCSS('border-radius', '24px')
-  await expect(page.locator('.liquid-glass-layer')).toHaveCount(1)
+  await expect(page.locator('.quiet-glass-layer')).toHaveCount(1)
+  await expect(page.locator('canvas')).toHaveCount(0)
 })
 
 test('scrolls every long tab by wheel and keyboard at wide and minimum sizes', async () => {
@@ -251,7 +269,7 @@ test('keeps quick controls and rounded clipping usable across scale factors', as
       await page.waitForTimeout(120)
 
       const commandButtons = page.locator('.quick-controls button')
-      expect(await commandButtons.count()).toBe(5)
+      expect(await commandButtons.count()).toBe(6)
       for (let index = 0; index < await commandButtons.count(); index += 1) {
         await commandButtons.nth(index).scrollIntoViewIfNeeded()
         await expect(commandButtons.nth(index)).toBeInViewport()
@@ -319,10 +337,8 @@ test('provides tray recovery, hide/show, and emergency click-through escape', as
     }).toBe(expectedCount)
     await page.waitForTimeout(50)
     expect(await surfaceRestoreCount(), 'one show path emitted more than one surface-restored event').toBe(expectedCount)
-    await expect(page.locator('.liquid-glass-layer')).toHaveAttribute(
-      'data-liquid-glass-status',
-      /^(ready|fallback)$/
-    )
+    await expect(page.locator('.quiet-glass-layer')).toHaveCount(1)
+    await expect(page.locator('canvas')).toHaveCount(0)
   }
 
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close())

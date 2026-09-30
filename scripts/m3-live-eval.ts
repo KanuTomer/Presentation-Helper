@@ -212,7 +212,7 @@ async function evaluate(mode: EvalModelMode, cases: EvalCase[]): Promise<boolean
       settings: { ...baseSettings, modelMode: mode }, documents: [] as DocumentInfo[], addUsage: async () => undefined
     }
     const service = new AiService({ getKey: async () => key }, provider, { search: () => [] }, {
-      clientFactory: async () => client, onMetric: (value) => { metric = value }
+      clientFactory: async () => client, historicalEvaluationPolicy: responseRequestPolicy(mode), onMetric: (value) => { metric = value }
     })
     let answer: AssistantResponse | undefined; let outcome = 'unknown'
     try { answer = await service.ask(item.question); outcome = 'success' }

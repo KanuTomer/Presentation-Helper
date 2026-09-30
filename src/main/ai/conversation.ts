@@ -29,6 +29,7 @@ export class ConversationContext {
     const summary = boundCodePoints(
       response.responseStyle === 'developer'
         ? [response.summary, ...response.implementationNotes, ...response.caveats, response.warning].filter(Boolean).join(' ')
+        : response.responseStyle === 'solution' ? [response.interpretedProblem, response.finalResult, response.clarification].filter(Boolean).join(' ')
         : [response.say, response.ifChallenged, response.warning].filter(Boolean).join(' '),
       MAX_RESPONSE_SUMMARY_CODE_POINTS
     )

@@ -24,6 +24,9 @@ import { ShortcutSettingsTransaction } from '../settings/shortcutTransaction.js'
 import { scheduleRelaunchAfterDeletion } from './relaunchAfterDeletion.js'
 import { parseAnswerFormat, parseClipboardCode } from './interactionValidation.js'
 import { applyClickThroughTransaction } from '../windows/clickThroughTransaction.js'
+import { SnapshotStore } from '../snapshots/store.js'
+import { SnapshotController } from '../snapshots/controller.js'
+import { electronSnapshotCapture } from '../snapshots/electronCapture.js'
 
 interface Services {
   store: SettingsStore
@@ -44,6 +47,8 @@ function validate(event: Electron.IpcMainInvokeEvent): void {
 
 export function registerIpc(services: Services): RegisteredIpcServices {
   const { store, secrets, retrieval, ai, audio, windows, capture, transmissionPreview } = services
+  const snapshots = new SnapshotController(new SnapshotStore(electronSnapshotCapture(windows)), ai, audio.operations, transmissionPreview)
+  app.once('before-quit', () => snapshots.frames.clear())
   const handle = <T extends unknown[]>(channel: string, fn: (event: Electron.IpcMainInvokeEvent, ...args: T) => unknown) => ipcMain.handle(channel, (event, ...args) => { validate(event); return fn(event, ...(args as T)) })
   const status = (): AppStatus => {
     const { escapeWarning, ...operationStatus } = audio.operations.snapshot()
@@ -55,8 +60,11 @@ export function registerIpc(services: Services): RegisteredIpcServices {
       helperError: audio.helper.lastError ?? audio.warning, audioDevices: audio.devices, selectedAudioEndpointId: store.settings.selectedAudioEndpointId,
       lastCapture: audio.lastCapture, activeAudioEndpoint: audio.activeEndpoint,
       shortcutWarnings: [...windows.shortcutWarnings, ...(escapeWarning ? [escapeWarning] : [])],
+      shortcutRegistrations: windows.shortcutRegistrations,
       privacyConsent: store.privacyConsent,
-      sessionBudget: store.sessionBudgetStatus,
+      sessionUsage: store.sessionUsageStatus,
+      selectedModel: store.settings.modelMode === 'strong' ? store.settings.strongModel : store.settings.normalModel,
+      selectedReasoning: (store.settings.modelMode === 'strong' ? store.settings.strongReasoning : store.settings.normalReasoning) ?? 'medium',
       ...(transmissionPreview.current ? { outboundPreview: transmissionPreview.current } : {}),
       ...(store.recoveryWarning ? { settingsRecoveryWarning: store.recoveryWarning } : {})
     }
@@ -67,7 +75,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   audio.onTranscriptDraft = (draft) => windows.window?.webContents.send(channels.transcriptDraft, transcriptionDraftSchema.parse(draft))
   audio.onError = (error) => windows.window?.webContents.send(channels.appError, error)
   const deletion = new LocalDataDeletionService(() => audio.operations.acquireMaintenance(), {
-    session: async () => { ai.clearSession(); await store.startNewSession() },
+    session: async () => { snapshots.frames.clear(); ai.clearSession(); await store.startNewSession() },
     documents: () => retrieval.clearAll(),
     usage: () => store.clearUsage(),
     compatibility: () => store.clearCaptureResults(),
@@ -92,6 +100,16 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     (accelerator) => audio.configureShortcut(accelerator)
   )
   const typedAnswers = new TypedAnswerController(ai, audio.operations, transmissionPreview)
+  handle(channels.snapshotMonitors, () => snapshots.frames.monitors())
+  handle<[unknown]>(channels.captureSnapshot, (_event, monitorId) => {
+    if (monitorId !== undefined && (typeof monitorId !== 'string' || !/^-?\d{1,20}$/.test(monitorId))) throw new Error('Invalid monitor identifier.')
+    return snapshots.capture(monitorId as string | undefined)
+  })
+  handle(channels.discardSnapshot, () => snapshots.frames.clear())
+  handle<[unknown]>(channels.solveSnapshot, (_event, id) => {
+    if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/i.test(id)) throw new Error('Invalid screenshot identifier.')
+    return snapshots.solve(id)
+  })
 
   handle(channels.getStatus, () => status())
   handle(channels.getSettings, () => store.settings)
@@ -137,9 +155,10 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     if (typeof question !== 'string') throw new Error('Invalid question.')
     return typedAnswers.ask(question, parseAnswerFormat(requestedFormat))
   })
-  handle(channels.cancel, () => audio.cancel())
-  handle(channels.clearSession, () => { ai.clearSession() })
+  handle(channels.cancel, () => { snapshots.frames.clear(); return audio.cancel() })
+  handle(channels.clearSession, () => { snapshots.frames.clear(); ai.clearSession() })
   handle(channels.startNewSession, async () => {
+    snapshots.frames.clear()
     ensureIdle(audio)
     ai.clearSession()
     const budget = await store.startNewSession()
@@ -191,6 +210,18 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     clipboard.writeText(parseClipboardCode(value))
   })
   handle(channels.refreshAudioDevices, () => audio.refreshDevices(true))
+  handle(channels.retryShortcuts, async () => {
+    ensureIdle(audio)
+    const current = store.settings
+    try {
+      await shortcutTransaction.apply({
+        previous: current, next: current,
+        commit: async () => windows.shortcutRegistrations,
+        rollbackPersistence: async () => undefined
+      })
+    } finally { broadcast() }
+    return windows.shortcutRegistrations
+  })
   handle<[string]>(channels.ackListeningIndicator, (_event, operationId) => {
     if (typeof operationId !== 'string' || operationId.length < 1 || operationId.length > 128) throw new Error('Invalid operation identifier.')
     audio.acknowledgeListeningIndicator(operationId)

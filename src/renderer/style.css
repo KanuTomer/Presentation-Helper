@@ -1,18 +1,20 @@
 @import "tailwindcss";
 
 :root {
-  color: #f4f7ff;
+  color: #F3F6FF;
   background: transparent;
   color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, "Segoe UI Variable", "Segoe UI", sans-serif;
   font-synthesis: none;
   font-size: 13px;
   --neon-intensity: .65;
-  --glass-strong: rgb(4 7 18 / .1);
-  --glass-panel: rgb(8 13 27 / .53);
-  --glass-surface: rgb(5 9 20 / .65);
+  --glass-strong: rgb(11 16 32 / .12);
+  --glass-panel: rgb(11 16 32 / .94);
+  --glass-surface: rgb(9 14 26 / .97);
+  --text-primary: #F3F6FF;
+  --text-secondary: #BCC6DB;
   --glass-soft: rgb(255 255 255 / .045);
-  --glass-border: rgb(255 255 255 / .15);
+  --glass-border: #68758F;
   --glass-highlight: rgb(255 255 255 / .22);
   --focus-ring: #a5b4fc;
   --window-radius: 24px;
@@ -25,13 +27,9 @@ button, input, textarea, select { font: inherit; }
 button { color:inherit; border:1px solid var(--glass-border); background:var(--glass-soft); border-radius:9px; padding:6px 9px; font-size:12px; cursor:pointer; transition:background-color 150ms ease, border-color 150ms ease, transform 150ms ease; }
 button:hover { background:#ffffff17; border-color:#ffffff27; } button:active:not(:disabled) { transform:translateY(1px); } button:disabled { opacity:.42; cursor:not-allowed; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--focus-ring); outline-offset:2px; }
-.shell { position:relative; isolation:isolate; display:flex; width:100%; height:100%; min-width:0; min-height:0; max-height:100vh; flex-direction:column; overflow:hidden; border:1px solid #dbeafe42; border-radius:var(--window-radius); clip-path:inset(0 round var(--window-radius)); background:radial-gradient(ellipse at 9% 2%, rgb(40 110 255 / calc(var(--neon-intensity) * .13)), transparent 24%), radial-gradient(ellipse at 92% 96%, rgb(127 40 255 / calc(var(--neon-intensity) * .11)), transparent 27%), var(--glass-strong); box-shadow:inset 0 1px var(--glass-highlight), inset 1px 0 #ffffff10, inset 0 -1px #02061785; backdrop-filter:saturate(112%) contrast(102%); -webkit-backdrop-filter:saturate(112%) contrast(102%); }
-.shell > :not(.liquid-glass-layer) { position:relative; z-index:2; }
-.liquid-glass-layer { position:absolute; z-index:0; inset:0; display:block; width:100%; height:100%; pointer-events:none; border-radius:inherit; clip-path:inset(0 round var(--window-radius)); background:transparent; }
-.liquid-glass-layer.liquid-glass--fallback,.liquid-glass-layer.liquid-glass--context-lost { background:radial-gradient(ellipse at 12% 4%, rgb(27 105 255 / calc(var(--neon-intensity) * .24)), transparent 28%), radial-gradient(ellipse at 91% 82%, rgb(129 32 255 / calc(var(--neon-intensity) * .22)), transparent 31%); }
-.shell::before,.shell::after { content:""; position:absolute; z-index:1; inset:0; pointer-events:none; border-radius:inherit; }
-.shell::before { background:linear-gradient(112deg, transparent 0 37%, rgb(32 121 255 / calc(var(--neon-intensity) * .2)) 43%, rgb(116 44 255 / calc(var(--neon-intensity) * .23)) 46%, transparent 52%); mix-blend-mode:screen; }
-.shell::after { inset:1px; border:1px solid #ffffff12; box-shadow:inset 0 0 16px rgb(64 95 255 / calc(var(--neon-intensity) * .12)); }
+.shell { position:relative; isolation:isolate; display:flex; width:100%; height:100%; min-width:0; min-height:0; max-height:100vh; flex-direction:column; overflow:hidden; border:1px solid #dbeafe42; border-radius:var(--window-radius); clip-path:inset(0 round var(--window-radius)); background:var(--glass-strong); box-shadow:inset 0 1px var(--glass-highlight); }
+.shell > :not(.quiet-glass-layer) { position:relative; z-index:2; }
+.quiet-glass-layer { position:absolute; z-index:3; inset:1px; pointer-events:none; border-radius:inherit; border:1px solid rgb(130 146 255 / calc(var(--neon-intensity) * .7)); box-shadow:inset 0 0 5px rgb(92 100 255 / calc(var(--neon-intensity) * .3)); }
 .shell.is-listening { border-color:#fb7185aa; box-shadow:0 0 0 2px #fb718533, inset 0 1px var(--glass-highlight), inset 0 -1px #0008; }
 .drag-region { -webkit-app-region: drag; }.no-drag, button, input, textarea, select { -webkit-app-region: no-drag; }
 .titlebar { flex:0 0 auto; display:flex; min-width:0; align-items:center; justify-content:space-between; padding:9px 13px; border-bottom:1px solid #ffffff12; background:rgb(5 8 19 / .18); }
@@ -107,6 +105,47 @@ pre.code-scroll code { margin:0; color:inherit; background:transparent; font:inh
 .token-line-number { display:inline-block; width:3.2ch; margin-right:16px; color:#596178; text-align:right; user-select:none; }
 .copy-status { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 
+/* Quiet glass: every reading surface has a stable, high-contrast backing.
+   The persisted intensity affects accents only, never these alpha values. */
+.titlebar, .tabs, .empty, .section-heading, .document-search,
+.stack > h2, .stack > p, .search-results, .inspection,
+.import-outcome, .info, .stage-timings, .notice,
+.transmission-preview, .privacy-disclosure, .delete-confirmation,
+.transcript-draft, .shortcut-registration-status {
+  background:var(--glass-panel); color:var(--text-primary);
+}
+.empty, .section-heading, .document-search, .stack > h2, .stack > p,
+.search-results, .inspection, .shortcut-registration-status {
+  border:1px solid var(--glass-border); border-radius:12px; padding:12px;
+}
+fieldset { margin:0; min-width:0; }
+legend { background:#0B1020; border-radius:6px; padding:3px 8px; }
+small, .muted, .brand small, .tabs button, .empty, .section-heading p,
+.search-hit p, .response-card details, .stage-timings dt, .code-title,
+.appearance-settings output { color:var(--text-secondary); }
+.empty h2, .say, textarea, input, select { color:var(--text-primary); }
+textarea, input, select, .quick-controls, .transcript-preview,
+.code-block-card, pre.code-scroll, .snapshot-preview { background:var(--glass-surface); }
+textarea::placeholder, input::placeholder { color:var(--text-secondary); opacity:1; }
+textarea, input:not([type="range"]), select { border-color:var(--glass-border); }
+.tabs button.active { background:#243056; color:var(--text-primary); border:1px solid #8094df; }
+button:disabled { opacity:1; color:#8490A8; background:#151C2C; border-color:#394357; }
+.notice.warning, .warning-box, .transcript-draft.conflict { background:rgb(39 29 16 / .97); color:#FFE5A0; }
+.notice.danger, .delete-confirmation { background:rgb(42 19 29 / .97); color:#FFD2DC; }
+.search-hit, .inspection-chunk { background:var(--glass-panel); }
+.search-hit:hover { background:#17213A; }
+.answer-format button.active, .answer-format button[aria-pressed="true"] {
+  background:#29345C;
+  box-shadow:inset 0 0 0 1px rgb(143 155 255 / calc(var(--neon-intensity) * .9));
+}
+.primary { background:#334394; box-shadow:inset 0 0 0 1px rgb(160 158 255 / calc(var(--neon-intensity) * .9)); }
+.primary:hover { background:#4052AD; }
+.shortcut-registration-status { margin:0; padding-left:30px; }
+.shortcut-registration-status kbd { opacity:1; font-size:11px; }
+.document-main, .document > div, .info { min-width:0; }
+.document-main strong, .info strong, .inspection h2 { overflow-wrap:anywhere; }
+.snapshot-backdrop, .modal-backdrop { clip-path:inset(0 round var(--window-radius)); }
+
 @media (max-width: 820px) {
   .titlebar { align-items:flex-start; padding:8px 11px; }
   .status-row { justify-content:flex-end; }
@@ -116,14 +155,17 @@ pre.code-scroll code { margin:0; color:inherit; background:transparent; font:inh
   .shortcut-setting { grid-template-columns:1fr; }
   .transcript-draft { align-items:stretch; flex-direction:column; }
   .response-card .say { max-width:none; }
+  .quick-controls:has(select) { flex-wrap:wrap; }
+  .quick-controls:has(select) .command-spacer { display:none; }
+  .quick-controls:has(select) .command-actions { width:100%; flex-wrap:wrap; justify-content:flex-end; }
+  .command-actions select { width:auto; max-width:160px; min-width:0; }
 }
-
 @media (max-width: 599px) {
   .quick-controls { flex-wrap:wrap; }
   .answer-format { flex:1 1 auto; }
   .answer-format button { flex:1 1 auto; }
   .command-spacer { display:none; }
-  .command-actions { width:100%; justify-content:flex-end; padding-top:2px; border-top:1px solid #ffffff0d; }
+  .command-actions { width:100%; flex-wrap:wrap; justify-content:flex-end; padding-top:2px; border-top:1px solid #ffffff0d; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -133,19 +175,15 @@ pre.code-scroll code { margin:0; color:inherit; background:transparent; font:inh
 @media (prefers-reduced-transparency: reduce) {
   .shell { background:#0a0e1d; backdrop-filter:none; -webkit-backdrop-filter:none; }
   .titlebar, .question-box, .response-card, fieldset, .document, .usage, .quick-controls, .quick-control, .notice, .click-through-confirmation, .transcript-draft, .transcript-preview, .transmission-preview, .privacy-disclosure, .delete-confirmation, .stage-timings, .info, .inspection-chunk { background:#151b2b; }
-  .shell::before,.shell::after,.liquid-glass-layer { display:none; }
+  .quiet-glass-layer { display:none; }
+  .tabs, .empty, .section-heading, .document-search, .stack > h2, .stack > p, .search-results, .inspection, .shortcut-registration-status, .snapshot-preview, pre.code-scroll { background:#0B1020; }
 }
 
 @media (prefers-contrast: more), (forced-colors: active) {
   :root { --glass-border:CanvasText; --focus-ring:Highlight; }
   .shell, .titlebar, .question-box, .response-card, fieldset, .document, .usage, .code-block-card, .code-block-header, .quick-controls, .quick-control, .notice, .click-through-confirmation, .transcript-draft, .transcript-preview, .transmission-preview, .privacy-disclosure, .delete-confirmation, .stage-timings, .info, .inspection-chunk { color:CanvasText; background:Canvas; border-color:CanvasText; box-shadow:none; backdrop-filter:none; -webkit-backdrop-filter:none; }
   button, textarea, input, select { color:ButtonText; background:ButtonFace; border-color:ButtonText; forced-color-adjust:auto; }
-  .shell::before,.shell::after,.liquid-glass-layer { display:none; }
-}
-
-@supports not (backdrop-filter: blur(1px)) {
-  .shell { background:rgb(4 7 18 / .14); }
-  .titlebar { background:rgb(5 8 19 / .22); }
-  .question-box,.response-card { background:rgb(5 9 20 / .68); }
-  fieldset,.document,.usage { background:rgb(8 13 27 / .56); }
+  .quiet-glass-layer { display:none; }
+  .tabs, .empty, .section-heading, .document-search, .stack > h2, .stack > p, .search-results, .inspection, .shortcut-registration-status, .snapshot-preview, pre.code-scroll, .warning-box { background:Canvas; color:CanvasText; border-color:CanvasText; }
+  .muted, small, .tabs button, .section-heading p { color:CanvasText; }
 }

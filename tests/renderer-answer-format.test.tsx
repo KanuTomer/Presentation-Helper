@@ -4,8 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, AssistantResponse } from '../src/shared/contracts'
 
-vi.mock('../src/renderer/liquidGlass', () => ({
-  LiquidGlassLayer: () => <div data-testid="liquid-glass" />
+vi.mock('../src/renderer/quietGlass', () => ({
+  QuietGlassLayer: () => <div data-testid="quiet-glass" />
 }))
 
 import { App, blankStatus } from '../src/renderer/src'
