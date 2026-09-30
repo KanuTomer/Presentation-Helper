@@ -35,6 +35,14 @@ The React review checklist informed async preview revision guards, focus restora
 
 ## Open gates
 
+### Dependency-security follow-up (PR #8, 2026-09-30)
+
+The historical audit failure below was repaired by pinning Electron to 43.7.7 and PDF.js to 6.3.289, and refreshing compatible transitive dependencies (including Vitest 4.1.11). npm 10.9.8 crashed in its Arborist peer resolver; temporary npm 11 completed the ordinary audit fix without `--force`, overrides, or a global npm change. Clean `npm ci` and `npm audit --audit-level=high` now report zero vulnerabilities.
+
+Revalidation passed 42 targeted parser/retrieval/settings tests, all 404 Vitest tests, 33 .NET tests, typecheck/build, 11 Electron tests, M4/M7 50-case offline evaluations, and the non-network M6 preflight. The user confirmed the prior beta.6 visual repairs; the dependency-rebuilt Electron binary still requires physical visual confirmation before merging. Native/audio/live acceptance status is unchanged.
+
+The rebuilt helper passed two captures; packaged Electron 43.7.7 passed SQLite 3.53.4/FTS5 and protocol-v2 helper health. NSIS packaging and beta.5-to-current lifecycle passed. The first upgrade attempt failed baseline process cleanup; no controlled processes remained afterward, and one controlled rerun passed every lifecycle assertion without changing or weakening the harness. Both local logs remain in ignored `artifacts/dependency-repair-*`. The rebuilt installer SHA256 is `f0d0875f123c55ec1a566e9e4cce5f66cd0dca698b3529d667850892d88790e2`.
+
 `npm audit --audit-level=high` fails: 14 advisories (10 high, 4 moderate) in the existing dependency tree on 2026-09-30. Dependency updates were not authorised in this repair scope. A focused dependency-security repair is required before declaring the complete gate green.
 
 User-assisted native checks are still required:
