@@ -75,6 +75,7 @@ export function OperationBanner({
   >
     {listening && <span className="pulse" aria-hidden="true" />}
     <span>{label}</span>
+    {status.operation === 'generating' && <small>{status.selectedModel} · {status.selectedReasoning ?? 'medium'} reasoning</small>}
     <button onClick={onCancel}>Esc / Cancel</button>
   </div>
 }

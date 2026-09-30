@@ -53,13 +53,12 @@ describe('privacy controls', () => {
   it('shows actual, held, and remaining USD and resets only through New Session', async () => {
     const startNewSession = vi.fn()
     render(<SessionBudgetPanel budget={{
-      sessionId: 'session-1', startedAt: '2026-07-22T00:00:00.000Z', capUsd: 0.25,
-      actualUsd: 0.04, heldUsd: 0.06, remainingUsd: 0.15, pricingVersion: 'prices-v4', blocked: false
+      sessionId: 'session-1', startedAt: '2026-07-22T00:00:00.000Z', inputTokens: 100, outputTokens: 50, reasoningTokens: 20, unpricedRequests: 1,
+      actualUsd: 0.04, pricingVersion: 'prices-v4'
     }} disabled={false} onNewSession={startNewSession} />)
-    expect(screen.getByText('$0.1500 remaining')).toBeTruthy()
-    expect(screen.getByText('$0.0400')).toBeTruthy()
-    expect(screen.getByText('$0.0600')).toBeTruthy()
-    expect((screen.getByRole('progressbar') as HTMLProgressElement).value).toBe(40)
+    expect(screen.getByText('$0.0400 estimated')).toBeTruthy()
+    expect(screen.queryByRole('progressbar')).toBeNull()
+    expect(screen.getByText(/Unpriced/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
     await waitFor(() => expect(startNewSession).toHaveBeenCalledTimes(1))
   })

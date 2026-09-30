@@ -25,12 +25,12 @@ describe('runtime settings validation', () => {
     expect(() => validateSettingsMutation(settings, { selectedAudioEndpointId: 'next' }, true)).toThrow(/active/i)
     expect(() => validateSettingsMutation(settings, { listenShortcut: 'Control+Alt+Space' }, true)).toThrow(/active/i)
     expect(() => validateSettingsMutation(settings, { neonIntensity: 0.5 }, true)).not.toThrow()
-    expect(() => validateSettingsMutation(settings, { sessionBudgetUsd: 1 }, true)).toThrow(/active/i)
+    expect(() => validateSettingsMutation(settings, { normalReasoning: 'high' }, true)).toThrow(/active/i)
   })
 
   it('strictly bounds renderer patches and rejects unknown fields', () => {
-    expect(parseSettingsPatch({ sessionBudgetUsd: 83.5, neonIntensity: 0.65, projectSummary: '🧪'.repeat(4_000) }))
-      .toMatchObject({ sessionBudgetUsd: 83.5, neonIntensity: 0.65 })
+    expect(parseSettingsPatch({ neonIntensity: 0.65, projectSummary: '🧪'.repeat(4_000) }))
+      .toMatchObject({ neonIntensity: 0.65 })
     expect(() => parseSettingsPatch({ sessionBudgetUsd: 0 })).toThrow()
     expect(() => parseSettingsPatch({ sessionBudgetUsd: 101 })).toThrow()
     expect(() => parseSettingsPatch({ neonIntensity: -0.01 })).toThrow()

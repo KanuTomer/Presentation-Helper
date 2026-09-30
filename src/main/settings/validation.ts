@@ -4,7 +4,7 @@ import type { AppSettings } from '../../shared/contracts.js'
 const emergencyShortcut = 'CONTROL+SHIFT+I'
 const sensitiveKeys: ReadonlySet<keyof AppSettings> = new Set([
   'modelMode', 'normalModel', 'strongModel', 'transcriptionModel', 'askShortcut', 'hideShortcut',
-  'listenShortcut', 'projectSummary', 'approvedVocabulary', 'selectedAudioEndpointId', 'sessionBudgetUsd'
+  'listenShortcut', 'projectSummary', 'approvedVocabulary', 'selectedAudioEndpointId', 'normalReasoning', 'strongReasoning'
 ])
 
 const unicodeLength = (value: string): number => Array.from(value).length
@@ -41,17 +41,21 @@ export const appSettingsSchema = z.object({
   modelMode: z.enum(['normal', 'strong']),
   normalModel: modelSchema,
   strongModel: modelSchema,
+  normalReasoning: z.enum(['low', 'medium', 'high']).default('medium'),
+  strongReasoning: z.enum(['low', 'medium', 'high']).default('medium'),
   transcriptionModel: modelSchema,
   askShortcut: shortcutSchema,
   hideShortcut: shortcutSchema,
   listenShortcut: shortcutSchema,
   projectSummary: projectSummarySchema,
   approvedVocabulary: vocabularySchema,
-  selectedAudioEndpointId: endpointSchema.optional(),
-  sessionBudgetUsd: z.number().finite().min(0.01).max(100)
+  selectedAudioEndpointId: endpointSchema.optional()
 }).strict()
 
-export const appSettingsPatchSchema = appSettingsSchema.partial().strict()
+export const appSettingsPatchSchema = appSettingsSchema.partial().extend({
+  normalReasoning: z.enum(['low', 'medium', 'high']).optional(),
+  strongReasoning: z.enum(['low', 'medium', 'high']).optional()
+}).strict()
 
 export function parseSettingsPatch(value: unknown): Partial<AppSettings> {
   const parsed = appSettingsPatchSchema.safeParse(value)

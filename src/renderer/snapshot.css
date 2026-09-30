@@ -1,0 +1,7 @@
+.snapshot-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: #070b16cc; }
+.snapshot-preview { width: min(100%, 1000px); max-height: calc(100vh - 40px); overflow: auto; background: #11182a; border: 1px solid #8c9ccf66; border-radius: 20px; padding: 18px; color: #f0f3ff; }
+.snapshot-preview h2 { font-size: 16px; margin: 0 0 10px; }
+.snapshot-preview img { display: block; width: 100%; max-height: 65vh; object-fit: contain; margin: 12px 0; }
+.snapshot-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.math-equation { overflow: auto; max-width: 100%; padding: 6px 0; }
+.snapshot-solution ol { padding-left: 24px; }

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   browserWindowConstructor, getAllDisplays, getDisplayMatching, getDisplayNearestPoint, getPrimaryDisplay,
-  register, unregister, screenOn, screenRemoveListener
+  register, unregister, screenOn, screenRemoveListener, registered
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
   getAllDisplays: vi.fn(),
@@ -10,6 +10,7 @@ const {
   getDisplayNearestPoint: vi.fn(),
   getPrimaryDisplay: vi.fn(),
   register: vi.fn(),
+  registered: new Set<string>(),
   unregister: vi.fn(),
   screenOn: vi.fn(),
   screenRemoveListener: vi.fn()
@@ -20,7 +21,7 @@ vi.mock('electron', () => ({
   Menu: { buildFromTemplate: vi.fn() },
   Tray: class {},
   app: { quit: vi.fn() },
-  globalShortcut: { register, unregister },
+  globalShortcut: { register: (key: string, action: () => void) => { const ok = register(key, action); if (ok) registered.add(key); return ok }, unregister: (key: string) => { registered.delete(key); unregister(key) }, isRegistered: (key: string) => registered.has(key) },
   nativeImage: { createFromDataURL: vi.fn() },
   screen: {
     getAllDisplays, getDisplayMatching, getDisplayNearestPoint, getPrimaryDisplay,
@@ -30,9 +31,22 @@ vi.mock('electron', () => ({
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 
 describe('window recovery shortcuts', () => {
+  it('rechecks lost emergency registration instead of trusting a cached success', async () => {
+    const store = { settings: { askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H' }, updateSettings: vi.fn(async () => undefined) }
+    const { WindowManager } = await import('../src/main/windows/windowManager')
+    const windows = new WindowManager(store as never, {} as never)
+    expect(windows.registerShortcuts()).toBe(true)
+    registered.delete('Control+Shift+I')
+    expect(windows.clickThroughStatus.recoveryAvailable).toBe(false)
+    expect(() => windows.setClickThrough(true)).toThrow(/recovery shortcut/)
+    expect(windows.shortcutRegistrations.find((item) => item.purpose === 'recovery')?.status).toBe('unavailable')
+    expect(windows.registerShortcuts()).toBe(true)
+    expect(windows.clickThroughStatus.recoveryAvailable).toBe(true)
+  })
   beforeEach(() => {
     browserWindowConstructor.mockReset()
     register.mockReset()
+    registered.clear()
     register.mockReturnValue(true)
     unregister.mockReset()
     screenOn.mockReset()

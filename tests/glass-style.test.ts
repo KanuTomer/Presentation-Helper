@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
-describe('clear shader-first liquid-glass presentation', () => {
-  it('combines a shadowless transparent window with a neon-only shader control', async () => {
+describe('quiet-glass presentation', () => {
+  it('combines a shadowless transparent window with static accent controls', async () => {
     const [windowSource, css] = await Promise.all([
       readFile(new URL('../src/main/windows/windowManager.ts', import.meta.url), 'utf8'),
       readFile(new URL('../src/renderer/style.css', import.meta.url), 'utf8')
@@ -14,10 +14,10 @@ describe('clear shader-first liquid-glass presentation', () => {
     expect(windowSource).toContain('roundedCorners: true')
     expect(windowSource).not.toMatch(/\.setOpacity\(/u)
     expect(css).toContain('--neon-intensity:')
-    expect(css).toContain('@supports not (backdrop-filter: blur(1px))')
+    expect(css).not.toContain('@supports not (backdrop-filter: blur(1px))')
     expect(css).toContain('var(--neon-intensity)')
     expect(css).not.toContain('var(--glass-tint)')
-    expect(css).toContain('.liquid-glass-layer')
+    expect(css).toContain('.quiet-glass-layer')
   })
 
   it('keeps one height-constrained content scroller with input and accessibility support', async () => {
@@ -33,20 +33,20 @@ describe('clear shader-first liquid-glass presentation', () => {
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
     expect(css).toContain('@media (prefers-reduced-transparency: reduce)')
     expect(css).toContain('(forced-colors: active)')
-    expect(css).toContain('.liquid-glass--context-lost')
+    expect(css).not.toContain('.liquid-glass--context-lost')
   })
 
   it('clips a clear, localized refractive tint without nested frosting or wash texture', async () => {
     const css = await readFile(new URL('../src/renderer/style.css', import.meta.url), 'utf8')
     expect(css).toContain('--window-radius: 24px')
-    expect(css).toContain('--glass-strong: rgb(4 7 18 / .1)')
-    expect(css).toContain('--glass-panel: rgb(8 13 27 / .53)')
-    expect(css).toContain('--glass-surface: rgb(5 9 20 / .65)')
+    expect(css).toContain('--glass-strong: rgb(11 16 32 / .12)')
+    expect(css).toContain('--glass-panel: rgb(11 16 32 / .94)')
+    expect(css).toContain('--glass-surface: rgb(9 14 26 / .97)')
     expect(css).toMatch(/#root\s*\{[^}]*clip-path:inset\(0 round var\(--window-radius\)\);/u)
     expect(css).toMatch(/\.shell\s*\{[^}]*border-radius:var\(--window-radius\);[^}]*clip-path:inset\(0 round var\(--window-radius\)\);/u)
-    expect(css).toContain('linear-gradient(112deg')
+    expect(css).not.toContain('linear-gradient(112deg')
     expect(css).not.toContain('repeating-linear-gradient(127deg')
-    expect(css).toMatch(/\.liquid-glass-layer\s*\{[^}]*z-index:0;/u)
+    expect(css).toMatch(/\.quiet-glass-layer\s*\{[^}]*pointer-events:none;/u)
     expect(css).not.toMatch(/\.question-box, \.response-card, fieldset, \.document, \.usage\s*\{[^}]*backdrop-filter/u)
   })
 

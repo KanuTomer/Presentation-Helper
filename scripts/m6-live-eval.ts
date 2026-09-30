@@ -1,4 +1,5 @@
 import OpenAI from 'openai'
+import { responseRequestPolicy } from '../src/main/ai/requestPolicy.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -120,6 +121,7 @@ const settings: {
 }
 const ai = new AiService({ getKey: async () => { throw new Error('The injected no-retry client must be used.') } }, settings, retrieval, {
   clientFactory: async () => client as unknown as OpenAIClientLike,
+  historicalEvaluationPolicy: responseRequestPolicy('normal'),
   onTranscriptionMetric: (metric) => { transcriptionMetric = metric },
   onMetric: (metric) => { answerMetric = metric }
 })

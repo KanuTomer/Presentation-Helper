@@ -20,7 +20,7 @@ export const operationStates = [
   'idle', 'starting_capture', 'listening', 'finalizing', 'transcribing', 'retrieving', 'generating', 'cancelling', 'error'
 ] as const
 export type OperationState = (typeof operationStates)[number]
-export type OperationKind = 'typed' | 'audio'
+export type OperationKind = 'typed' | 'audio' | 'snapshot'
 export type ModelMode = 'normal' | 'strong'
 export type AnswerFormat = 'presenter' | 'code'
 export type HelperLifecycle = 'missing' | 'starting' | 'ready' | 'capturing' | 'failed'
@@ -116,7 +116,22 @@ export interface DeveloperAssistantResponse extends ProviderDeveloperResponse {
   responseStyle: 'developer'
 }
 
-export type AssistantResponse = PresenterAssistantResponse | DeveloperAssistantResponse
+export interface SolutionAssistantResponse {
+  responseStyle: 'solution'
+  task: 'math' | 'code' | 'clarification'
+  interpretedProblem: string
+  explanation: string
+  equations: string[]
+  steps: string[]
+  finalResult: string
+  codeBlocks: CodeBlock[]
+  clarification: string
+  support: SupportLevel
+  evidenceIssue: EvidenceIssue
+  warning?: string
+  evidence: Evidence[]
+}
+export type AssistantResponse = PresenterAssistantResponse | DeveloperAssistantResponse | SolutionAssistantResponse
 export type CodeAssistantResponse = DeveloperAssistantResponse
 
 export const codeBlockSchema = z.object({
@@ -168,9 +183,28 @@ export const presenterAssistantResponseSchema = assistantResponseSchema.extend({
 export const developerAssistantResponseSchema = developerResponseSchema.extend({
   responseStyle: z.literal('developer')
 })
+export const solutionResponseSchema = z.object({
+  task: z.enum(['math', 'code', 'clarification']),
+  interpretedProblem: unicodeBoundedString(1, 4_000),
+  explanation: unicodeBoundedString(1, 8_000),
+  equations: z.array(unicodeBoundedString(1, 2_000)).max(20),
+  steps: z.array(unicodeBoundedString(1, 2_000)).max(20),
+  finalResult: unicodeBoundedString(0, 4_000),
+  codeBlocks: z.array(codeBlockSchema).max(3),
+  clarification: unicodeBoundedString(0, 1_000),
+  support: z.enum(supportLevels), evidenceIssue: z.enum(evidenceIssues),
+  warning: unicodeBoundedString(1, 800).optional(),
+  evidence: z.array(z.object({ chunkId: z.string(), documentName: z.string(), location: z.string() })).max(8)
+}).strict().superRefine((value, ctx) => {
+  if (value.codeBlocks.reduce((sum, block) => sum + Array.from(block.code).length, 0) > 16_000) ctx.addIssue({ code: 'custom', message: 'Combined code exceeds 16,000 characters.' })
+  if (value.task === 'clarification' && !value.clarification.trim()) ctx.addIssue({ code: 'custom', message: 'A focused clarification is required.' })
+  if (value.task === 'code' && !value.codeBlocks.length) ctx.addIssue({ code: 'custom', message: 'Coding solutions require code.' })
+  if (value.task === 'math' && (!value.steps.length || !value.finalResult.trim())) ctx.addIssue({ code: 'custom', message: 'Math solutions require steps and a result.' })
+})
 export const localAssistantResponseSchema: z.ZodType<AssistantResponse> = z.discriminatedUnion('responseStyle', [
   presenterAssistantResponseSchema,
-  developerAssistantResponseSchema
+  developerAssistantResponseSchema,
+  solutionResponseSchema.safeExtend({ responseStyle: z.literal('solution') })
 ])
 
 export const questionSchema = z.string().trim().min(1, 'Enter a question first.').max(4_000, 'Questions are limited to 4,000 characters.')
@@ -316,6 +350,8 @@ export interface AppSettings {
   modelMode: ModelMode
   normalModel: string
   strongModel: string
+  normalReasoning?: 'low' | 'medium' | 'high'
+  strongReasoning?: 'low' | 'medium' | 'high'
   transcriptionModel: string
   askShortcut: string
   hideShortcut: string
@@ -323,8 +359,13 @@ export interface AppSettings {
   projectSummary: string
   approvedVocabulary: string[]
   selectedAudioEndpointId?: string
-  sessionBudgetUsd: number
+  /** Legacy migration input only; never enforces a spending cap. */
+  sessionBudgetUsd?: number
 }
+
+export interface SnapshotMonitor { id: string; name: string; current: boolean; width: number; height: number }
+export interface SnapshotPreview { id: string; monitorId: string; dataUrl: string; width: number; height: number; bytes: number; expiresAt: string }
+export interface SessionUsageStatus { sessionId: string; startedAt: string; actualUsd: number; inputTokens: number; outputTokens: number; reasoningTokens: number; unpricedRequests: number; pricingVersion: string }
 
 export interface ClickThroughStatus {
   enabled: boolean
@@ -382,6 +423,12 @@ export interface SettingsRecoveryWarning {
   recoveredAt: string
 }
 
+export interface ShortcutRegistrationStatus {
+  purpose: 'ask' | 'hide' | 'recovery'
+  accelerator: string
+  status: 'registered' | 'unavailable'
+}
+
 export interface AppStatus {
   operation: OperationState
   operationId?: string
@@ -407,10 +454,13 @@ export interface AppStatus {
   activeAudioEndpoint?: AudioDevice
   operationError?: AiErrorInfo
   shortcutWarnings: string[]
+  shortcutRegistrations: ShortcutRegistrationStatus[]
   privacyConsent: PrivacyConsentStatus
   outboundPreview?: OutboundTransmissionPreview
   settingsRecoveryWarning?: SettingsRecoveryWarning
-  sessionBudget: SessionBudgetStatus
+  sessionUsage: SessionUsageStatus
+  selectedModel?: string
+  selectedReasoning?: 'low' | 'medium' | 'high'
 }
 
 export interface CaptureTestInput {
@@ -490,7 +540,11 @@ export interface PresenterAPI {
   searchDocuments(query: string): Promise<DocumentSearchHit[]>
   inspectDocument(documentId: string, offset?: number, limit?: number): Promise<DocumentInspectionPage>
   clearSession(): Promise<void>
-  startNewSession(): Promise<SessionBudgetStatus>
+  startNewSession(): Promise<SessionUsageStatus>
+  listSnapshotMonitors(): Promise<SnapshotMonitor[]>
+  captureSnapshot(monitorId?: string): Promise<SnapshotPreview>
+  discardSnapshot(): Promise<void>
+  solveSnapshot(snapshotId: string): Promise<AskResult>
   getUsage(): Promise<UsageLedger>
   clearUsage(): Promise<void>
   clearCaptureResults(): Promise<void>
@@ -507,6 +561,7 @@ export interface PresenterAPI {
   ackAnswerVisible(operationId: string): Promise<void>
   ackTranscriptVisible(operationId: string): Promise<void>
   refreshAudioDevices(): Promise<AudioDevice[]>
+  retryShortcuts(): Promise<ShortcutRegistrationStatus[]>
   setCaptureProtection(enabled: boolean): Promise<void>
   saveCaptureResult(result: CaptureTestInput): Promise<CaptureCompatibilityResult>
   removeCaptureResult(id: string): Promise<void>

@@ -7,6 +7,7 @@ import { is } from '@electron-toolkit/utils'
 import { channels } from '../../shared/channels.js'
 import { WINDOW_LAYOUT_REVISION, type SettingsStore } from '../settings/store.js'
 import type { CaptureProtection } from './captureProtection.js'
+import type { ShortcutRegistrationStatus } from '../../shared/contracts.js'
 
 export interface OverlayBounds { x: number; y: number; width: number; height: number }
 export interface WorkArea { x: number; y: number; width: number; height: number }
@@ -98,7 +99,7 @@ export class WindowManager {
   }
 
   setClickThrough(enabled: boolean): void {
-    if (enabled && !this.recoveryShortcutRegistered) {
+    if (enabled && !this.isRecoveryRegistered()) {
       this.applyClickThrough(false)
       throw new Error(`Click-through requires the ${CLICK_THROUGH_RECOVERY_SHORTCUT} recovery shortcut.`)
     }
@@ -119,7 +120,7 @@ export class WindowManager {
     return {
       enabled: this.clickThrough,
       recoveryShortcut: CLICK_THROUGH_RECOVERY_SHORTCUT,
-      recoveryAvailable: this.recoveryShortcutRegistered
+      recoveryAvailable: this.isRecoveryRegistered()
     }
   }
   toggleVisibility(): void { const window = this.ensureWindow(); window.isVisible() ? window.hide() : this.showInactiveTopmost(window) }
@@ -130,6 +131,22 @@ export class WindowManager {
 
   registerShortcuts(): boolean {
     return this.registerShortcutSet(this.store.settings.askShortcut, this.store.settings.hideShortcut)
+  }
+
+  get shortcutRegistrations(): ShortcutRegistrationStatus[] {
+    const settings = this.store.settings
+    return [
+      { purpose: 'ask', accelerator: settings.askShortcut },
+      { purpose: 'hide', accelerator: settings.hideShortcut },
+      { purpose: 'recovery', accelerator: CLICK_THROUGH_RECOVERY_SHORTCUT }
+    ].map(({ purpose, accelerator }) => ({
+      purpose: purpose as ShortcutRegistrationStatus['purpose'], accelerator,
+      status: globalShortcut.isRegistered(accelerator) ? 'registered' : 'unavailable'
+    }))
+  }
+
+  private isRecoveryRegistered(): boolean {
+    return this.recoveryShortcutRegistered && globalShortcut.isRegistered(CLICK_THROUGH_RECOVERY_SHORTCUT)
   }
 
   applyShortcutSet(
@@ -162,7 +179,7 @@ export class WindowManager {
     this.registeredConfigurableShortcuts.clear()
     const warnings: string[] = []
     const register = (shortcut: string, action: () => void): void => {
-      if (!globalShortcut.register(shortcut, action)) warnings.push(`Could not register ${shortcut}. Choose another shortcut in Settings.`)
+      if (!globalShortcut.register(shortcut, action)) warnings.push(`Could not register ${shortcut}. Quit duplicate copies, retry, or choose another shortcut in Settings. Windows does not identify the conflicting application.`)
       else this.registeredConfigurableShortcuts.add(shortcut)
     }
     register(askShortcut, () => this.focusAsk())
@@ -171,7 +188,8 @@ export class WindowManager {
   }
 
   private ensureRecoveryShortcut(): boolean {
-    if (this.recoveryShortcutRegistered) return true
+    if (this.isRecoveryRegistered()) return true
+    this.recoveryShortcutRegistered = false
     if (globalShortcut.register(CLICK_THROUGH_RECOVERY_SHORTCUT, () => this.emergencyUnlock())) {
       this.recoveryShortcutRegistered = true
       this.notifyClickThroughStatus()

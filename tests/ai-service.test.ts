@@ -49,7 +49,7 @@ describe('manual AI service', () => {
     expect(result.warning).toMatch(/project evidence/i)
     expect(create).toHaveBeenCalledTimes(1)
     const request = create.mock.calls[0]?.[0] as Record<string, unknown>
-    expect(request).toMatchObject({ model: 'gpt-5.6-luna', reasoning: { effort: 'none' }, max_output_tokens: 450, store: false })
+    expect(request).toMatchObject({ model: 'gpt-5.6-luna', reasoning: { effort: 'medium' }, store: false })
     expect(request.text).not.toHaveProperty('verbosity')
     expect(request.input).toContain('What accuracy did our experiment achieve?')
     expect(request.text).toMatchObject({ format: { type: 'json_schema', strict: true } })
@@ -61,8 +61,8 @@ describe('manual AI service', () => {
     const { service, provider } = harness(create); provider.settings.modelMode = 'strong'
     await service.ask('Explain eventual consistency.')
     expect(create.mock.calls[0]?.[0]).toMatchObject({
-      model: 'gpt-5.6-terra', reasoning: { effort: 'low' }, max_output_tokens: 1_200,
-      text: { verbosity: 'low' }
+      model: 'gpt-5.6-terra', reasoning: { effort: 'medium' },
+      text: { format: { strict: true } }
     })
   })
 
@@ -286,7 +286,7 @@ describe('structured code AI service', () => {
     }])
     expect(create).toHaveBeenCalledOnce()
     expect(create.mock.calls[0]?.[0]).toMatchObject({
-      model: 'gpt-5.6-luna', reasoning: { effort: 'none' }, max_output_tokens: 2_000, store: false,
+      model: 'gpt-5.6-luna', reasoning: { effort: 'medium' }, store: false,
       text: { format: { type: 'json_schema', name: 'developer_response', strict: true } }
     })
     expect(String(create.mock.calls[0]?.[0].instructions)).toContain('private coding copilot')
@@ -298,8 +298,8 @@ describe('structured code AI service', () => {
     provider.settings.modelMode = 'strong'
     await service.ask('Explain eventual consistency.', { answerFormat: 'code' })
     expect(create.mock.calls[0]?.[0]).toMatchObject({
-      model: 'gpt-5.6-terra', reasoning: { effort: 'low' }, max_output_tokens: 3_000,
-      text: { verbosity: 'low', format: { name: 'developer_response' } }
+      model: 'gpt-5.6-terra', reasoning: { effort: 'medium' },
+      text: { format: { name: 'developer_response' } }
     })
   })
 
@@ -308,7 +308,7 @@ describe('structured code AI service', () => {
     const { service } = harness(create)
     await service.generate('Write a JavaScript function to sort these values.', [], { answerFormat: 'code' })
     expect(create.mock.calls[0]?.[0]).toMatchObject({
-      max_output_tokens: 2_000, text: { format: { name: 'developer_response' } }
+      text: { format: { name: 'developer_response' } }
     })
   })
 
