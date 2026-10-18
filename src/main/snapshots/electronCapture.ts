@@ -5,14 +5,14 @@ import { SNAPSHOT_MAX_BYTES, SNAPSHOT_MAX_EDGE, type SnapshotCaptureAdapter } fr
 export function electronSnapshotCapture(windows: WindowManager): SnapshotCaptureAdapter {
   return {
     monitors: () => {
-      const bounds = windows.window?.getBounds()
+      const bounds = windows.presenterWindow?.getBounds()
       const current = bounds ? screen.getDisplayMatching(bounds).id : screen.getPrimaryDisplay().id
       return screen.getAllDisplays().map((display, index) => ({ id: String(display.id), name: display.label || `Monitor ${index + 1}`, current: current === display.id, width: Math.round(display.size.width * display.scaleFactor), height: Math.round(display.size.height * display.scaleFactor) }))
     },
     async capture(monitorId, signal) {
       const display = screen.getAllDisplays().find((item) => String(item.id) === monitorId)
       if (!display) throw new Error('The selected monitor was disconnected.')
-      const window = windows.window
+      const window = windows.presenterWindow
       const restore = Boolean(window && !window.isDestroyed() && window.isVisible())
       try {
         window?.hide()

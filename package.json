@@ -1,6 +1,6 @@
 {
   "name": "presenter-ai",
-  "version": "0.2.0-beta.7",
+  "version": "1.0.0",
   "private": true,
   "description": "Private, local-first AI presentation copilot for Windows",
   "main": "out/main/index.js",
@@ -22,7 +22,6 @@
     "test:installer:upgrade": "node scripts/installer-smoke.mjs --require-previous",
     "checksum:installer": "tsx scripts/generate-installer-checksums.ts",
     "test:e2e": "npm run build && playwright test",
-    "audit:ui": "node scripts/audit-ui.mjs",
     "eval:m3:live": "tsx scripts/m3-live-eval.ts",
     "eval:m4": "tsx scripts/m4-offline-eval.ts",
     "eval:m6:preflight": "tsx scripts/m6-live-eval.ts --preflight",

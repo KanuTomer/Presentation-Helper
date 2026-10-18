@@ -124,7 +124,7 @@ export function ShortcutSettingsPanel({
     <ul className="shortcut-registration-status" aria-label="Shortcut registration status">{registrations.map((item) => <li key={item.purpose}>{item.purpose}: <kbd>{item.accelerator}</kbd> — {item.status}</li>)}</ul>
     {retryError && <p className="notice danger" role="alert">{retryError}</p>}
     {registrations.some((item) => item.status === 'unavailable') && <p className="notice warning">Quit duplicate PresenterAI copies, then retry or change a configurable shortcut. Windows does not identify the conflicting application.</p>}
-    <p className="muted">Ctrl+Shift+I restores interaction when registered. Click-through stays disabled without emergency recovery; Tray → Show PresenterAI also restores interaction.</p>
+    <p className="muted">Ctrl+Shift+I always turns click-through off. Tray → Show PresenterAI works too.</p>
   </fieldset>
 }
 

@@ -12,7 +12,8 @@ PresenterAI is a private, local-first Windows copilot for presentations, technic
 - Keeps the OpenAI key in Electron `safeStorage` (Windows DPAPI), keeps conversation state local, and sends Responses requests with `store:false`.
 - Solves visible math problems, coding exercises, and errors through **Snapshot → Preview → Send → Solution**. No cropping or extra prompt is required.
 - Offers GPT-6 Luna/Sol/Astra, GPT-6.1 Sol, and GPT-5.6 Luna/Terra with independently selected Normal/Strong reasoning levels.
-- Provides a transparent always-on-top overlay, tray controls, configurable shortcuts, fail-closed click-through recovery, and USD usage estimates without application spending caps.
+- Prepares in an ordinary **Setup** window, then presents in a separate always-on-top window that is hidden from screen capture. The presenter uses adjustable "liquid glass": it blurs a live view of the screen behind it, and the view never leaves the PC. Windows acrylic blur is the fallback for low-power PCs. Appearance has Haze and Text size controls.
+- Provides tray controls, configurable shortcuts, fail-closed click-through recovery, and USD usage estimates without application spending caps.
 - Makes no telemetry, analytics, account, cloud-database, or hosted-backend connection.
 
 ## How it works

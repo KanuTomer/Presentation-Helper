@@ -22,7 +22,7 @@ export function ApprovedVocabularyEditor({ terms, onChange }: { terms: string[];
   }
 
   return <fieldset className="vocabulary-editor"><legend>Approved transcription vocabulary</legend>
-    <p className="muted">Add project terms, acronyms, or names that may improve bounded-audio transcription. These hints may be sent to OpenAI only when transcribing.</p>
+    <p className="muted">Names and acronyms that help transcription. Sent only with audio.</p>
     <div className="actions"><input aria-label="Approved terminology hint" value={draft} onChange={(event) => { setDraft(event.target.value); setError('') }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); add() } }} placeholder="e.g. PresenterAI" /><button disabled={terms.length >= MAX_VOCABULARY_TERMS} onClick={add}>Add term</button></div>
     <small>{terms.length}/{MAX_VOCABULARY_TERMS} approved terms · {MAX_VOCABULARY_TERM_LENGTH} characters maximum each</small>
     {error && <p className="field-error" role="alert">{error}</p>}

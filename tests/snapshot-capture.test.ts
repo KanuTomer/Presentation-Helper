@@ -8,7 +8,7 @@ afterEach(() => vi.useRealTimers())
 function harness(visible = true) {
   const window = { getBounds: () => displays[0]!.bounds, isVisible: () => visible, isDestroyed: () => false, hide: vi.fn() }
   const showTransmissionPreview = vi.fn()
-  const adapter = electronSnapshotCapture({ window, showTransmissionPreview } as unknown as WindowManager)
+  const adapter = electronSnapshotCapture({ presenterWindow: window, showTransmissionPreview } as unknown as WindowManager)
   return { window, showTransmissionPreview, adapter }
 }
 describe('monitor capture restoration', () => {

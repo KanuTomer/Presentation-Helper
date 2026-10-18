@@ -1,17 +1,5 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { AiErrorInfo, WorkspaceStatus } from '../shared/contracts'
-
-/** A hidden native window must not need a painted frame to acknowledge its DOM. */
-export function useWorkspaceAcknowledgement(transitionId: string | undefined, onError: (error: AiErrorInfo) => void): void {
-  useLayoutEffect(() => {
-    if (!transitionId) return
-    let active = true
-    void window.presenter.acknowledgeWorkspace(transitionId).catch((error) => {
-      if (active) onError({ code: 'unknown', message: (error as Error).message, retryable: false })
-    })
-    return () => { active = false }
-  }, [transitionId, onError])
-}
+import React, { useEffect, useRef, useState } from 'react'
+import type { WorkspaceStatus } from '../shared/contracts'
 
 export function SetupReturnConfirmation({ workspace, busy, onError }: { workspace: WorkspaceStatus; busy: boolean; onError(message: string): void }): React.JSX.Element | null {
   const dialog = useRef<HTMLElement>(null)
@@ -57,10 +45,10 @@ export function usePresenterSizing(shell: React.RefObject<HTMLElement | null>, c
         if (!shell.current || !content.current) return
         const contentArea = content.current.parentElement!
         const style = getComputedStyle(contentArea)
-        const chrome = Array.from(shell.current.children).filter((item) => item !== contentArea && !item.classList.contains('quiet-glass-layer'))
+        const chrome = Array.from(shell.current.children).filter((item) => item !== contentArea && !item.classList.contains('liquid-glass'))
           .reduce((sum, item) => sum + item.getBoundingClientRect().height, 0)
         const preview = document.querySelector('.snapshot-preview')
-        const height = Math.ceil(chrome + content.current.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 2)
+        const height = Math.ceil(chrome + content.current.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom))
         const confirmation = document.querySelector<HTMLElement>('.click-through-confirmation')
         const requested = Math.max(height, preview ? 620 : 0, confirmation ? confirmation.scrollHeight + 36 : 0)
         if (requested === previous) return
@@ -72,7 +60,9 @@ export function usePresenterSizing(shell: React.RefObject<HTMLElement | null>, c
     resize.observe(shell.current); resize.observe(content.current)
     const mutation = new MutationObserver(measure)
     mutation.observe(document.body, { childList: true, subtree: true })
+    // The presenter is first laid out while hidden; measure again once shown.
+    document.addEventListener('visibilitychange', measure)
     measure()
-    return () => { clearTimeout(timer); resize.disconnect(); mutation.disconnect() }
+    return () => { clearTimeout(timer); resize.disconnect(); mutation.disconnect(); document.removeEventListener('visibilitychange', measure) }
   }, [enabled, shell, content])
 }
