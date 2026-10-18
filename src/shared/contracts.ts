@@ -345,7 +345,11 @@ export interface CaptureProtectionStatus {
 }
 
 export interface AppSettings {
+  /** Unused since the liquid-glass presenter; kept so stored settings still parse. */
   neonIntensity: number
+  glassHaze: number
+  fontScale: number
+  liveGlass: boolean
   clickThrough: boolean
   modelMode: ModelMode
   normalModel: string
@@ -429,16 +433,18 @@ export interface ShortcutRegistrationStatus {
   status: 'registered' | 'unavailable'
 }
 
+export interface GlassDisplay { x: number; y: number; width: number; height: number }
+
 export interface WorkspaceStatus {
   mode: 'setup' | 'presenter'
-  transition: 'idle' | 'entering' | 'leaving'
-  transitionId?: string
   setupRequest?: 'settings' | 'privacy' | 'documents' | 'capture'
   error?: string
 }
 
 export interface AppStatus {
   workspace?: WorkspaceStatus
+  /** Presenter look, pushed live so Setup changes reach the hidden presenter. */
+  appearance?: Pick<AppSettings, 'glassHaze' | 'liveGlass'>
   operation: OperationState
   operationId?: string
   operationKind?: OperationKind
@@ -568,7 +574,6 @@ export interface PresenterAPI {
   requestSetup(section?: 'settings' | 'privacy' | 'documents' | 'capture'): Promise<void>
   confirmSetup(cancelActive: boolean): Promise<void>
   dismissSetupRequest(): Promise<void>
-  acknowledgeWorkspace(transitionId: string): Promise<void>
   resizePresenter(contentHeight: number): Promise<void>
   toggleListening(): Promise<OperationActionResult>
   copyCode(code: string): Promise<void>
@@ -585,6 +590,9 @@ export interface PresenterAPI {
   onOpenSettings(callback: () => void): () => void
   onOpenPrivacy(callback: () => void): () => void
   onSurfaceRestored(callback: () => void): () => void
+  /** Bounds (DIP) of the display behind the presenter, for the liquid-glass backdrop. */
+  getGlassDisplay(): Promise<GlassDisplay>
+  onGlassDisplay(callback: (display: GlassDisplay) => void): () => void
   onTranscriptDraft(callback: (draft: TranscriptionDraft) => void): () => void
   onError(callback: (error: AiErrorInfo) => void): () => void
 }

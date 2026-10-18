@@ -4,14 +4,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, AssistantResponse } from '../src/shared/contracts'
 
-vi.mock('../src/renderer/quietGlass', () => ({
-  QuietGlassLayer: () => <div data-testid="quiet-glass" />
-}))
-
-import { App, blankStatus } from '../src/renderer/src'
+import { blankStatus } from '../src/renderer/appState'
+import { PresenterApp } from '../src/renderer/presenter'
 
 const settings: AppSettings = {
-  neonIntensity: 0.65, clickThrough: false, modelMode: 'normal',
+  neonIntensity: 0.65, glassHaze: 0.5, fontScale: 1, liveGlass: true, clickThrough: false, modelMode: 'normal',
   normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
   transcriptionModel: 'gpt-4o-mini-transcribe',
   askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H',
@@ -50,13 +47,13 @@ describe('renderer answer-format bridge', () => {
     let statusListener: ((status: typeof blankStatus) => void) | undefined
     const ask = vi.fn()
       .mockImplementationOnce(() => {
-        statusListener?.({ ...blankStatus, workspace: { mode: 'presenter', transition: 'idle' }, operation: 'generating', operationKind: 'typed' })
+        statusListener?.({ ...blankStatus, workspace: { mode: 'presenter' }, operation: 'generating', operationKind: 'typed' })
         return first.promise
       })
       .mockResolvedValueOnce({ ok: true, response: developerResponse })
     const noopSubscription = vi.fn(() => () => undefined)
     const presenter = {
-      getStatus: vi.fn(async () => ({ ...blankStatus, workspace: { mode: 'presenter', transition: 'idle' } })),
+      getStatus: vi.fn(async () => ({ ...blankStatus, workspace: { mode: 'presenter' } })),
       getSettings: vi.fn(async () => settings),
       listDocuments: vi.fn(async () => []),
       getApiKeyStatus: vi.fn(async () => ({
@@ -76,6 +73,8 @@ describe('renderer answer-format bridge', () => {
         return () => undefined
       }),
       onFocusAsk: noopSubscription,
+      getGlassDisplay: vi.fn(async () => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+      onGlassDisplay: noopSubscription,
       onOpenSettings: noopSubscription,
       onOpenPrivacy: noopSubscription,
       onTranscriptDraft: noopSubscription,
@@ -84,7 +83,7 @@ describe('renderer answer-format bridge', () => {
     }
     Object.defineProperty(window, 'presenter', { configurable: true, value: presenter })
 
-    render(<App />)
+    render(<PresenterApp />)
     const question = await screen.findByPlaceholderText('Ask a reviewer question…')
     fireEvent.change(question, { target: { value: 'Explain this architecture.' } })
     await waitFor(() => expect((screen.getByRole('button', { name: /Generate code/ }) as HTMLButtonElement).disabled).toBe(false))

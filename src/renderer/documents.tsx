@@ -56,7 +56,7 @@ export function DocumentsView({ documents, onChange }: { documents: DocumentInfo
   }
 
   return <div className="stack documents-view">
-    <div className="section-heading"><div><h2>Local documents</h2><p>Search and inspect the local index. Only selected evidence chunks are sent to OpenAI when you ask a question.</p></div><button className="primary" disabled={busy} onClick={() => void add()}>Add files</button></div>
+    <div className="section-heading"><div><h2>Local documents</h2><p>Only the snippets an answer needs are sent.</p></div><button className="primary" disabled={busy} onClick={() => void add()}>Add files</button></div>
 
     {error && <div className="notice danger" role="alert">{error}</div>}
     {outcomes.length > 0 && <section aria-label="Import outcomes" className="import-outcomes">

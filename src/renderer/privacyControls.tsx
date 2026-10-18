@@ -53,10 +53,9 @@ export function ListeningConsentPanel({
     finally { setPending(false) }
   }
   return <fieldset className="listening-consent">
-    <legend>First-use listening acknowledgement</legend>
-    <p>PresenterAI captures bounded system-output audio only after you explicitly toggle listening on. Press the control again to stop and create an editable transcript. No evidence retrieval or answer request occurs until you review the draft and submit it.</p>
-    <p>Live assistance may be restricted in interviews, examinations, meetings, or graded work. Confirm the applicable rules and obtain consent where required.</p>
-    <label className="toggle"><input type="checkbox" checked disabled /> The red listening indicator will remain visible during capture.</label>
+    <legend>Before you use listening</legend>
+    <p>Listening records your PC's sound output only while you toggle it on, then shows an editable transcript. Nothing is sent for an answer until you submit it. A red indicator stays visible while recording.</p>
+    <p className="muted">Live AI help may break the rules of interviews, exams, or graded work. Check first and get consent where needed.</p>
     <button type="button" className="primary" disabled={disabled || pending} onClick={() => void accept()}>{pending ? 'Saving…' : 'I understand and enable transcript review'}</button>
     {error && <p className="field-error" role="alert">{error}</p>}
   </fieldset>
@@ -119,17 +118,18 @@ export function TransmissionPreviewPanel({
 
 export function PrivacyDisclosure(): React.JSX.Element {
   return <section className="privacy-disclosure">
-    <h3>Data handling</h3>
+    <h3>What gets sent</h3>
     <ul>
-      <li>Bounded system-output audio is sent only for transcription and is deleted locally when that request reaches a terminal state.</li>
-      <li>The transcript is shown as an editable in-memory draft. It is not sent for retrieval or answering until you explicitly submit it.</li>
-      <li>Only the current question, bounded background, and selected local evidence chunks are sent for an answer. An explicitly sent snapshot also includes the full selected monitor image.</li>
-      <li>Snapshots have no crop step. Inspect the complete image before Send. Images are memory-only and cleared after completion, cancellation, ten minutes, or New Session.</li>
-      <li>Responses use <code>store:false</code>; PresenterAI creates no OpenAI Conversation and keeps no cloud meeting history.</li>
-      <li>OpenAI may retain Responses API abuse-monitoring logs for up to 30 days under its ordinary API controls. The published transcription endpoint table currently lists no application-state or abuse-monitoring retention.</li>
-      <li>API content is not used to train OpenAI models unless the account owner explicitly opts in.</li>
+      <li>Only what you send: your question, the document snippets it needs, and audio or a snapshot you chose to send.</li>
+      <li>Audio and snapshots are temporary and deleted after use.</li>
+      <li>OpenAI doesn't train on API data and may keep abuse-monitoring logs for up to 30 days.</li>
     </ul>
-    <p>API keys are encrypted for this Windows user with DPAPI. That primarily protects against other Windows users; it cannot isolate the key from every process already running as the same user.</p>
+    <details><summary>More detail</summary><ul>
+      <li>Transcripts stay an editable draft until you submit them.</li>
+      <li>A sent snapshot includes the whole selected monitor, so check it first. Snapshots clear after use, cancel, ten minutes, or New Session.</li>
+      <li>Answers use <code>store:false</code>; no conversation history is kept in the cloud.</li>
+      <li>Your API key is encrypted with Windows DPAPI. It protects against other Windows users, not other apps running as the same user.</li>
+    </ul></details>
   </section>
 }
 
@@ -139,7 +139,7 @@ export function UsageEstimatePanel({ usage }: { usage: UsageEstimateView }): Rea
     <span>${usage.estimatedUsd.toFixed(4)} USD</span>
     <small>{usage.requestCount} recent request{usage.requestCount === 1 ? '' : 's'}{usage.rolledUpRequestCount ? ` · ${usage.rolledUpRequestCount} older rolled up` : ''}</small>
     {usage.unpricedRequestCount > 0 && <small className="field-error">{usage.unpricedRequestCount} request{usage.unpricedRequestCount === 1 ? ' is' : 's are'} unpriced because the exact returned model is unknown.</small>}
-    <small>Pricing metadata: {usage.pricingVersion}. Estimates are not billing reconciliation.</small>
+    <small>Estimate only, not your OpenAI bill · prices {usage.pricingVersion}</small>
   </section>
 }
 
@@ -148,7 +148,7 @@ export function SessionBudgetPanel({ budget, disabled, onNewSession }: { budget:
     <div className="budget-heading"><strong>Current PresenterAI session</strong><span>${budget.actualUsd.toFixed(4)} estimated</span></div>
     <div className="info-grid"><PreviewInfo label="Input tokens" value={String(budget.inputTokens)} /><PreviewInfo label="Output tokens" value={String(budget.outputTokens)} /><PreviewInfo label="Reasoning tokens (included in output)" value={String(budget.reasoningTokens)} /></div>
     {budget.unpricedRequests > 0 && <p>{budget.unpricedRequests} request(s): Unpriced. Their cost is not included in this estimate.</p>}
-    <small>Started {new Date(budget.startedAt).toLocaleString()} · {budget.pricingVersion}. No application spending cap; OpenAI billing controls apply. New Session resets these totals.</small>
+    <small>Since {new Date(budget.startedAt).toLocaleString()} · no spending cap · New Session resets these totals.</small>
     <button type="button" disabled={disabled} onClick={() => void onNewSession()}>New Session</button>
   </section>
 }
@@ -206,14 +206,14 @@ export function RetentionControls({ actions, busy = false, onDeleteAllSuccess }:
   }
 
   return <fieldset className="retention-controls">
-    <legend>Local retention controls</legend>
-    <p className="muted">Removing indexed documents deletes PresenterAI’s local copies and index rows, never your original PPTX, PDF, Markdown, or text files.</p>
+    <legend>Clear local data</legend>
+    <p className="muted">Removing documents deletes PresenterAI's copies only, never your original files.</p>
     <div className="retention-actions">{controls.map(([label, action]) => <button type="button" key={label} disabled={busy || Boolean(pending)} onClick={() => void run(label, action)}>{pending === label ? 'Working…' : label}</button>)}</div>
     <button type="button" className="danger-button" disabled={busy || Boolean(pending)} onClick={() => { setConfirmingAll(true); setConfirmation(''); setMessage('') }}>Delete all local PresenterAI data</button>
     {busy && <p className="muted">Finish or cancel the active operation before deleting local data.</p>}
     {confirmingAll && <section role="dialog" aria-label="Confirm deletion of all local data" className="delete-confirmation">
-      <strong>This clears settings, consent, context, usage, compatibility records, the local index, encrypted API-key ciphertext, and PresenterAI-owned temporary audio.</strong>
-      <p>Your original source documents are not deleted. Type <code>DELETE ALL</code> to continue.</p>
+      <strong>This clears all PresenterAI settings, history, usage, the document index, and your API key.</strong>
+      <p>Your original files are kept. Type <code>DELETE ALL</code> to continue.</p>
       <input autoFocus aria-label="Delete all confirmation" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
       <div className="actions"><button type="button" onClick={() => setConfirmingAll(false)}>Cancel</button><button type="button" className="danger-button" disabled={confirmation !== 'DELETE ALL'} onClick={() => void deleteAll()}>Delete all</button></div>
     </section>}

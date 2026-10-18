@@ -54,6 +54,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     const { escapeWarning, ...operationStatus } = audio.operations.snapshot()
     return {
       ...operationStatus, workspace: windows.workspaceStatus, clickThrough: windows.clickThroughStatus,
+      appearance: { glassHaze: store.settings.glassHaze, liveGlass: store.settings.liveGlass },
       capture: capture.status(windows.window), listening: audio.listening,
       audioSource: audio.activeEndpoint?.name ?? audio.devices.find((device) => device.id === store.settings.selectedAudioEndpointId)?.name ?? 'Windows default output (WASAPI loopback)',
       temporaryAudioExists: Boolean(audio.temporaryAudio), helperAvailable: audio.helper.available, helperState: audio.helper.state,
@@ -69,12 +70,13 @@ export function registerIpc(services: Services): RegisteredIpcServices {
       ...(store.recoveryWarning ? { settingsRecoveryWarning: store.recoveryWarning } : {})
     }
   }
-  const broadcast = (): void => windows.window?.webContents.send(channels.status, status())
+  const send = (channel: string, value: unknown): void => { for (const window of windows.windows) window.webContents.send(channel, value) }
+  const broadcast = (): void => send(channels.status, status())
   windows.onClickThroughStatusChange = broadcast
   windows.onWorkspaceStatusChange = broadcast
   audio.onState = broadcast
-  audio.onTranscriptDraft = (draft) => windows.window?.webContents.send(channels.transcriptDraft, transcriptionDraftSchema.parse(draft))
-  audio.onError = (error) => windows.window?.webContents.send(channels.appError, error)
+  audio.onTranscriptDraft = (draft) => windows.presenterWindow?.webContents.send(channels.transcriptDraft, transcriptionDraftSchema.parse(draft))
+  audio.onError = (error) => send(channels.appError, error)
   const deletion = new LocalDataDeletionService(() => audio.operations.acquireMaintenance(), {
     session: async () => { snapshots.frames.clear(); ai.clearSession(); await store.startNewSession() },
     documents: () => retrieval.clearAll(),
@@ -136,6 +138,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
           rollbackPersistence: () => store.updateSettings(previous)
         })
       : await store.updateSettings(patch)
+    if (patch.fontScale !== undefined) windows.applyFontScale(settings.fontScale)
     if (Object.prototype.hasOwnProperty.call(patch, 'selectedAudioEndpointId')) {
       try { await audio.refreshDevices() }
       catch (error) {
@@ -189,7 +192,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   handle(channels.dismissSettingsRecoveryWarning, async () => { await store.dismissRecoveryWarning(); broadcast() })
   handle(channels.listDocuments, () => retrieval.listDocuments())
   handle(channels.selectDocuments, async () => {
-    const result = await dialog.showOpenDialog(windows.window!, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Presentation documents', extensions: ['pptx', 'pdf', 'md', 'markdown', 'txt'] }] })
+    const result = await dialog.showOpenDialog(windows.setupWindow!, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Presentation documents', extensions: ['pptx', 'pdf', 'md', 'markdown', 'txt'] }] })
     if (result.canceled) return { documents: retrieval.listDocuments(), outcomes: [] }
     return documentImportResultSchema.parse(await retrieval.addFiles(result.filePaths))
   })
@@ -229,10 +232,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     windows.confirmSetup()
   })
   handle(channels.dismissSetup, () => windows.dismissSetupRequest())
-  handle<[unknown]>(channels.workspaceReady, (_event, id) => {
-    if (typeof id !== 'string' || id.length > 128) throw new Error('Invalid workspace transition.')
-    windows.acknowledgeWorkspace(id)
-  })
+  handle(channels.getGlassDisplay, () => windows.glassDisplay)
   handle<[unknown]>(channels.resizePresenter, (_event, height) => {
     if (typeof height !== 'number') throw new Error('Invalid content height.')
     windows.resizePresenter(height)
@@ -268,9 +268,11 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     audio.acknowledgeTranscriptVisible(operationId)
   })
   handle<[boolean]>(channels.setCaptureProtection, (_event, enabled) => {
-    if (typeof enabled !== 'boolean' || windows.workspaceStatus.transition !== 'idle' || (windows.workspaceStatus.mode === 'presenter' && !enabled)) throw new Error('Presenter protection cannot be disabled. Return to Setup first.')
-    if (!windows.window) throw new Error('Overlay window is unavailable.')
-    capture.setEnabled(windows.window, enabled); broadcast()
+    // Compatibility tests toggle protection on the Setup window only; the
+    // presenter is always protected.
+    if (typeof enabled !== 'boolean' || windows.isPresenter) throw new Error('Presenter protection cannot be disabled. Return to Setup first.')
+    if (!windows.setupWindow) throw new Error('The Setup window is unavailable.')
+    capture.setEnabled(windows.setupWindow, enabled); broadcast()
   })
   handle<[CaptureTestInput]>(channels.saveCaptureResult, async (_event, input) => {
     const gpu = await app.getGPUInfo('basic') as { gpuDevice?: Array<{ deviceString?: string }> }

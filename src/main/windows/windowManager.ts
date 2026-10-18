@@ -1,14 +1,13 @@
 import {
-  BrowserWindow, Menu, Tray, app, globalShortcut, nativeImage, screen,
-  type BrowserWindowConstructorOptions
+  BrowserWindow, Menu, Tray, app, desktopCapturer, globalShortcut, nativeImage, nativeTheme, screen,
+  type WebPreferences
 } from 'electron'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { is } from '@electron-toolkit/utils'
 import { channels } from '../../shared/channels.js'
 import { WINDOW_LAYOUT_REVISION, type SettingsStore } from '../settings/store.js'
 import type { CaptureProtection } from './captureProtection.js'
-import type { ShortcutRegistrationStatus, WorkspaceStatus } from '../../shared/contracts.js'
+import type { GlassDisplay, ShortcutRegistrationStatus, WorkspaceStatus } from '../../shared/contracts.js'
 
 export interface OverlayBounds { x: number; y: number; width: number; height: number }
 export interface WorkArea { x: number; y: number; width: number; height: number }
@@ -29,87 +28,112 @@ export interface WindowClickThroughStatus {
 
 export type ClickThroughStatusListener = (status: WindowClickThroughStatus) => void
 
+function webPreferences(): WebPreferences {
+  return { preload: join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false }
+}
+
+/** Both windows load the same renderer; `view` selects Setup or presenter. */
+function load(window: BrowserWindow, view: 'setup' | 'presenter'): void {
+  if (is.dev && process.env.ELECTRON_RENDERER_URL) void window.loadURL(`${process.env.ELECTRON_RENDERER_URL}?view=${view}`)
+  else void window.loadFile(join(__dirname, '../renderer/index.html'), { query: { view } })
+}
+
 export class WindowManager {
-  window?: BrowserWindow
+  setupWindow?: BrowserWindow
+  presenterWindow?: BrowserWindow
   private tray?: Tray
   shortcutWarnings: string[] = []
   private registeredConfigurableShortcuts = new Set<string>()
   private recoveryShortcutRegistered = false
   private boundsTimer?: NodeJS.Timeout
+  private glassTimer?: NodeJS.Timeout
+  private glassDisplayId?: number
   private displayListenersRegistered = false
   private clickThrough = false
   private quitting = false
-  private workspace: WorkspaceStatus = { mode: 'setup', transition: 'idle' }
-  private transitionTimer?: NodeJS.Timeout
-  private transitionRenderer?: { window: BrowserWindow; throttling: boolean }
+  private presenterReady = false
+  private workspace: WorkspaceStatus = { mode: 'setup' }
   private resizingContent = false
   private presenterHeight = 180
   onWorkspaceStatusChange?: () => void
   onClickThroughStatusChange?: ClickThroughStatusListener
   private readonly handleDisplayChange = (): void => {
-    if (this.window && this.workspace.transition === 'idle') {
-      if (this.isPresenter) this.resizePresenter(this.presenterHeight)
-      else { const bounds = this.validBounds(this.window.getBounds()); if (bounds) this.window.setBounds(bounds) }
-    }
+    const setup = this.setupWindow
+    if (setup && !setup.isDestroyed()) { const bounds = this.validBounds(setup.getBounds()); if (bounds) setup.setBounds(bounds) }
+    if (this.isPresenter) this.resizePresenter(this.presenterHeight)
+    this.pushGlassDisplay(true)
     this.notifySurfaceRestored()
   }
   constructor(private store: SettingsStore, private capture: CaptureProtection) {}
 
+  /** The window the user is currently working in. */
+  get window(): BrowserWindow | undefined { return this.isPresenter ? this.presenterWindow : this.setupWindow }
+  get windows(): BrowserWindow[] { return [this.setupWindow, this.presenterWindow].filter((item): item is BrowserWindow => Boolean(item && !item.isDestroyed())) }
+
   create(): BrowserWindow {
-    if (this.window && !this.window.isDestroyed()) return this.window
+    if (this.setupWindow && !this.setupWindow.isDestroyed()) return this.setupWindow
     const requiresLayoutMigration = this.store.windowLayoutRevision < WINDOW_LAYOUT_REVISION
     const initialBounds = requiresLayoutMigration
       ? this.migrateLegacyBounds(this.store.windowBounds)
       : this.validBounds(this.store.windowBounds) ?? this.defaultBounds()
-    const windowOptions: BrowserWindowConstructorOptions = {
-      ...initialBounds,
-      minWidth: OVERLAY_MIN_WIDTH, minHeight: OVERLAY_MIN_HEIGHT, frame: false, transparent: true, alwaysOnTop: false,
-      skipTaskbar: false, resizable: true, movable: true, show: false, backgroundColor: '#00000000',
-      hasShadow: false, roundedCorners: true,
-      webPreferences: { preload: join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false }
-    }
-    this.window = new BrowserWindow(windowOptions)
-    // Applying the Electron-supported screen-saver level after native window
-    // creation keeps the transparent overlay topmost without changing focus.
-    this.window.setAlwaysOnTop(false)
-    this.registerDisplayListeners()
+    // Setup is an ordinary application window: framed, opaque, in the taskbar,
+    // and deliberately visible to screen capture. Dark keeps its title bar
+    // consistent with the presenter.
+    nativeTheme.themeSource = 'dark'
+    const setup = new BrowserWindow({
+      ...initialBounds, minWidth: OVERLAY_MIN_WIDTH, minHeight: OVERLAY_MIN_HEIGHT,
+      show: false, title: 'PresenterAI', backgroundColor: '#111318', autoHideMenuBar: true,
+      webPreferences: webPreferences()
+    })
+    setup.setMenu(null)
+    this.setupWindow = setup
     if (requiresLayoutMigration) void this.store.setWindowLayout(initialBounds, WINDOW_LAYOUT_REVISION)
+    this.registerDisplayListeners()
     const hadPersistedClickThrough = this.store.settings.clickThrough
-    // Reserve the fixed recovery shortcut before exposing the window. A stale
-    // persisted value is cleared below rather than restored automatically.
+    // Reserve the fixed recovery shortcut before exposing any window. Click-
+    // through is runtime-only, so a stale persisted value is always cleared.
     this.registerShortcuts()
-    // Click-through is runtime-only. Every enable must follow the renderer's
-    // explicit confirmation, so even a previously clean shutdown starts
-    // interactive and clears the stale persisted value.
     this.setClickThrough(false)
     if (hadPersistedClickThrough) void this.store.updateSettings({ clickThrough: false }).catch(() => undefined)
-    this.capture.setEnabled(this.window, false)
-    this.window.once('ready-to-show', () => {
-      if (!this.window) return
-      this.showInactiveTopmost(this.window)
-    })
-    this.window.on('close', (event) => {
-      if (this.quitting) return
-      event.preventDefault()
-      this.window?.hide()
-    })
-    this.window.on('closed', () => {
-      this.releaseTransitionRenderer()
-      this.unregisterDisplayListeners()
-      this.window = undefined
-    })
-    this.window.on('move', () => this.persistBounds())
-    this.window.on('resize', () => {
-      this.persistBounds()
-      this.notifySurfaceRestored()
-    })
-    this.window.on('restore', () => this.notifySurfaceRestored())
-    this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-    this.window.webContents.on('will-navigate', (event) => event.preventDefault())
-    if (is.dev && process.env.ELECTRON_RENDERER_URL) this.window.loadURL(process.env.ELECTRON_RENDERER_URL)
-    else this.window.loadFile(join(__dirname, '../renderer/index.html'))
+    this.capture.setEnabled(setup, false)
+    setup.once('ready-to-show', () => { if (!this.isPresenter) setup.show() })
+    this.guardWindow(setup)
+    setup.on('move', () => this.persistBounds(setup))
+    setup.on('resize', () => this.persistBounds(setup))
+    load(setup, 'setup')
+    this.createPresenter()
     if (!this.tray) this.createTray()
-    return this.window
+    return setup
+  }
+
+  /**
+   * The presenter is created hidden with capture protection already requested,
+   * then kept alive while hidden so the draft and answer survive Setup visits.
+   */
+  private createPresenter(): BrowserWindow {
+    if (this.presenterWindow && !this.presenterWindow.isDestroyed()) return this.presenterWindow
+    const presenter = new BrowserWindow({
+      width: 860, height: this.presenterHeight, minWidth: 600, minHeight: 120,
+      // Acrylic sits under the live-glass canvas and shows through when live
+      // glass is off or unavailable, so low-power PCs still get real blur.
+      frame: false, transparent: false, backgroundColor: '#00000000', backgroundMaterial: 'acrylic', roundedCorners: true,
+      skipTaskbar: true, alwaysOnTop: true, resizable: true, show: false,
+      webPreferences: webPreferences()
+    })
+    this.presenterWindow = presenter
+    this.presenterReady = false
+    this.capture.setEnabled(presenter, true)
+    presenter.once('ready-to-show', () => {
+      this.presenterReady = true
+      if (this.isPresenter) this.showPresenter()
+    })
+    this.guardWindow(presenter)
+    presenter.on('move', () => { this.persistBounds(presenter); this.pushGlassDisplay() })
+    presenter.on('resize', () => { this.persistBounds(presenter); this.notifySurfaceRestored(presenter) })
+    presenter.on('restore', () => this.notifySurfaceRestored(presenter))
+    this.registerGlassCapture(presenter)
+    load(presenter, 'presenter')
+    return presenter
   }
 
   setClickThrough(enabled: boolean): void {
@@ -117,120 +141,90 @@ export class WindowManager {
       this.applyClickThrough(false)
       throw new Error(`Click-through requires the ${CLICK_THROUGH_RECOVERY_SHORTCUT} recovery shortcut.`)
     }
-    if (enabled && this.workspace.mode !== 'presenter') throw new Error('Enter presenter mode before enabling click-through.')
+    if (enabled && !this.isPresenter) throw new Error('Enter presenter mode before enabling click-through.')
     this.applyClickThrough(enabled)
   }
   get workspaceStatus(): WorkspaceStatus { return { ...this.workspace } }
-  get isPresenter(): boolean { return this.workspace.mode === 'presenter' && this.workspace.transition === 'idle' }
+  get isPresenter(): boolean { return this.workspace.mode === 'presenter' }
   enterPresenter(): void {
-    if (this.workspace.mode === 'presenter' || this.workspace.transition !== 'idle') return
-    const window = this.ensureWindow()
+    if (this.isPresenter) return
+    const presenter = this.createPresenter()
+    const setup = this.setupWindow
+    const setupBounds = setup && !setup.isDestroyed() ? setup.getBounds() : this.defaultBounds()
     clearTimeout(this.boundsTimer)
-    const setupBounds = window.getBounds()
     void this.store.setWindowBounds(setupBounds)
-    this.keepTransitionRendererActive(window)
-    window.hide()
-    this.capture.setEnabled(window, true)
-    if (!this.capture.status(window).electronReported) {
-      this.capture.setEnabled(window, false)
-      this.workspace.error = 'Windows capture protection could not be enabled. Presenter mode was not opened.'
+    this.capture.setEnabled(presenter, true)
+    if (!this.capture.status(presenter).electronReported) {
+      this.workspace = { ...this.workspace, error: 'Windows capture protection could not be enabled. Presenter mode was not opened.' }
       this.onWorkspaceStatusChange?.()
-      this.showFocusedTopmost(window)
-      this.releaseTransitionRenderer()
       throw new Error(this.workspace.error)
     }
     this.setClickThrough(false)
-    this.workspace = { mode: 'presenter', transition: 'entering', transitionId: randomUUID() }
-    window.setMinimumSize(600, 120)
     const saved = this.store.presenterLayout
     const area = screen.getDisplayMatching(setupBounds).workArea
-    window.setBounds(presenterBounds({ x: saved?.x ?? setupBounds.x, y: saved?.y ?? setupBounds.y, width: saved?.width ?? 860, height: this.presenterHeight }, area))
-    window.setSkipTaskbar(true)
-    window.setAlwaysOnTop(true, 'screen-saver')
-    this.beginTransition()
+    presenter.setBounds(presenterBounds({ x: saved?.x ?? setupBounds.x, y: saved?.y ?? setupBounds.y, width: saved?.width ?? 860, height: this.presenterHeight }, area))
+    this.workspace = { mode: 'presenter' }
+    setup?.hide()
+    this.onWorkspaceStatusChange?.()
+    if (this.presenterReady) this.showPresenter()
   }
   requestSetup(section: NonNullable<WorkspaceStatus['setupRequest']> = 'settings'): void {
-    if (this.workspace.transition !== 'idle') return
-    const window = this.ensureWindow()
     this.emergencyUnlock()
     this.workspace = { ...this.workspace, setupRequest: section }
     this.onWorkspaceStatusChange?.()
-    this.showFocusedTopmost(window)
-    if (this.workspace.mode === 'setup') window.webContents.send(section === 'privacy' ? channels.openPrivacy : channels.openSettings)
+    if (this.isPresenter) { this.showPresenter(); return }
+    this.showSetup()
+    this.setupWindow?.webContents.send(section === 'privacy' ? channels.openPrivacy : channels.openSettings)
   }
   dismissSetupRequest(): void { this.workspace = { ...this.workspace, setupRequest: undefined }; this.onWorkspaceStatusChange?.() }
   confirmSetup(): void {
-    if (this.workspace.mode !== 'presenter' || !this.workspace.setupRequest || this.workspace.transition !== 'idle') throw new Error('No pending Setup confirmation.')
-    const window = this.ensureWindow()
+    if (!this.isPresenter || !this.workspace.setupRequest) throw new Error('No pending Setup confirmation.')
+    const presenter = this.presenterWindow
     clearTimeout(this.boundsTimer)
-    const { x, y, width } = window.getBounds()
-    void this.store.setPresenterLayout({ x, y, width })
-    this.keepTransitionRendererActive(window)
-    window.hide()
-    this.setClickThrough(false)
-    this.workspace = { ...this.workspace, mode: 'setup', transition: 'leaving', transitionId: randomUUID(), error: undefined }
-    window.setMinimumSize(OVERLAY_MIN_WIDTH, OVERLAY_MIN_HEIGHT)
-    window.setBounds(this.validBounds(this.store.windowBounds) ?? this.defaultBounds())
-    this.beginTransition()
-  }
-  acknowledgeWorkspace(id: string): void {
-    if (this.workspace.transition === 'idle' || this.workspace.transitionId !== id) return
-    const window = this.ensureWindow()
-    clearTimeout(this.transitionTimer)
-    if (this.workspace.mode === 'setup') {
-      this.capture.setEnabled(window, false)
-      window.setAlwaysOnTop(false)
-      window.setSkipTaskbar(false)
-    } else if (!this.capture.status(window).electronReported) {
-      this.workspace.error = 'Capture protection was lost. The presenter window remains hidden.'
-      this.onWorkspaceStatusChange?.(); this.releaseTransitionRenderer(); return
+    if (presenter && !presenter.isDestroyed()) {
+      const { x, y, width } = presenter.getBounds()
+      void this.store.setPresenterLayout({ x, y, width })
     }
-    this.workspace = { ...this.workspace, transition: 'idle', transitionId: undefined, error: undefined }
+    this.setClickThrough(false)
+    presenter?.hide()
+    this.workspace = { ...this.workspace, mode: 'setup', error: undefined }
+    const setup = this.setupWindow ?? this.create()
+    // A capture-compatibility test may have protected Setup; Setup is never stealth.
+    this.capture.setEnabled(setup, false)
     this.onWorkspaceStatusChange?.()
-    this.showFocusedTopmost(window)
-    this.releaseTransitionRenderer()
+    this.showSetup()
   }
   resizePresenter(height: number): void {
     if (!Number.isFinite(height) || height < 80 || height > 100_000) throw new Error('Invalid presenter content height.')
-    const zoom = this.window?.webContents.getZoomFactor?.() ?? 1
+    const presenter = this.presenterWindow
+    const zoom = presenter?.webContents.getZoomFactor?.() ?? 1
     this.presenterHeight = Math.ceil(height)
-    if (this.workspace.mode !== 'presenter') return
-    const window = this.ensureWindow()
-    const current = window.getBounds()
+    if (!presenter || presenter.isDestroyed()) return
+    const current = presenter.getBounds()
     const next = presenterBounds({ ...current, height: Math.ceil(this.presenterHeight * zoom) }, screen.getDisplayMatching(current).workArea)
     if (next.height === current.height && next.y === current.y) return
     this.resizingContent = true
-    try { window.setBounds(next) } finally { this.resizingContent = false }
+    try { presenter.setBounds(next) } finally { this.resizingContent = false }
   }
-  private beginTransition(): void {
-    this.keepTransitionRendererActive(this.ensureWindow())
-    clearTimeout(this.transitionTimer)
-    this.transitionTimer = setTimeout(() => {
-      this.workspace.error = 'The workspace could not be rendered safely. The window remains hidden; use the tray to retry.'
-      this.onWorkspaceStatusChange?.()
-      this.releaseTransitionRenderer()
-    }, 8000)
-    this.transitionTimer.unref?.()
-    this.onWorkspaceStatusChange?.()
+  /** Text size applies to both windows; the presenter re-fits its height. */
+  applyFontScale(scale: number): void {
+    for (const item of this.windows) item.webContents.setZoomFactor(scale)
+    this.resizePresenter(this.presenterHeight)
   }
-  private keepTransitionRendererActive(window: BrowserWindow): void {
-    if (this.transitionRenderer?.window === window) return
-    this.releaseTransitionRenderer()
-    const throttling = window.webContents.getBackgroundThrottling()
-    window.webContents.setBackgroundThrottling(false)
-    this.transitionRenderer = { window, throttling }
+  focusAsk(): void {
+    if (!this.isPresenter) { this.showSetup(); return }
+    this.showPresenter()
+    this.presenterWindow?.webContents.send(channels.focusAsk)
   }
-  private releaseTransitionRenderer(): void {
-    const renderer = this.transitionRenderer
-    this.transitionRenderer = undefined
-    if (renderer && !renderer.window.isDestroyed()) renderer.window.webContents.setBackgroundThrottling(renderer.throttling)
-  }
-  focusAsk(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); if (this.isPresenter) window.webContents.send(channels.focusAsk) }
   openSettings(): void { this.requestSetup('settings') }
-  openPrivacy(): void {
-    this.requestSetup('privacy')
+  openPrivacy(): void { this.requestSetup('privacy') }
+  showTransmissionPreview(): void {
+    if (this.isPresenter) { this.showPresenterInactive(); return }
+    const setup = this.setupWindow
+    if (!setup || setup.isDestroyed()) return
+    setup.showInactive()
+    this.notifySurfaceRestored(setup)
   }
-  showTransmissionPreview(): void { this.showInactiveTopmost(this.ensureWindow()) }
   get hasTray(): boolean { return Boolean(this.tray) }
   get isClickThrough(): boolean { return this.clickThrough }
   get clickThroughStatus(): WindowClickThroughStatus {
@@ -240,11 +234,99 @@ export class WindowManager {
       recoveryAvailable: this.isRecoveryRegistered()
     }
   }
-  toggleVisibility(): void { const window = this.ensureWindow(); window.isVisible() ? window.hide() : this.showInactiveTopmost(window) }
+  toggleVisibility(): void {
+    const window = this.window
+    if (window && !window.isDestroyed() && window.isVisible()) window.hide()
+    else this.showTransmissionPreview()
+  }
   emergencyUnlock(): void { this.setClickThrough(false); void this.store.updateSettings({ clickThrough: false }).catch(() => undefined) }
-  showFromTray(): void { this.emergencyUnlock(); this.showFocusedTopmost(this.ensureWindow()) }
+  showFromTray(): void { this.emergencyUnlock(); if (this.isPresenter) this.showPresenter(); else this.showSetup() }
   openSettingsFromTray(): void { this.emergencyUnlock(); this.openSettings() }
-  prepareToQuit(): void { this.quitting = true; clearTimeout(this.boundsTimer); clearTimeout(this.transitionTimer); this.releaseTransitionRenderer() }
+  prepareToQuit(): void { this.quitting = true; clearTimeout(this.boundsTimer); clearTimeout(this.glassTimer) }
+
+  /** Display (DIP) behind the presenter; the glass backdrop captures only this screen. */
+  get glassDisplay(): GlassDisplay {
+    const presenter = this.presenterWindow
+    const display = presenter && !presenter.isDestroyed() ? screen.getDisplayMatching(presenter.getBounds()) : screen.getPrimaryDisplay()
+    return { ...display.bounds }
+  }
+
+  private showSetup(): void {
+    const setup = this.setupWindow && !this.setupWindow.isDestroyed() ? this.setupWindow : this.create()
+    setup.show()
+    setup.focus()
+    this.notifySurfaceRestored(setup)
+  }
+  /** Fail closed: the presenter never appears without requested protection. */
+  private presenterShowable(): BrowserWindow | undefined {
+    const presenter = this.presenterWindow
+    if (!presenter || presenter.isDestroyed() || !this.isPresenter || !this.presenterReady) return undefined
+    if (this.capture.status(presenter).electronReported) return presenter
+    this.workspace = { ...this.workspace, error: 'Capture protection was lost. The presenter window remains hidden.' }
+    this.onWorkspaceStatusChange?.()
+    return undefined
+  }
+  private showPresenter(): void {
+    const presenter = this.presenterShowable()
+    if (!presenter) return
+    presenter.show()
+    // The screen-saver level stays above fullscreen presentation windows.
+    presenter.setAlwaysOnTop(true, 'screen-saver')
+    presenter.focus()
+    this.pushGlassDisplay(true)
+    this.notifySurfaceRestored(presenter)
+  }
+  private showPresenterInactive(): void {
+    const presenter = this.presenterShowable()
+    if (!presenter) return
+    presenter.showInactive()
+    presenter.setAlwaysOnTop(true, 'screen-saver')
+    this.notifySurfaceRestored(presenter)
+  }
+  private guardWindow(window: BrowserWindow): void {
+    window.on('close', (event) => {
+      if (this.quitting) return
+      event.preventDefault()
+      window.hide()
+    })
+    window.on('closed', () => {
+      if (window === this.setupWindow) { this.setupWindow = undefined; this.unregisterDisplayListeners() }
+      if (window === this.presenterWindow) this.presenterWindow = undefined
+    })
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    window.webContents.on('will-navigate', (event) => event.preventDefault())
+  }
+  /**
+   * Grants the presenter's own screen to its liquid-glass backdrop. Capture
+   * protection keeps the presenter itself out of the stream, frames never
+   * leave the renderer, and any other requester is denied.
+   */
+  private registerGlassCapture(presenter: BrowserWindow): void {
+    presenter.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
+      const target = this.presenterWindow
+      const allowed = Boolean(target && !target.isDestroyed() && request.frame === target.webContents.mainFrame &&
+        this.isPresenter && this.store.settings.liveGlass && !request.audioRequested)
+      if (!allowed || !target) { callback({}); return }
+      const displayId = String(screen.getDisplayMatching(target.getBounds()).id)
+      void desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } })
+        .then((sources) => { const source = sources.find((item) => item.display_id === displayId); callback(source ? { video: source } : {}) })
+        .catch(() => callback({}))
+    })
+  }
+  /** Windows emits thousands of move events while dragging; only display changes matter here. */
+  private pushGlassDisplay(force = false): void {
+    if (this.glassTimer && !force) return
+    clearTimeout(this.glassTimer)
+    this.glassTimer = setTimeout(() => {
+      this.glassTimer = undefined
+      const presenter = this.presenterWindow
+      if (!presenter || presenter.isDestroyed()) return
+      const display = screen.getDisplayMatching(presenter.getBounds())
+      if (!force && display.id === this.glassDisplayId) return
+      this.glassDisplayId = display.id
+      presenter.webContents.send(channels.glassDisplay, { ...display.bounds })
+    }, force ? 0 : 100)
+  }
 
   registerShortcuts(): boolean {
     return this.registerShortcutSet(this.store.settings.askShortcut, this.store.settings.hideShortcut)
@@ -323,7 +405,7 @@ export class WindowManager {
   private applyClickThrough(enabled: boolean): void {
     const changed = this.clickThrough !== enabled
     this.clickThrough = enabled
-    this.window?.setIgnoreMouseEvents(enabled, { forward: true })
+    this.presenterWindow?.setIgnoreMouseEvents(enabled, { forward: true })
     if (changed) this.notifyClickThroughStatus()
   }
 
@@ -341,13 +423,13 @@ export class WindowManager {
       { type: 'separator' }, { label: 'Quit', click: () => app.quit() }
     ]))
   }
-  private persistBounds(): void {
-    if (this.resizingContent || this.workspace.transition !== 'idle') return
+  private persistBounds(window: BrowserWindow): void {
+    if (this.resizingContent || this.quitting) return
     clearTimeout(this.boundsTimer)
     this.boundsTimer = setTimeout(() => {
-      if (!this.window || this.workspace.transition !== 'idle') return
-      const bounds = this.window.getBounds()
-      if (this.isPresenter) { const { x, y, width } = bounds; void this.store.setPresenterLayout({ x, y, width }); this.resizePresenter(this.presenterHeight) }
+      if (window.isDestroyed() || !window.isVisible()) return
+      const bounds = window.getBounds()
+      if (window === this.presenterWindow) { const { x, y, width } = bounds; void this.store.setPresenterLayout({ x, y, width }); this.resizePresenter(this.presenterHeight) }
       else void this.store.setWindowBounds(bounds)
     }, 250)
   }
@@ -375,27 +457,6 @@ export class WindowManager {
 
   private defaultBounds(): OverlayBounds { return defaultOverlayBounds(screen.getPrimaryDisplay().workArea) }
 
-  private showInactiveTopmost(window: BrowserWindow): void {
-    if (this.workspace.transition !== 'idle') { this.onWorkspaceStatusChange?.(); return }
-    window.showInactive()
-    // The screen-saver level is the Electron-supported topmost tier that
-    // remains effective over fullscreen presentation windows.
-    window.setAlwaysOnTop(this.isPresenter, this.isPresenter ? 'screen-saver' : 'normal')
-    this.notifySurfaceRestored(window)
-  }
-
-  private showFocusedTopmost(window: BrowserWindow): void {
-    if (this.workspace.transition !== 'idle') {
-      if (this.workspace.error) { this.workspace = { ...this.workspace, transitionId: randomUUID(), error: undefined }; this.beginTransition() }
-      else this.onWorkspaceStatusChange?.()
-      return
-    }
-    window.show()
-    window.setAlwaysOnTop(this.isPresenter, this.isPresenter ? 'screen-saver' : 'normal')
-    window.focus()
-    this.notifySurfaceRestored(window)
-  }
-
   private notifySurfaceRestored(window = this.window): void {
     if (!window || window.isDestroyed()) return
     try { window.webContents.send(channels.surfaceRestored) } catch { /* renderer lifecycle notifications are best effort */ }
@@ -417,7 +478,6 @@ export class WindowManager {
     this.displayListenersRegistered = false
   }
 
-  private ensureWindow(): BrowserWindow { return this.window && !this.window.isDestroyed() ? this.window : this.create() }
 }
 
 export function defaultOverlayBounds(area: WorkArea): OverlayBounds {

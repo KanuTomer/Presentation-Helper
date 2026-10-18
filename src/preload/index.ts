@@ -38,7 +38,6 @@ const api: PresenterAPI = {
   requestSetup: (section = 'settings') => ipcRenderer.invoke(channels.requestSetup, section),
   confirmSetup: (cancelActive) => ipcRenderer.invoke(channels.confirmSetup, cancelActive),
   dismissSetupRequest: () => ipcRenderer.invoke(channels.dismissSetup),
-  acknowledgeWorkspace: (id) => ipcRenderer.invoke(channels.workspaceReady, id),
   resizePresenter: (height) => ipcRenderer.invoke(channels.resizePresenter, height),
   toggleListening: () => ipcRenderer.invoke(channels.toggleListening),
   copyCode: (code) => ipcRenderer.invoke(channels.copyCode, code),
@@ -59,6 +58,8 @@ const api: PresenterAPI = {
   onOpenSettings: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.openSettings, listener); return () => ipcRenderer.removeListener(channels.openSettings, listener) },
   onOpenPrivacy: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.openPrivacy, listener); return () => ipcRenderer.removeListener(channels.openPrivacy, listener) },
   onSurfaceRestored: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.surfaceRestored, listener); return () => ipcRenderer.removeListener(channels.surfaceRestored, listener) },
+  getGlassDisplay: () => ipcRenderer.invoke(channels.getGlassDisplay),
+  onGlassDisplay: (callback) => { const listener = (_event: Electron.IpcRendererEvent, display: Parameters<typeof callback>[0]) => callback(display); ipcRenderer.on(channels.glassDisplay, listener); return () => ipcRenderer.removeListener(channels.glassDisplay, listener) },
   onTranscriptDraft: (callback) => { const listener = (_event: Electron.IpcRendererEvent, draft: unknown) => { const parsed = parseTranscriptDraft(draft); if (parsed) callback(parsed) }; ipcRenderer.on(channels.transcriptDraft, listener); return () => ipcRenderer.removeListener(channels.transcriptDraft, listener) },
   onError: (callback) => { const listener = (_event: Electron.IpcRendererEvent, error: Parameters<typeof callback>[0]) => callback(error); ipcRenderer.on(channels.appError, listener); return () => ipcRenderer.removeListener(channels.appError, listener) }
 }

@@ -25,6 +25,9 @@ let quitting = false
 let audioInitialized = false
 
 if (process.env.PRESENTERAI_E2E_USER_DATA) app.setPath('userData', process.env.PRESENTERAI_E2E_USER_DATA)
+// The presenter's liquid-glass backdrop is a per-frame shader; prefer the
+// discrete GPU on hybrid laptops.
+app.commandLine.appendSwitch('force_high_performance_gpu')
 
 const packagedFtsSmoke = fts5SmokeOutputPath()
 const packagedHelperSmoke = helperSmokeOutputPath()
@@ -126,6 +129,7 @@ if (packagedFtsSmoke) {
     // handler are ready. This closes the same startup race for a slow FTS
     // rebuild that early helper registration closes for native initialization.
     windows.create()
+    windows.applyFontScale(store.settings.fontScale)
     const e2eDelay = process.env.PRESENTERAI_E2E_HELPER_START_DELAY_MS
     if (process.env.PRESENTERAI_E2E === '1' && e2eDelay && Number(e2eDelay) > 0) {
       await new Promise((resolve) => setTimeout(resolve, Math.min(10_000, Number(e2eDelay))))

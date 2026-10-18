@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AppSettings } from '../src/shared/contracts'
-import { canonicalAccelerator, parseSettingsPatch, validateSettingsMutation } from '../src/main/settings/validation'
+import { appSettingsSchema, canonicalAccelerator, parseSettingsPatch, validateSettingsMutation } from '../src/main/settings/validation'
 
 const settings: AppSettings = {
   neonIntensity: 0.65, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna',
@@ -40,6 +40,16 @@ describe('runtime settings validation', () => {
     expect(() => parseSettingsPatch({ inrPerUsd: 84 })).toThrow()
     expect(() => parseSettingsPatch({ projectSummary: '🧪'.repeat(4_001) })).toThrow(/4,000/i)
     expect(() => parseSettingsPatch({ telemetry: true })).toThrow(/unrecognized|invalid/i)
+  })
+
+  it('bounds presenter glass and text size, and fills defaults for older stored settings', () => {
+    expect(parseSettingsPatch({ glassHaze: 0, fontScale: 1.3, liveGlass: false })).toEqual({ glassHaze: 0, fontScale: 1.3, liveGlass: false })
+    expect(parseSettingsPatch({ neonIntensity: 0.65 })).toEqual({ neonIntensity: 0.65 })
+    for (const patch of [{ glassHaze: -0.01 }, { glassHaze: 1.01 }, { fontScale: 0.8 }, { fontScale: 1.31 }, { liveGlass: 'yes' }]) {
+      expect(() => parseSettingsPatch(patch)).toThrow()
+    }
+    const { sessionBudgetUsd: _budget, ...stored } = settings as AppSettings & { sessionBudgetUsd: number }
+    expect(appSettingsSchema.parse(stored)).toMatchObject({ glassHaze: 0.5, fontScale: 1, liveGlass: true })
   })
 
   it('normalizes approved vocabulary without accepting duplicate or oversized terms', () => {

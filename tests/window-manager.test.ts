@@ -21,6 +21,8 @@ vi.mock('electron', () => ({
   Menu: { buildFromTemplate: vi.fn() },
   Tray: class {},
   app: { quit: vi.fn() },
+  desktopCapturer: { getSources: vi.fn(async () => []) },
+  nativeTheme: {},
   globalShortcut: { register: (key: string, action: () => void) => { const ok = register(key, action); if (ok) registered.add(key); return ok }, unregister: (key: string) => { registered.delete(key); unregister(key) }, isRegistered: (key: string) => registered.has(key) },
   nativeImage: { createFromDataURL: vi.fn() },
   screen: {
@@ -71,7 +73,7 @@ describe('window recovery shortcuts', () => {
     const { WindowManager } = await import('../src/main/windows/windowManager')
     const windows = new WindowManager(store as never, {} as never)
     const setIgnoreMouseEvents = vi.fn()
-    windows.window = { setIgnoreMouseEvents } as never
+    windows.presenterWindow = { setIgnoreMouseEvents } as never
 
     expect(() => windows.setClickThrough(true)).toThrow(/Control\+Shift\+I/)
     expect(windows.clickThroughStatus).toEqual({
@@ -106,12 +108,12 @@ describe('window recovery shortcuts', () => {
     const { WindowManager } = await import('../src/main/windows/windowManager')
     const windows = new WindowManager(store as never, {} as never)
     const setIgnoreMouseEvents = vi.fn()
-    windows.window = { setIgnoreMouseEvents } as never
+    windows.presenterWindow = { setIgnoreMouseEvents } as never
     const statuses: unknown[] = []
     windows.onClickThroughStatusChange = (status) => statuses.push(status)
 
     expect(windows.registerShortcuts()).toBe(true)
-    ;(windows as unknown as { workspace: unknown }).workspace = { mode: 'presenter', transition: 'idle' }
+    ;(windows as unknown as { workspace: unknown }).workspace = { mode: 'presenter' }
     windows.setClickThrough(true)
     windows.emergencyUnlock()
 
@@ -141,316 +143,211 @@ describe('window recovery shortcuts', () => {
 
   it('registers recovery before refusing an unsafe persisted click-through state at startup', async () => {
     register.mockImplementation((accelerator: string) => accelerator !== 'Control+Shift+I')
-    const setIgnoreMouseEvents = vi.fn()
-    const fakeWindow = {
-      isDestroyed: () => false,
-      getBounds: () => ({ x: 100, y: 100, width: 1100, height: 720 }),
-      setAlwaysOnTop: vi.fn(),
-      setIgnoreMouseEvents,
-      once: vi.fn(),
-      on: vi.fn(),
-      loadFile: vi.fn(),
-      webContents: {
-        once: vi.fn(),
-        setWindowOpenHandler: vi.fn(),
-        on: vi.fn()
-      }
-    }
-    browserWindowConstructor.mockImplementation(function BrowserWindowMock() { return fakeWindow })
-    const updateSettings = vi.fn(async () => undefined)
-    const store = {
-      windowLayoutRevision: 999,
-      windowBounds: { x: 100, y: 100, width: 1100, height: 720 },
-      settings: {
-        neonIntensity: 0.65,
-        clickThrough: true,
-        askShortcut: 'Control+Space',
-        hideShortcut: 'Control+Shift+H'
-      },
-      updateSettings,
-      setWindowBounds: vi.fn(async () => undefined),
-      setWindowLayout: vi.fn(async () => undefined)
-    }
-    const capture = { setEnabled: vi.fn() }
-    const { WindowManager } = await import('../src/main/windows/windowManager')
-    const windows = new WindowManager(store as never, capture as never)
-    ;(windows as unknown as { tray: unknown }).tray = {}
-
+    const { windows, created, store } = await created2({ clickThrough: true })
     windows.create()
-
-    expect(browserWindowConstructor).toHaveBeenCalledWith(expect.objectContaining({
-      transparent: true,
-      backgroundColor: '#00000000',
-      roundedCorners: true,
-      hasShadow: false
-    }))
-    expect(browserWindowConstructor.mock.calls[0]?.[0]).not.toHaveProperty('backgroundMaterial')
-    const recoveryAttempt = register.mock.invocationCallOrder[
-      register.mock.calls.findIndex(([shortcut]) => shortcut === 'Control+Shift+I')
-    ]
-    const firstWindowState = setIgnoreMouseEvents.mock.invocationCallOrder[0]
-    expect(recoveryAttempt).toBeLessThan(firstWindowState)
-    expect(setIgnoreMouseEvents).not.toHaveBeenCalledWith(true, expect.anything())
-    expect(setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, { forward: true })
-    expect(updateSettings).toHaveBeenCalledWith({ clickThrough: false })
-  })
-
-  it('restores the renderer surface exactly once for each show, restore, resize, and display lifecycle event', async () => {
-    const onceHandlers = new Map<string, () => void>()
-    const windowHandlers = new Map<string, () => void>()
-    let visible = false
-    const fakeWindow = {
-      isDestroyed: () => false,
-      isVisible: () => visible,
-      getBounds: () => ({ x: 100, y: 100, width: 1100, height: 720 }),
-      setAlwaysOnTop: vi.fn(),
-      setBounds: vi.fn(),
-      setIgnoreMouseEvents: vi.fn(),
-      showInactive: vi.fn(() => { visible = true }),
-      show: vi.fn(() => { visible = true }),
-      hide: vi.fn(() => { visible = false }),
-      focus: vi.fn(),
-      once: vi.fn((event: string, callback: () => void) => onceHandlers.set(event, callback)),
-      on: vi.fn((event: string, callback: () => void) => windowHandlers.set(event, callback)),
-      loadFile: vi.fn(),
-      webContents: {
-        send: vi.fn(),
-        setWindowOpenHandler: vi.fn(),
-        on: vi.fn()
-      }
-    }
-    browserWindowConstructor.mockImplementation(function TransparentWindowMock() { return fakeWindow })
-    const store = {
-      windowLayoutRevision: 999,
-      windowBounds: { x: 100, y: 100, width: 1100, height: 720 },
-      settings: {
-        neonIntensity: 0.65, clickThrough: false,
-        askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H'
-      },
-      updateSettings: vi.fn(async () => undefined),
-      setWindowBounds: vi.fn(async () => undefined),
-      setWindowLayout: vi.fn(async () => undefined)
-    }
-    const { WindowManager } = await import('../src/main/windows/windowManager')
-    const windows = new WindowManager(store as never, { setEnabled: vi.fn() } as never)
-    ;(windows as unknown as { tray: unknown }).tray = {}
-
-    expect(windows.create()).toBe(fakeWindow)
-    expect(browserWindowConstructor).toHaveBeenCalledOnce()
-    expect(browserWindowConstructor.mock.calls[0]?.[0]).toMatchObject({
-      transparent: true, backgroundColor: '#00000000', roundedCorners: true, hasShadow: false
-    })
-    expect(browserWindowConstructor.mock.calls[0]?.[0]).not.toHaveProperty('backgroundMaterial')
-
-    onceHandlers.get('ready-to-show')?.()
-    windows.focusAsk()
-    windows.openSettings()
-    windows.showTransmissionPreview()
-    windows.showFromTray()
-    visible = false
-    windows.toggleVisibility()
-    windowHandlers.get('resize')?.()
-    windowHandlers.get('restore')?.()
-    for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) {
-      const listener = screenOn.mock.calls.find(([name]) => name === event)?.[1] as (() => void) | undefined
-      listener?.()
-    }
-
-    expect(fakeWindow.webContents.send.mock.calls.filter(([channel]) => channel === 'ui:surface-restored')).toHaveLength(11)
-    expect(screenOn.mock.calls.map(([event]) => event)).toEqual([
-      'display-added', 'display-removed', 'display-metrics-changed'
-    ])
-
-    windowHandlers.get('closed')?.()
-    expect(screenRemoveListener.mock.calls.map(([event]) => event)).toEqual([
-      'display-added', 'display-removed', 'display-metrics-changed'
-    ])
+    const presenter = created[1]!
+    const recoveryAttempt = register.mock.invocationCallOrder[register.mock.calls.findIndex(([shortcut]) => shortcut === 'Control+Shift+I')]
+    expect(recoveryAttempt).toBeLessThan(presenter.loadFile.mock.invocationCallOrder[0]!)
+    expect(presenter.setIgnoreMouseEvents).not.toHaveBeenCalledWith(true, expect.anything())
+    expect(store.updateSettings).toHaveBeenCalledWith({ clickThrough: false })
   })
 
   it('never restores persisted click-through without a fresh user confirmation', async () => {
-    const setIgnoreMouseEvents = vi.fn()
-    const fakeWindow = {
-      isDestroyed: () => false,
-      getBounds: () => ({ x: 100, y: 100, width: 1100, height: 720 }),
-      setAlwaysOnTop: vi.fn(),
-      setIgnoreMouseEvents,
-      once: vi.fn(),
-      on: vi.fn(),
-      loadFile: vi.fn(),
-      webContents: {
-        setWindowOpenHandler: vi.fn(),
-        on: vi.fn()
-      }
-    }
-    browserWindowConstructor.mockImplementation(function BrowserWindowMock() { return fakeWindow })
-    const updateSettings = vi.fn(async () => undefined)
-    const store = {
-      windowLayoutRevision: 999,
-      windowBounds: { x: 100, y: 100, width: 1100, height: 720 },
-      settings: {
-        neonIntensity: 0.65,
-        clickThrough: true,
-        askShortcut: 'Control+Space',
-        hideShortcut: 'Control+Shift+H'
-      },
-      updateSettings,
-      setWindowBounds: vi.fn(async () => undefined),
-      setWindowLayout: vi.fn(async () => undefined)
-    }
-    const { WindowManager } = await import('../src/main/windows/windowManager')
-    const windows = new WindowManager(store as never, { setEnabled: vi.fn() } as never)
-    ;(windows as unknown as { tray: unknown }).tray = {}
-
+    const { windows, store } = await created2({ clickThrough: true })
     windows.create()
-
     expect(windows.clickThroughStatus).toMatchObject({ enabled: false, recoveryAvailable: true })
-    expect(setIgnoreMouseEvents).not.toHaveBeenCalledWith(true, expect.anything())
-    expect(setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, { forward: true })
-    expect(updateSettings).toHaveBeenCalledWith({ clickThrough: false })
+    expect(store.updateSettings).toHaveBeenCalledWith({ clickThrough: false })
+  })
+
+  it('creates an ordinary Setup window and a hidden, protected, frameless presenter', async () => {
+    const { windows, created, capture } = await created2()
+    windows.create()
+    expect(created).toHaveLength(2)
+    const [setup, presenter] = created
+    expect(setup!.options).toMatchObject({ show: false, title: 'PresenterAI' })
+    expect(setup!.options).not.toHaveProperty('frame')
+    expect(setup!.options).not.toHaveProperty('transparent')
+    expect(presenter!.options).toMatchObject({ frame: false, transparent: false, backgroundMaterial: 'acrylic', skipTaskbar: true, alwaysOnTop: true, show: false })
+    expect(capture.setEnabled).toHaveBeenCalledWith(presenter, true)
+    expect(capture.setEnabled).toHaveBeenCalledWith(setup, false)
+    // Protection is requested before the presenter loads any content.
+    const protectCall = capture.setEnabled.mock.calls.findIndex(([window, enabled]) => window === presenter && enabled)
+    expect(capture.setEnabled.mock.invocationCallOrder[protectCall]).toBeLessThan(presenter!.loadFile.mock.invocationCallOrder[0]!)
+    expect(presenter!.loadFile).toHaveBeenCalledWith(expect.any(String), { query: { view: 'presenter' } })
+    expect(setup!.loadFile).toHaveBeenCalledWith(expect.any(String), { query: { view: 'setup' } })
   })
 
   it('requests protected confirmation before opening Privacy from presenter mode', async () => {
-    const updateSettings = vi.fn(async () => undefined)
-    const store = {
-      settings: { askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H' },
-      updateSettings
-    }
-    const { WindowManager } = await import('../src/main/windows/windowManager')
-    const windows = new WindowManager(store as never, {} as never)
-    expect(windows.registerShortcuts()).toBe(true)
-    const fakeWindow = {
-      isDestroyed: () => false,
-      setIgnoreMouseEvents: vi.fn(),
-      show: vi.fn(), focus: vi.fn(), setAlwaysOnTop: vi.fn(),
-      webContents: { send: vi.fn() }
-    }
-    windows.window = fakeWindow as never
-    ;(windows as unknown as { workspace: unknown }).workspace = { mode: 'presenter', transition: 'idle' }
+    const { windows, created } = await created2()
+    windows.create(); const [, presenter] = created
+    presenter!.fire('ready-to-show')
+    windows.enterPresenter()
     windows.setClickThrough(true)
+    presenter!.show.mockClear()
 
     windows.openPrivacy()
 
     expect(windows.isClickThrough).toBe(false)
-    expect(fakeWindow.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, { forward: true })
-    expect(updateSettings).toHaveBeenCalledWith({ clickThrough: false })
-    expect(fakeWindow.show).toHaveBeenCalledOnce()
-    expect(fakeWindow.setAlwaysOnTop).toHaveBeenCalledWith(true, 'screen-saver')
-    expect(fakeWindow.focus).toHaveBeenCalledOnce()
-    expect(fakeWindow.webContents.send).not.toHaveBeenCalledWith('ui:open-privacy')
+    expect(presenter!.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, { forward: true })
+    expect(presenter!.show).toHaveBeenCalledOnce()
+    expect(presenter!.webContents.send).not.toHaveBeenCalledWith('ui:open-privacy')
     expect(windows.workspaceStatus).toMatchObject({ mode: 'presenter', setupRequest: 'privacy' })
   })
-
 })
 
-describe('workspace transition safety', () => {
-  async function fixture(protectionWorks = true) {
-    const { WindowManager } = await import('../src/main/windows/windowManager')
-    const area = { x: 0, y: 0, width: 1920, height: 1080 }
-    getDisplayMatching.mockReturnValue({ workArea: area })
-    let bounds = { x: 100, y: 100, width: 1100, height: 720 }
-    let protectedWindow = false
-    const store = { settings: { askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H' },
-      windowBounds: { ...bounds }, presenterLayout: undefined,
-      setWindowBounds: vi.fn(async () => undefined), setPresenterLayout: vi.fn(async () => undefined), updateSettings: vi.fn(async () => undefined) }
-    const capture = { setEnabled: vi.fn((_window, enabled) => { protectedWindow = enabled && protectionWorks }), status: () => ({ electronReported: protectedWindow }) }
-    const window = { isDestroyed: () => false, getBounds: () => bounds,
-      setBounds: vi.fn((value) => { bounds = value }), setMinimumSize: vi.fn(), setSkipTaskbar: vi.fn(), setAlwaysOnTop: vi.fn(),
-      setIgnoreMouseEvents: vi.fn(), hide: vi.fn(), show: vi.fn(), focus: vi.fn(), webContents: { send: vi.fn(), getBackgroundThrottling: vi.fn(() => true), setBackgroundThrottling: vi.fn() } }
-    const windows = new WindowManager(store as never, capture as never)
-    windows.window = window as never
-    return { windows, window, store, capture }
+interface FakeWindow {
+  options: Record<string, unknown>
+  visible: boolean
+  bounds: { x: number; y: number; width: number; height: number }
+  handlers: Map<string, Array<() => void>>
+  fire(event: string): void
+  [key: string]: unknown
+  show: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>
+  setIgnoreMouseEvents: ReturnType<typeof vi.fn>; loadFile: ReturnType<typeof vi.fn>; setAlwaysOnTop: ReturnType<typeof vi.fn>
+  webContents: { send: ReturnType<typeof vi.fn>; [key: string]: unknown }
+}
+
+/** Builds a WindowManager whose BrowserWindow constructor records each window it creates. */
+async function created2(settings: Record<string, unknown> = {}, protectionWorks = true) {
+  const created: FakeWindow[] = []
+  browserWindowConstructor.mockImplementation(function FakeBrowserWindow(options: Record<string, unknown>) {
+    const handlers = new Map<string, Array<() => void>>()
+    const window: FakeWindow = {
+      options,
+      visible: false, bounds: { x: 100, y: 100, width: Number(options.width ?? 1100), height: Number(options.height ?? 720) }, handlers,
+      fire: (event: string) => handlers.get(event)?.forEach((handler) => handler()),
+      isDestroyed: () => false, isVisible: () => window.visible,
+      getBounds: () => window.bounds, setBounds: vi.fn((value) => { window.bounds = value }),
+      show: vi.fn(() => { window.visible = true }), showInactive: vi.fn(() => { window.visible = true }),
+      hide: vi.fn(() => { window.visible = false }), focus: vi.fn(), setMenu: vi.fn(),
+      setAlwaysOnTop: vi.fn(), setIgnoreMouseEvents: vi.fn(), loadFile: vi.fn(async () => undefined),
+      once: vi.fn((event: string, handler: () => void) => handlers.set(event, [...(handlers.get(event) ?? []), handler])),
+      on: vi.fn((event: string, handler: () => void) => handlers.set(event, [...(handlers.get(event) ?? []), handler])),
+      webContents: {
+        send: vi.fn(), on: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn(), getZoomFactor: () => 1,
+        mainFrame: {}, session: { setDisplayMediaRequestHandler: vi.fn() }
+      }
+    }
+    created.push(window)
+    return window
+  })
+  const area = { x: 0, y: 0, width: 1920, height: 1080 }
+  const display = { id: 1, bounds: area, workArea: area }
+  getDisplayMatching.mockReturnValue(display); getPrimaryDisplay.mockReturnValue(display); getAllDisplays.mockReturnValue([display])
+  const protectedWindows = new Set<unknown>()
+  const capture = {
+    setEnabled: vi.fn((window: unknown, enabled: boolean) => { if (enabled && protectionWorks) protectedWindows.add(window); else protectedWindows.delete(window) }),
+    status: (window?: unknown) => ({ electronReported: protectedWindows.has(window) })
   }
-  it('starts normal, hides before protection, and shows only after the matching render acknowledgement', async () => {
-    const { windows, window, capture } = await fixture()
-    expect(windows.workspaceStatus).toEqual({ mode: 'setup', transition: 'idle' })
+  const store = {
+    windowLayoutRevision: 999, windowBounds: { x: 100, y: 100, width: 1100, height: 720 }, presenterLayout: undefined,
+    settings: { clickThrough: false, askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', liveGlass: true, ...settings },
+    updateSettings: vi.fn(async () => undefined), setWindowBounds: vi.fn(async () => undefined),
+    setWindowLayout: vi.fn(async () => undefined), setPresenterLayout: vi.fn(async () => undefined)
+  }
+  const { WindowManager } = await import('../src/main/windows/windowManager')
+  const windows = new WindowManager(store as never, capture as never)
+  ;(windows as unknown as { tray: unknown }).tray = {}
+  return { windows, created, store, capture }
+}
+
+describe('two-window workspaces', () => {
+  beforeEach(() => { browserWindowConstructor.mockReset(); registered.clear(); register.mockReset(); register.mockReturnValue(true) })
+
+  it('shows Setup first, then swaps to the presenter only once it has rendered', async () => {
+    const { windows, created } = await created2()
+    windows.create(); const [setup, presenter] = created
+    setup!.fire('ready-to-show')
+    expect(setup!.show).toHaveBeenCalledOnce()
+    expect(windows.workspaceStatus).toEqual({ mode: 'setup' })
+
     windows.enterPresenter()
-    expect(window.webContents.setBackgroundThrottling).toHaveBeenCalledWith(false)
-    expect(window.webContents.setBackgroundThrottling.mock.invocationCallOrder[0]).toBeLessThan(window.hide.mock.invocationCallOrder[0])
-    expect(window.hide.mock.invocationCallOrder[0]).toBeLessThan(capture.setEnabled.mock.invocationCallOrder[0])
-    expect(window.show).not.toHaveBeenCalled()
-    expect(window.getBounds()).toMatchObject({ width: 860, height: 180 })
-    windows.acknowledgeWorkspace('stale')
-    expect(window.show).not.toHaveBeenCalled()
-    expect(window.webContents.setBackgroundThrottling).not.toHaveBeenCalledWith(true)
-    windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
+    expect(setup!.hide).toHaveBeenCalledOnce()
+    expect(presenter!.show).not.toHaveBeenCalled()
+    presenter!.fire('ready-to-show')
+    expect(presenter!.show).toHaveBeenCalledOnce()
+    expect(presenter!.setAlwaysOnTop).toHaveBeenLastCalledWith(true, 'screen-saver')
     expect(windows.isPresenter).toBe(true)
-    expect(window.show).toHaveBeenCalledOnce()
-    expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true)
-    expect(window.show.mock.invocationCallOrder[0]).toBeLessThan(window.webContents.setBackgroundThrottling.mock.invocationCallOrder[1])
+    expect(presenter!.bounds).toMatchObject({ width: 860, height: 180 })
     windows.prepareToQuit()
   })
+
   it('fails closed when Electron cannot confirm content protection', async () => {
-    const { windows, window } = await fixture(false)
+    const { windows, created } = await created2({}, false)
+    windows.create(); const [setup, presenter] = created
+    presenter!.fire('ready-to-show')
     expect(() => windows.enterPresenter()).toThrow(/protection/)
     expect(windows.workspaceStatus.mode).toBe('setup')
-    expect(window.setSkipTaskbar).not.toHaveBeenCalledWith(true)
-    expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true)
+    expect(presenter!.show).not.toHaveBeenCalled()
+    expect(setup!.hide).not.toHaveBeenCalled()
     windows.prepareToQuit()
   })
-  it('restores throttling on timeout, reacquires it for tray retry, and releases it on shutdown', async () => {
-    vi.useFakeTimers()
-    const { windows, window } = await fixture()
-    try {
-      windows.enterPresenter()
-      const expired = windows.workspaceStatus.transitionId!
-      vi.advanceTimersByTime(8_000)
-      expect(window.show).not.toHaveBeenCalled()
-      expect(windows.workspaceStatus.error).toContain('remains hidden')
-      expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true)
-      windows.showFromTray()
-      expect(windows.workspaceStatus.transitionId).not.toBe(expired)
-      expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false)
-      windows.acknowledgeWorkspace(expired)
-      expect(window.show).not.toHaveBeenCalled()
-      expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false)
-      windows.prepareToQuit()
-      expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true)
-    } finally { windows.prepareToQuit(); vi.useRealTimers() }
-  })
-  it('preserves previously disabled throttling and releases the lease if protection is lost', async () => {
-    const { windows, window, capture } = await fixture()
-    window.webContents.getBackgroundThrottling.mockReturnValue(false)
+
+  it('keeps the presenter hidden if protection is lost before it is shown', async () => {
+    const { windows, created, capture } = await created2()
+    windows.create(); const [, presenter] = created
     windows.enterPresenter()
-    capture.setEnabled(window, false)
-    windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
-    expect(window.show).not.toHaveBeenCalled()
-    expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false)
+    capture.setEnabled(presenter, false)
+    presenter!.fire('ready-to-show')
+    expect(presenter!.show).not.toHaveBeenCalled()
     expect(windows.workspaceStatus.error).toContain('protection was lost')
     windows.prepareToQuit()
   })
-  it('retains protection throughout Setup confirmation and removes it only after Setup paints', async () => {
-    const { windows, window, store, capture } = await fixture()
-    windows.enterPresenter(); windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
+
+  it('requires confirmation to return to Setup and keeps the presenter alive while hidden', async () => {
+    const { windows, created, store, capture } = await created2()
+    windows.create(); const [setup, presenter] = created
+    presenter!.fire('ready-to-show')
+    windows.enterPresenter()
     expect(() => windows.confirmSetup()).toThrow(/confirmation/)
     windows.openSettingsFromTray()
     expect(windows.workspaceStatus).toMatchObject({ mode: 'presenter', setupRequest: 'settings' })
-    expect(capture.status().electronReported).toBe(true)
     windows.dismissSetupRequest()
     expect(windows.workspaceStatus.setupRequest).toBeUndefined()
+
     windows.requestSetup('privacy'); windows.confirmSetup()
-    expect(capture.status().electronReported).toBe(true)
-    expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false)
-    expect(window.hide).toHaveBeenCalledTimes(2)
-    windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
-    expect(capture.status().electronReported).toBe(false)
-    expect(window.setSkipTaskbar).toHaveBeenLastCalledWith(false)
-    expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true)
-    expect(store.setPresenterLayout.mock.calls[0][0]).not.toHaveProperty('height')
+    expect(presenter!.hide).toHaveBeenCalledOnce()
+    expect(setup!.show).toHaveBeenCalled()
+    expect(windows.workspaceStatus).toMatchObject({ mode: 'setup', setupRequest: 'privacy' })
+    expect(capture.status(presenter).electronReported).toBe(true)
+    expect(capture.status(setup).electronReported).toBe(false)
+    expect(store.setPresenterLayout.mock.calls[0]![0]).not.toHaveProperty('height')
+    expect(browserWindowConstructor).toHaveBeenCalledTimes(2)
     windows.prepareToQuit()
   })
+
   it('clamps dynamic height, shrinks again, and rejects invalid size notifications', async () => {
-    const { windows, window } = await fixture()
-    windows.enterPresenter(); windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
-    windows.resizePresenter(5000); expect(window.getBounds().height).toBe(1048)
-    windows.resizePresenter(175); expect(window.getBounds().height).toBe(175)
+    const { windows, created } = await created2()
+    windows.create(); const [, presenter] = created
+    presenter!.fire('ready-to-show'); windows.enterPresenter()
+    windows.resizePresenter(5000); expect(presenter!.bounds.height).toBe(1048)
+    windows.resizePresenter(175); expect(presenter!.bounds.height).toBe(175)
     for (const height of [NaN, Infinity, -1, 100001]) expect(() => windows.resizePresenter(height)).toThrow(/height/)
     windows.prepareToQuit()
   })
+
   it('does not send focus-to-ask from Setup or allow click-through there', async () => {
-    const { windows, window } = await fixture()
+    const { windows, created } = await created2()
+    windows.create(); const [setup, presenter] = created
     windows.focusAsk()
-    expect(window.webContents.send).not.toHaveBeenCalledWith('ui:focus-ask')
+    expect(presenter!.webContents.send).not.toHaveBeenCalledWith('ui:focus-ask')
+    expect(setup!.show).toHaveBeenCalled()
     expect(() => windows.setClickThrough(true)).toThrow()
+    windows.prepareToQuit()
+  })
+
+  it('grants the glass capture only to the presenter frame while presenting', async () => {
+    const { windows, created } = await created2()
+    windows.create(); const [, presenter] = created
+    const handler = (presenter!.webContents.session as { setDisplayMediaRequestHandler: ReturnType<typeof vi.fn> }).setDisplayMediaRequestHandler.mock.calls[0]![0] as (request: unknown, callback: (value: unknown) => void) => void
+    const denied = vi.fn()
+    handler({ frame: presenter!.webContents.mainFrame, audioRequested: false }, denied)
+    expect(denied).toHaveBeenCalledWith({})
+    presenter!.fire('ready-to-show'); windows.enterPresenter()
+    const foreign = vi.fn()
+    handler({ frame: {}, audioRequested: false }, foreign)
+    expect(foreign).toHaveBeenCalledWith({})
+    windows.prepareToQuit()
   })
 })
 

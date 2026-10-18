@@ -286,7 +286,7 @@ const usageRecordInputSchema: z.ZodType<UsageRecordInput> = z.object({
 })
 
 const defaultSettings: AppSettings = {
-  neonIntensity: 0.65, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-6-luna',
+  neonIntensity: 0.65, glassHaze: 0.5, fontScale: 1, liveGlass: true, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-6-luna',
   strongModel: 'gpt-6.1-sol', normalReasoning: 'medium', strongReasoning: 'medium', transcriptionModel: 'gpt-4o-mini-transcribe',
   askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', listenShortcut: 'Control+Shift+Space',
   projectSummary: '', approvedVocabulary: []

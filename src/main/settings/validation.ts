@@ -37,6 +37,10 @@ const vocabularySchema = z.array(z.string()).max(30).transform((value, context) 
 /** Strict persistence and IPC boundary for the renderer-visible settings object. */
 export const appSettingsSchema = z.object({
   neonIntensity: z.number().finite().min(0).max(1),
+  // Presenter glass: 0 is clear glass, 1 is hazy, distorted, and dark.
+  glassHaze: z.number().finite().min(0).max(1).default(0.5),
+  fontScale: z.number().finite().min(0.85).max(1.3).default(1),
+  liveGlass: z.boolean().default(true),
   clickThrough: z.boolean(),
   modelMode: z.enum(['normal', 'strong']),
   normalModel: modelSchema,
@@ -53,6 +57,9 @@ export const appSettingsSchema = z.object({
 }).strict()
 
 export const appSettingsPatchSchema = appSettingsSchema.partial().extend({
+  glassHaze: z.number().finite().min(0).max(1).optional(),
+  fontScale: z.number().finite().min(0.85).max(1.3).optional(),
+  liveGlass: z.boolean().optional(),
   normalReasoning: z.enum(['low', 'medium', 'high']).optional(),
   strongReasoning: z.enum(['low', 'medium', 'high']).optional()
 }).strict()
