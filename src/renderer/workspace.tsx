@@ -47,10 +47,9 @@ export function usePresenterSizing(shell: React.RefObject<HTMLElement | null>, c
         const style = getComputedStyle(contentArea)
         const chrome = Array.from(shell.current.children).filter((item) => item !== contentArea && !item.classList.contains('liquid-glass'))
           .reduce((sum, item) => sum + item.getBoundingClientRect().height, 0)
-        const preview = document.querySelector('.snapshot-preview')
         const height = Math.ceil(chrome + content.current.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom))
         const confirmation = document.querySelector<HTMLElement>('.click-through-confirmation')
-        const requested = Math.max(height, preview ? 620 : 0, confirmation ? confirmation.scrollHeight + 36 : 0)
+        const requested = Math.max(height, confirmation ? confirmation.scrollHeight + 36 : 0)
         if (requested === previous) return
         previous = requested
         void window.presenter.resizePresenter(requested).catch(() => undefined)

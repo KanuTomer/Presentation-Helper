@@ -197,9 +197,6 @@ export const solutionResponseSchema = z.object({
   evidence: z.array(z.object({ chunkId: z.string(), documentName: z.string(), location: z.string() })).max(8)
 }).strict().superRefine((value, ctx) => {
   if (value.codeBlocks.reduce((sum, block) => sum + Array.from(block.code).length, 0) > 16_000) ctx.addIssue({ code: 'custom', message: 'Combined code exceeds 16,000 characters.' })
-  if (value.task === 'clarification' && !value.clarification.trim()) ctx.addIssue({ code: 'custom', message: 'A focused clarification is required.' })
-  if (value.task === 'code' && !value.codeBlocks.length) ctx.addIssue({ code: 'custom', message: 'Coding solutions require code.' })
-  if (value.task === 'math' && (!value.steps.length || !value.finalResult.trim())) ctx.addIssue({ code: 'custom', message: 'Math solutions require steps and a result.' })
 })
 export const localAssistantResponseSchema: z.ZodType<AssistantResponse> = z.discriminatedUnion('responseStyle', [
   presenterAssistantResponseSchema,
@@ -368,6 +365,7 @@ export interface AppSettings {
 }
 
 export interface SnapshotMonitor { id: string; name: string; current: boolean; width: number; height: number }
+export interface ScreenshotAttachment { id: string; expiresAt: string }
 export interface SnapshotPreview { id: string; monitorId: string; dataUrl: string; width: number; height: number; bytes: number; expiresAt: string }
 export interface SessionUsageStatus { sessionId: string; startedAt: string; actualUsd: number; inputTokens: number; outputTokens: number; reasoningTokens: number; unpricedRequests: number; pricingVersion: string }
 
@@ -410,6 +408,8 @@ export interface OutboundTransmissionPreview {
   operationId: string
   stage: 'transcription' | 'response'
   audio?: { durationMs: number; bytes: number; endpointName: string }
+  /** A full screenshot of the presenter's monitor is attached. */
+  screenshot?: boolean
   terminologyHint?: string
   chunks: Array<{
     chunkId: string
@@ -556,10 +556,11 @@ export interface PresenterAPI {
   inspectDocument(documentId: string, offset?: number, limit?: number): Promise<DocumentInspectionPage>
   clearSession(): Promise<void>
   startNewSession(): Promise<SessionUsageStatus>
-  listSnapshotMonitors(): Promise<SnapshotMonitor[]>
-  captureSnapshot(monitorId?: string): Promise<SnapshotPreview>
-  discardSnapshot(): Promise<void>
-  solveSnapshot(snapshotId: string): Promise<AskResult>
+  /** Captures the presenter's monitor now; the image stays in the main process. */
+  attachScreenshot(): Promise<ScreenshotAttachment>
+  discardScreenshot(): Promise<void>
+  /** Sends the attached screenshot with the typed question (or solves what is on it). */
+  askAboutScreen(question: string, attachmentId: string): Promise<AskResult>
   getUsage(): Promise<UsageLedger>
   clearUsage(): Promise<void>
   clearCaptureResults(): Promise<void>

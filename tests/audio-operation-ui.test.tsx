@@ -25,16 +25,16 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('audio operation UI', () => {
   it.each([
-    ['starting_capture', 'STARTING SYSTEM AUDIO'],
-    ['finalizing', 'FINALIZING RECORDING'],
-    ['transcribing', 'TRANSCRIBING'],
-    ['retrieving', 'RETRIEVING EVIDENCE'],
-    ['generating', 'GENERATING RESPONSE'],
-    ['cancelling', 'CANCELLING']
+    ['starting_capture', 'Starting system audio'],
+    ['finalizing', 'Finishing recording'],
+    ['transcribing', 'Transcribing'],
+    ['retrieving', 'Finding evidence'],
+    ['generating', 'Writing answer'],
+    ['cancelling', 'Cancelling']
   ] as const)('renders the %s stage without claiming to be listening', (operation, label) => {
     render(<OperationBanner status={status({ operation })} elapsedMs={0} onCancel={() => undefined} onError={() => undefined} />)
     expect(screen.getByRole('status').textContent).toContain(label)
-    expect(screen.queryByText(/LISTENING/)).toBeNull()
+    expect(screen.queryByText(/Listening/)).toBeNull()
   })
 
   it('shows the actual endpoint and acknowledges the first listening frame once per operation', async () => {
@@ -45,7 +45,7 @@ describe('audio operation UI', () => {
       activeAudioEndpoint: { id: 'speakers', name: 'Desk speakers', isDefault: true }
     })
     const { rerender } = render(<OperationBanner status={first} elapsedMs={1_250} onCancel={() => undefined} onError={() => undefined} />)
-    expect(screen.getByRole('status').textContent).toContain('LISTENING · Desk speakers · 1.3s')
+    expect(screen.getByRole('status').textContent).toContain('Listening · Desk speakers · 1.3s')
     await waitFor(() => expect(acknowledge).toHaveBeenCalledWith('audio-1'))
     rerender(<OperationBanner status={{ ...first, operationTimings: { listeningMs: 1_250 } }} elapsedMs={1_300} onCancel={() => undefined} onError={() => undefined} />)
     expect(acknowledge).toHaveBeenCalledTimes(1)

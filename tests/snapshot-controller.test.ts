@@ -12,36 +12,39 @@ function harness() {
   const preview = { present: vi.fn(async () => undefined), clear: vi.fn() }
   return { operations, frames, ai, preview, controller: new SnapshotController(frames, ai as unknown as AiService, operations, preview as unknown as TransmissionPreviewGate) }
 }
-describe('snapshot operation lifecycle', () => {
-  it('does not retrieve or generate during capture; supports two complete requests', async () => {
+describe('screenshot attachment lifecycle', () => {
+  it('attaches without a model call, then answers the typed question with the image', async () => {
     const h = harness()
     for (let index = 0; index < 2; index++) {
-      const frame = await h.controller.capture()
+      const attached = await h.controller.attach()
       expect(h.ai.generate).toHaveBeenCalledTimes(index)
-      expect(h.ai.retrieveSnapshot).toHaveBeenCalledTimes(index)
-      await expect(h.controller.solve(frame.id)).resolves.toMatchObject({ ok: true })
-      expect(() => h.frames.get(frame.id)).toThrow(); expect(h.operations.isBusy).toBe(false)
+      await expect(h.controller.ask(index ? '' : 'Why does this print NaN?', attached.id)).resolves.toMatchObject({ ok: true })
+      expect(() => h.frames.get(attached.id)).toThrow(); expect(h.operations.isBusy).toBe(false)
     }
-    expect(h.ai.generate).toHaveBeenCalledTimes(2)
+    expect(h.ai.generate.mock.calls[0]![0]).toContain('Why does this print NaN?')
+    expect(h.ai.generate.mock.calls[1]![0]).toContain('Identify and solve the primary visible problem')
+    expect(h.preview.present).toHaveBeenCalledWith(expect.objectContaining({ screenshot: true }))
+    expect(h.ai.generate.mock.calls[0]![2]).toMatchObject({ snapshotDataUrl: expect.stringMatching(/^data:image[/]png;base64,/) })
   })
-  it('blocks typed/audio overlap without deleting the active frame', async () => {
-    const h = harness(); const frame = await h.controller.capture(); const typed = h.operations.begin('typed', 'retrieving')
-    await expect(h.controller.solve(frame.id)).resolves.toMatchObject({ ok: false, error: { code: 'busy' } })
-    expect(h.frames.get(frame.id).id).toBe(frame.id); expect(h.ai.generate).not.toHaveBeenCalled(); await h.operations.finish(typed.id, 'success'); h.frames.clear()
+  it('blocks typed/audio overlap without deleting the attachment', async () => {
+    const h = harness(); const attached = await h.controller.attach(); const typed = h.operations.begin('typed', 'retrieving')
+    await expect(h.controller.ask('', attached.id)).resolves.toMatchObject({ ok: false, error: { code: 'busy' } })
+    expect(h.frames.get(attached.id).id).toBe(attached.id); expect(h.ai.generate).not.toHaveBeenCalled()
+    await h.operations.finish(typed.id, 'success'); h.frames.clear()
   })
-  it('requires a rendered context preview and cleans up a cancelled Send', async () => {
-    const h = harness(); const frame = await h.controller.capture()
+  it('requires a rendered context preview and clears the image when cancelled', async () => {
+    const h = harness(); const attached = await h.controller.attach()
     let acknowledged!: () => void
     h.preview.present.mockImplementationOnce(() => new Promise<void>((resolve) => { acknowledged = resolve }))
-    const pending = h.controller.solve(frame.id)
+    const pending = h.controller.ask('', attached.id)
     await vi.waitFor(() => expect(h.preview.present).toHaveBeenCalled())
     expect(h.ai.generate).not.toHaveBeenCalled(); await h.operations.cancel(); acknowledged()
     await expect(pending).resolves.toMatchObject({ ok: false, error: { code: 'cancelled' } })
-    expect(h.ai.generate).not.toHaveBeenCalled(); expect(() => h.frames.get(frame.id)).toThrow(); expect(h.operations.isBusy).toBe(false)
+    expect(h.ai.generate).not.toHaveBeenCalled(); expect(() => h.frames.get(attached.id)).toThrow(); expect(h.operations.isBusy).toBe(false)
   })
-  it('cleans up after failure and allows explicit retry through a new snapshot', async () => {
-    const h = harness(); const frame = await h.controller.capture(); h.ai.generate.mockRejectedValueOnce(new Error('network'))
-    await expect(h.controller.solve(frame.id)).resolves.toMatchObject({ ok: false }); expect(() => h.frames.get(frame.id)).toThrow()
-    const retry = await h.controller.capture(); await expect(h.controller.solve(retry.id)).resolves.toMatchObject({ ok: true })
+  it('rejects a removed or expired attachment', async () => {
+    const h = harness(); const attached = await h.controller.attach(); h.frames.clear()
+    await expect(h.controller.ask('', attached.id)).resolves.toMatchObject({ ok: false })
+    expect(h.ai.generate).not.toHaveBeenCalled()
   })
 })

@@ -40,7 +40,8 @@ export function CodeBlockCard({ block, onCopy }: { block: CodeBlock; onCopy?: Co
     <Highlight theme={themes.vsDark} code={block.code} language={normalizeLanguage(block.language)}>
       {({ className, style, tokens, getLineProps, getTokenProps }) => <pre
         className={`code-scroll ${className}`}
-        style={style}
+        // The theme supplies token colours; the glass panel supplies the background.
+        style={{ ...style, backgroundColor: 'transparent' }}
         tabIndex={0}
         aria-label={`${label} source`}
       ><code>{tokens.map((line, lineIndex) => {

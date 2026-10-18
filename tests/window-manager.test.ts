@@ -320,8 +320,13 @@ describe('two-window workspaces', () => {
     const { windows, created } = await created2()
     windows.create(); const [, presenter] = created
     presenter!.fire('ready-to-show'); windows.enterPresenter()
-    windows.resizePresenter(5000); expect(presenter!.bounds.height).toBe(1048)
-    windows.resizePresenter(175); expect(presenter!.bounds.height).toBe(175)
+    vi.useFakeTimers()
+    try {
+      windows.resizePresenter(5000)
+      expect(presenter!.bounds.height).toBeLessThan(1048) // eased, not jumped
+      vi.advanceTimersByTime(200); expect(presenter!.bounds.height).toBe(1048)
+      windows.resizePresenter(175); vi.advanceTimersByTime(200); expect(presenter!.bounds.height).toBe(175)
+    } finally { vi.useRealTimers() }
     for (const height of [NaN, Infinity, -1, 100001]) expect(() => windows.resizePresenter(height)).toThrow(/height/)
     windows.prepareToQuit()
   })

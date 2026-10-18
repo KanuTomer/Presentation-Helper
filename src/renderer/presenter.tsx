@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import type { AiErrorInfo, AnswerFormat, AppStatus, AssistantResponse, TranscriptionDraft } from '../shared/contracts'
+import type { AiErrorInfo, AnswerFormat, AppStatus, AssistantResponse, ScreenshotAttachment, TranscriptionDraft } from '../shared/contracts'
 import { handleContentScrollKey, isBusy, Notice, useAppState, useRecordingMs } from './appState'
 import { AiErrorPanel } from './aiError'
 import { LiquidGlass } from './liquidGlass'
@@ -7,7 +7,7 @@ import { OperationBanner, ToggleListenButton } from './operationUi'
 import { TransmissionPreviewPanel } from './privacyControls'
 import { answerFormatAfterSubmission, ClickThroughBanner, CopilotQuickControls } from './quickControls'
 import { ResponseCard } from './responseCard'
-import { SnapshotButton } from './snapshot'
+import { ScreenshotChip, SnapshotButton } from './snapshot'
 import { canInsertTranscriptDirectly, mergeTranscriptDraft, TranscriptDraftNotice } from './transcriptDraft'
 import { SetupReturnConfirmation, usePresenterSizing } from './workspace'
 
@@ -22,6 +22,8 @@ export function PresenterApp(): React.JSX.Element {
   const [transcriptDraft, setTranscriptDraft] = useState<{ draft: TranscriptionDraft; conflict: boolean }>()
   const [aiError, setAiError] = useState<AiErrorInfo>()
   const [folded, setFolded] = useState(false)
+  const [attachment, setAttachment] = useState<ScreenshotAttachment>()
+  const [attaching, setAttaching] = useState(false)
   const recordingMs = useRecordingMs(status)
   const shellRef = useRef<HTMLElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -64,9 +66,22 @@ export function PresenterApp(): React.JSX.Element {
     captureComposer.current = undefined
     composerRevision.current += 1
     questionRef.current = ''
-    setQuestion(''); setTranscriptDraft(undefined); setResponse(undefined); setAiError(undefined)
+    setQuestion(''); setTranscriptDraft(undefined); setResponse(undefined); setAiError(undefined); setAttachment(undefined)
     setAnswerFormat(answerFormatAfterSubmission())
   }, [status.sessionUsage.sessionId])
+  // An attached screenshot expires in the main process; drop the chip with it.
+  useEffect(() => {
+    if (!attachment) return
+    const timer = setTimeout(() => setAttachment(undefined), Math.max(0, Date.parse(attachment.expiresAt) - Date.now()))
+    return () => clearTimeout(timer)
+  }, [attachment])
+  const toggleAttachment = async (): Promise<void> => {
+    if (attachment) { setAttachment(undefined); void window.presenter.discardScreenshot().catch(() => undefined); return }
+    setAttaching(true); setAiError(undefined)
+    try { setAttachment(await window.presenter.attachScreenshot()); setTimeout(() => input.current?.focus(), 0) }
+    catch { showAiError({ code: 'unknown', message: 'The screen could not be captured. Try again.', retryable: false }) }
+    finally { setAttaching(false) }
+  }
   useEffect(() => {
     if (status.operationKind !== 'audio' || !status.operationId || !['starting_capture', 'listening'].includes(status.operation)) return
     if (captureComposer.current?.operationId === status.operationId) return
@@ -99,8 +114,10 @@ export function PresenterApp(): React.JSX.Element {
     lastSubmittedFormat.current = requestedFormat
     // Presenter is a one-request override; Code stays the visible default.
     setAnswerFormat(answerFormatAfterSubmission())
+    const screenshot = attachment
+    setAttachment(undefined)
     try {
-      const result = await window.presenter.ask(question, requestedFormat)
+      const result = screenshot ? await window.presenter.askAboutScreen(question, screenshot.id) : await window.presenter.ask(question, requestedFormat)
       if (result.ok) setResponse(result.response); else setAiError(result.error)
       void refresh()
     } catch (value) { setAiError({ code: 'unknown', message: (value as Error).message || 'Request failed.', retryable: false }) }
@@ -119,23 +136,17 @@ export function PresenterApp(): React.JSX.Element {
   }
   const appearance = status.appearance ?? { glassHaze: 0.5, liveGlass: true }
   return <main ref={shellRef} className={`shell presenter ${status.listening ? 'is-listening' : ''}`}>
-    <LiquidGlass haze={appearance.glassHaze} enabled={appearance.liveGlass} />
-    {status.outboundPreview && <TransmissionPreviewPanel
-      preview={status.outboundPreview}
-      onRendered={(operationId, stage) => window.presenter.acknowledgeTransmissionPreview(operationId, stage)}
-      onCancel={() => window.presenter.cancel().then((result) => { if (!result.ok) showAiError(result.error) })}
-      onError={(message) => showAiError({ code: 'privacy_preview_unavailable', message, retryable: true })}
-    />}
+    <LiquidGlass haze={appearance.glassHaze} enabled={appearance.liveGlass} active={workspace.mode === 'presenter'} />
     <header className="titlebar drag-region" inert={confirming}>
       <div className="brand"><span className="brand-mark">P</span><strong>PresenterAI</strong></div>
       <div className="status-row no-drag">
-        <span className={`privacy-dot ${status.capture.electronReported ? 'protected' : 'warning'}`} />
-        <span className="capture-label">{status.capture.electronReported ? 'Hidden from capture*' : 'Protection unavailable'}</span>
+        <span className="capture-label" title="Windows was asked to hide this window from screen capture. Test each recording app.">
+          <span className={`privacy-dot ${status.capture.electronReported ? 'protected' : 'warning'}`} />{status.capture.electronReported ? 'Hidden' : 'Visible to capture'}
+        </span>
         {response && <button aria-expanded={!folded} aria-controls="presenter-answer" onClick={() => setFolded(!folded)}>{folded ? 'Show answer' : 'Fold answer'}</button>}
         <button onClick={() => openSetup()}>← Setup</button>
       </div>
     </header>
-    <OperationBanner status={status} elapsedMs={recordingMs} onError={showAiError} onCancel={() => { void window.presenter.cancel().then((result) => { if (!result.ok) showAiError(result.error) }) }} />
     <ClickThroughBanner status={status.clickThrough} />
     <SetupReturnConfirmation workspace={workspace} busy={isBusy(status)} onError={(message) => showAiError({ code: 'unknown', message, retryable: false })} />
     <section className="content no-drag" tabIndex={0} aria-label="copilot content" onKeyDown={handleContentScrollKey} inert={confirming}>
@@ -145,20 +156,33 @@ export function PresenterApp(): React.JSX.Element {
           if (!transcriptDraft) return
           if (choice !== 'discard') setQuestionFromUser(mergeTranscriptDraft(questionRef.current, transcriptDraft.draft.text, choice))
           setTranscriptDraft(undefined); setTimeout(() => input.current?.focus(), 0)
-        }} answerFormat={answerFormat} setAnswerFormat={setAnswerFormat} onSetClickThrough={setClickThrough} input={input} ask={() => ask()} retry={() => ask(lastSubmittedFormat.current)} response={response} aiError={aiError ?? status.operationError} openSettings={() => openSetup()} openPrivacy={() => openSetup('privacy')} hasKey={apiKeyStatus.configured} status={status} onAudioError={showAiError} />
+        }} answerFormat={answerFormat} setAnswerFormat={setAnswerFormat} onSetClickThrough={setClickThrough} input={input} ask={() => ask()} retry={() => ask(lastSubmittedFormat.current)} response={response} aiError={aiError ?? status.operationError} openSettings={() => openSetup()} openPrivacy={() => openSetup('privacy')} hasKey={apiKeyStatus.configured} status={status} onAudioError={showAiError} attachment={attachment} attaching={attaching} onToggleAttachment={() => void toggleAttachment()} composerStatus={<>
+          {status.outboundPreview && <TransmissionPreviewPanel
+            preview={status.outboundPreview}
+            onRendered={(operationId, stage) => window.presenter.acknowledgeTransmissionPreview(operationId, stage)}
+            onCancel={() => window.presenter.cancel().then((result) => { if (!result.ok) showAiError(result.error) })}
+            onError={(message) => showAiError({ code: 'privacy_preview_unavailable', message, retryable: true })}
+          />}
+          {!status.outboundPreview && <OperationBanner status={status} elapsedMs={recordingMs} onError={showAiError} onCancel={() => { void window.presenter.cancel().then((result) => { if (!result.ok) showAiError(result.error) }) }} />}
+        </>} />
       </div>
     </section>
   </main>
 }
 
-function Copilot(props: { folded: boolean; onSnapshotResponse(response: AssistantResponse): void; question: string; setQuestion(v: string): void; transcriptDraft?: { draft: TranscriptionDraft; conflict: boolean }; resolveTranscript(choice: 'replace' | 'append' | 'discard'): void; answerFormat: AnswerFormat; setAnswerFormat(v: AnswerFormat): void; onSetClickThrough(enabled: boolean): Promise<void>; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; retry(): void; response?: AssistantResponse; aiError?: AiErrorInfo; openSettings(): void; openPrivacy(): void; hasKey: boolean; status: AppStatus; onAudioError(error: AiErrorInfo): void }) {
+function Copilot(props: { folded: boolean; onSnapshotResponse(response: AssistantResponse): void; question: string; setQuestion(v: string): void; transcriptDraft?: { draft: TranscriptionDraft; conflict: boolean }; resolveTranscript(choice: 'replace' | 'append' | 'discard'): void; answerFormat: AnswerFormat; setAnswerFormat(v: AnswerFormat): void; onSetClickThrough(enabled: boolean): Promise<void>; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; retry(): void; response?: AssistantResponse; aiError?: AiErrorInfo; openSettings(): void; openPrivacy(): void; hasKey: boolean; status: AppStatus; onAudioError(error: AiErrorInfo): void; attachment?: ScreenshotAttachment; attaching: boolean; onToggleAttachment(): void; composerStatus: React.ReactNode }) {
   const busy = isBusy(props.status)
-  const canSubmit = props.hasKey && Boolean(props.question.trim()) && !busy && !props.transcriptDraft?.conflict
+  const canSubmit = props.hasKey && (Boolean(props.question.trim()) || Boolean(props.attachment)) && !busy && !props.transcriptDraft?.conflict
   const retryIsSafe = props.status.operationKind !== 'audio' && !['busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio', 'invalid_transcript', 'capture_timeout', 'transcript_display_unavailable'].includes(props.aiError?.code ?? '')
   return <div className="stack">
     {!props.hasKey && <Notice tone="warning">Add your OpenAI API key in Setup before asking a question.</Notice>}
     <div className="question-box">
-      <textarea ref={props.input} value={props.question} onChange={(event) => props.setQuestion(event.target.value)} placeholder="Ask a reviewer question…" onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); if (canSubmit) void props.ask() } }} />
+      <textarea ref={props.input} value={props.question} onChange={(event) => props.setQuestion(event.target.value)} placeholder={props.attachment ? 'Ask about the screenshot, or just press Send…' : 'Ask a question…'} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); if (canSubmit) void props.ask() } }} />
+      {/* Overlays the bottom of the text box, so status never changes the layout. */}
+      <div className="composer-overlay">
+        {props.attachment && <ScreenshotChip onRemove={props.onToggleAttachment} disabled={busy} />}
+        <div className="composer-status">{props.composerStatus}</div>
+      </div>
       {props.transcriptDraft && <TranscriptDraftNotice draft={props.transcriptDraft.draft} conflict={props.transcriptDraft.conflict} onResolve={props.resolveTranscript} />}
       <CopilotQuickControls
         answerFormat={props.answerFormat}
@@ -169,7 +193,7 @@ function Copilot(props: { folded: boolean; onSnapshotResponse(response: Assistan
       >
         <button className="primary" disabled={!canSubmit} title={busy ? 'Another operation is active.' : props.transcriptDraft?.conflict ? 'Resolve the pending transcript first.' : undefined} onClick={() => void props.ask()}>{props.answerFormat === 'code' ? 'Generate code' : 'Ask presenter'} <kbd>Ctrl↵</kbd></button>
         <ToggleListenButton status={props.status} onError={props.onAudioError} />
-        <SnapshotButton disabled={busy} canSend={props.hasKey} onOpenSettings={props.openSettings} sessionId={props.status.sessionUsage.sessionId} onResponse={props.onSnapshotResponse} onError={props.onAudioError} />
+        <SnapshotButton attached={Boolean(props.attachment)} pending={props.attaching} disabled={busy} onToggle={props.onToggleAttachment} />
       </CopilotQuickControls>
     </div>
     {props.aiError && <AiErrorPanel error={props.aiError} allowRetry={retryIsSafe} onRetry={props.retry} onOpenSettings={props.openSettings} onOpenPrivacy={props.openPrivacy} />}

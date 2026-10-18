@@ -62,7 +62,8 @@ export class TransmissionPreviewGate {
 
 export function buildResponseTransmissionPreview(
   operationId: string,
-  chunks: readonly RetrievedChunk[]
+  chunks: readonly RetrievedChunk[],
+  extra: { screenshot?: boolean } = {}
 ): OutboundTransmissionPreview {
   const prepared = preparedAnswerFromChunks(chunks)
   const selected = prepared?.chunks ?? chunks
@@ -77,7 +78,8 @@ export function buildResponseTransmissionPreview(
       text: chunk.text
     })),
     rollingTurnCount: prepared?.rollingTurnCount ?? 0,
-    includesProjectSummary: Boolean(prepared?.projectSummary)
+    includesProjectSummary: Boolean(prepared?.projectSummary),
+    ...(extra.screenshot ? { screenshot: true } : {})
   }
 }
 

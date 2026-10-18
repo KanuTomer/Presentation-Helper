@@ -13,11 +13,15 @@ export function electronSnapshotCapture(windows: WindowManager): SnapshotCapture
       const display = screen.getAllDisplays().find((item) => String(item.id) === monitorId)
       if (!display) throw new Error('The selected monitor was disconnected.')
       const window = windows.presenterWindow
-      const restore = Boolean(window && !window.isDestroyed() && window.isVisible())
+      // The protected presenter is already excluded from capture. Hide it only
+      // if protection is not reported, so normal snapshots do not flash.
+      const restore = Boolean(window && !window.isDestroyed() && window.isVisible() && !window.isContentProtected())
       try {
-        window?.hide()
-        // Let DWM composite one overlay-free frame before requesting the monitor.
-        await new Promise<void>((resolve) => setTimeout(resolve, 100))
+        if (restore) {
+          window?.hide()
+          // Let DWM composite one overlay-free frame before requesting the monitor.
+          await new Promise<void>((resolve) => setTimeout(resolve, 100))
+        }
         signal.throwIfAborted()
         const width = Math.round(display.size.width * display.scaleFactor)
         const height = Math.round(display.size.height * display.scaleFactor)

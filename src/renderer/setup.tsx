@@ -57,7 +57,7 @@ export function SetupApp(): React.JSX.Element {
     </nav>
     <main className="setup-main" tabIndex={0} aria-label={`${title?.[1] ?? 'Setup'} content`} onKeyDown={handleContentScrollKey}>
       <header className="setup-header"><h1>{title?.[1]}</h1><p className="muted">{title?.[2]}</p></header>
-      <div className="stack">
+      <div className="stack" key={section}>
         {(error || workspace.error) && <Notice tone="danger">{error || workspace.error}</Notice>}
         {status.settingsRecoveryWarning && <Notice tone="warning"><strong>Settings were recovered safely.</strong> The prior file was {status.settingsRecoveryWarning.code.replaceAll('_', ' ')}. <button onClick={async () => { await window.presenter.dismissSettingsRecoveryWarning(); await refresh() }}>Dismiss</button></Notice>}
         {section === 'documents' && <><DocumentsView documents={documents} onChange={refresh} /><fieldset><legend>Project background</legend><textarea value={settings?.projectSummary ?? ''} onChange={(event) => { void window.presenter.updateSettings({ projectSummary: event.target.value }).then(() => refresh()) }} placeholder="Optional: a few lines about your project, sent with each question" /></fieldset></>}

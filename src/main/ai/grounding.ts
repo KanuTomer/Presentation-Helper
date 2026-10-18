@@ -17,11 +17,13 @@ export function validateGroundingResponse(
     if (response.evidence.length === 0) return invalid('document-supported answer has no citation')
     if (response.evidenceIssue !== 'none') return invalid('document-supported answer reports an evidence issue')
   } else if (response.support === 'general-technical') {
-    if (response.evidence.length !== 0 || response.evidenceIssue !== 'none' || response.warning) {
+    // A screenshot answer may warn about legibility; that is not a project claim.
+    const solution = response.responseStyle === 'solution'
+    if (response.evidence.length !== 0 || response.evidenceIssue !== 'none' || (response.warning && !solution)) {
       return invalid('general explanation carries project evidence or warning state')
     }
     if (
-      requiresProjectEvidence(question) ||
+      (!solution && requiresProjectEvidence(question)) ||
       (response.responseStyle === 'presenter' && response.category === 'FACTUAL' && hasProjectReference(question))
     ) {
       return invalid('project-specific factual question was labeled general')

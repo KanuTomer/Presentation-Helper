@@ -275,32 +275,33 @@ export class AiService {
       response = await client.responses.create(requestBody, { signal: operation.signal })
       ensureCurrentOperation(operation, this.active)
       if (response.status === 'incomplete' && response.incomplete_details?.reason === 'max_output_tokens') throw outputLimitResponse()
-      if (containsRefusal(response.output) || !response.output_text?.trim()) throw malformedResponse()
+      if (containsRefusal(response.output) || !response.output_text?.trim()) throw malformedResponse('refused or empty')
       let raw: unknown
-      try { raw = JSON.parse(response.output_text) } catch { throw malformedResponse() }
+      try { raw = JSON.parse(response.output_text) } catch { throw malformedResponse('not JSON') }
       normalizeProviderNulls(raw)
       let parsed: AssistantResponse
       if (options.snapshotDataUrl) {
         const validation = solutionResponseSchema.safeParse(raw)
-        if (!validation.success) throw malformedResponse()
-        parsed = { responseStyle: 'solution', ...validation.data }
+        if (!validation.success) throw malformedResponse(schemaIssue(validation.error.issues[0]))
+        parsed = normalizeSolutionLabels({ responseStyle: 'solution', ...validation.data })
       } else if (codeAnswer) {
         const validation = developerResponseSchema.safeParse(raw)
-        if (!validation.success) throw malformedResponse()
+        if (!validation.success) throw malformedResponse(schemaIssue(validation.error.issues[0]))
         parsed = { responseStyle: 'developer', ...validation.data }
       } else {
         const validation = assistantResponseSchema.safeParse(raw)
-        if (!validation.success) throw malformedResponse()
+        if (!validation.success) throw malformedResponse(schemaIssue(validation.error.issues[0]))
         parsed = { responseStyle: 'presenter', ...validation.data }
       }
       const citedIds = parsed.evidence.map((item) => item.chunkId)
       if (new Set(citedIds).size !== citedIds.length || citedIds.some((chunkId) => !allowed.has(chunkId))) {
-        throw malformedResponse()
+        throw malformedResponse('unknown citation')
       }
       parsed.evidence = parsed.evidence.map((item) => {
         const chunk = allowed.get(item.chunkId)!; return { chunkId: chunk.id, documentName: chunk.documentName, location: chunk.location }
       })
-      if (!validateGroundingResponse(parsed, parsed.responseStyle === 'solution' ? parsed.interpretedProblem : prepared.question, selectedChunks).valid) throw malformedResponse()
+      const grounding = validateGroundingResponse(parsed, parsed.responseStyle === 'solution' ? parsed.interpretedProblem : prepared.question, selectedChunks)
+      if (!grounding.valid) throw malformedResponse(grounding.reason)
       ensureCurrentOperation(operation, this.active)
       this.context.add(parsed.responseStyle === 'solution' ? parsed.interpretedProblem : prepared.question, parsed, prepared.contextRevision)
       outcome = 'success'
@@ -410,7 +411,13 @@ export function asAiServiceError(error: unknown): AiServiceError {
   }
   return new AiServiceError('unknown', 'OpenAI request failed.', false)
 }
-function malformedResponse(): AiServiceError { return new AiServiceError('malformed_response', 'OpenAI returned an invalid structured response. Please retry.', true) }
+/** The reason names the failed check, never response content, so failures can be diagnosed. */
+function malformedResponse(reason?: string): AiServiceError {
+  return new AiServiceError('malformed_response', `OpenAI returned an invalid structured response${reason ? ` (${reason})` : ''}. Please retry.`, true)
+}
+function schemaIssue(issue?: { path: PropertyKey[]; message: string }): string {
+  return issue ? `${issue.path.map(String).join('.') || 'response'}: ${issue.message}`.slice(0, 160) : 'schema mismatch'
+}
 function outputLimitResponse(): AiServiceError {
   return new AiServiceError('output_limit', 'The provider reached its output limit before completing the structured answer. No application token ceiling was applied. You can retry explicitly or simplify the task.', true)
 }
@@ -434,12 +441,29 @@ function ensureCurrentOperation(
 function normalizeProviderNulls(raw: unknown): void {
   if (!raw || typeof raw !== 'object') return
   const value = raw as { warning?: unknown; codeBlocks?: unknown }
-  if (value.warning === null) delete value.warning
+  const absent = (item: unknown): boolean => item === null || (typeof item === 'string' && !item.trim())
+  if (absent(value.warning)) delete value.warning
   if (!Array.isArray(value.codeBlocks)) return
   for (const block of value.codeBlocks) {
-    if (block && typeof block === 'object' && (block as { title?: unknown }).title === null) {
+    if (block && typeof block === 'object' && absent((block as { title?: unknown }).title)) {
       delete (block as { title?: unknown }).title
     }
+  }
+}
+/**
+ * A screenshot answer about the user's own project often reports missing
+ * evidence while still labelling itself general. When nothing is cited, its
+ * labels follow from its own warning and evidence issue.
+ */
+export function normalizeSolutionLabels<T extends { support: string; evidenceIssue: string; warning?: string; evidence: unknown[] }>(response: T): T {
+  if (response.evidence.length) return response
+  const flagged = response.support !== 'general-technical' || response.evidenceIssue !== 'none'
+  if (!flagged) return response
+  return {
+    ...response,
+    support: 'unsupported-project-claim',
+    evidenceIssue: 'missing',
+    warning: response.warning?.trim() || 'Not backed by your documents; check the details before using them.'
   }
 }
 function containsRefusal(output: unknown[] | undefined): boolean {

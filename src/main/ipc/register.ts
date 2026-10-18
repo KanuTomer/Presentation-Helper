@@ -103,17 +103,13 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     (accelerator) => audio.configureShortcut(accelerator)
   )
   const typedAnswers = new TypedAnswerController(ai, audio.operations, transmissionPreview)
-  handle(channels.snapshotMonitors, () => snapshots.frames.monitors())
-  handle<[unknown]>(channels.captureSnapshot, (_event, monitorId) => {
+  handle(channels.attachScreenshot, () => { requirePresenter(); return snapshots.attach() })
+  handle(channels.discardScreenshot, () => snapshots.frames.clear())
+  handle<[unknown, unknown]>(channels.askAboutScreen, (_event, question, attachmentId) => {
     requirePresenter()
-    if (monitorId !== undefined && (typeof monitorId !== 'string' || !/^-?\d{1,20}$/.test(monitorId))) throw new Error('Invalid monitor identifier.')
-    return snapshots.capture(monitorId as string | undefined)
-  })
-  handle(channels.discardSnapshot, () => snapshots.frames.clear())
-  handle<[unknown]>(channels.solveSnapshot, (_event, id) => {
-    requirePresenter()
-    if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/i.test(id)) throw new Error('Invalid screenshot identifier.')
-    return snapshots.solve(id)
+    if (typeof question !== 'string' || question.length > 4_000) throw new Error('Invalid question.')
+    if (typeof attachmentId !== 'string' || !/^[a-f0-9-]{36}$/i.test(attachmentId)) throw new Error('Invalid screenshot.')
+    return snapshots.ask(question, attachmentId)
   })
 
   handle(channels.getStatus, () => status())

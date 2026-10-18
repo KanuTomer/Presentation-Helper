@@ -138,7 +138,7 @@ test('grows and folds native presenter height from measured content without pers
 
 test('requires cancellation before leaving active capture and retains the composer across Setup', async () => {
   await expect.poll(async () => (await status()).helperState, { timeout: 30_000 }).toBe('ready')
-  const composer = page.getByPlaceholder('Ask a reviewer question…')
+  const composer = page.getByPlaceholder('Ask a question…')
   await composer.fill('Retain this reviewer question across workspaces.')
   await page.evaluate(() => window.presenter.acceptListeningConsent(4))
   const started = await page.evaluate(() => window.presenter.toggleListening())
@@ -295,6 +295,20 @@ test('scrolls every long section by wheel and keyboard at wide and minimum sizes
     }
   }
   await application.evaluate(({ BrowserWindow }) => { for (const window of BrowserWindow.getAllWindows()) window.setContentSize(1100, 720) })
+})
+
+test('attaches a screenshot to the composer without hiding the presenter, and removes it', async () => {
+  const visible = () => nativeWindow<boolean>('presenter', '(w) => w.isVisible()')
+  const hides: boolean[] = []
+  const watcher = setInterval(() => { void visible().then((value) => hides.push(value)).catch(() => undefined) }, 15)
+  try {
+    await page.getByRole('button', { name: 'Snapshot', exact: true }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Screenshot attached' })).toBeVisible()
+  } finally { clearInterval(watcher) }
+  expect(hides.every(Boolean), 'the presenter hid itself while capturing').toBe(true)
+  await expect(page.getByRole('button', { name: 'Snapshot ✓' })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Remove screenshot' }).click()
+  await expect(page.getByRole('button', { name: 'Snapshot', exact: true })).toHaveAttribute('aria-pressed', 'false')
 })
 
 test('keeps wheel and touchpad-style deltas inside nested code scrolling surfaces', async () => {

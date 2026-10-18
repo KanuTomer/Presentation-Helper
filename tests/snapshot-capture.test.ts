@@ -5,8 +5,8 @@ vi.mock('electron', () => ({ desktopCapturer: { getSources: capture }, screen: {
 import { electronSnapshotCapture } from '../src/main/snapshots/electronCapture'
 import type { WindowManager } from '../src/main/windows/windowManager'
 afterEach(() => vi.useRealTimers())
-function harness(visible = true) {
-  const window = { getBounds: () => displays[0]!.bounds, isVisible: () => visible, isDestroyed: () => false, hide: vi.fn() }
+function harness(visible = true, isProtected = false) {
+  const window = { getBounds: () => displays[0]!.bounds, isVisible: () => visible, isDestroyed: () => false, isContentProtected: () => isProtected, hide: vi.fn() }
   const showTransmissionPreview = vi.fn()
   const adapter = electronSnapshotCapture({ presenterWindow: window, showTransmissionPreview } as unknown as WindowManager)
   return { window, showTransmissionPreview, adapter }
@@ -27,6 +27,12 @@ describe('monitor capture restoration', () => {
     vi.useFakeTimers(); const h = harness(); capture.mockRejectedValueOnce(new Error('denied'))
     const result = h.adapter.capture('1', new AbortController().signal); const assertion = expect(result).rejects.toThrow('denied')
     await vi.advanceTimersByTimeAsync(100); await assertion; expect(h.showTransmissionPreview).toHaveBeenCalledTimes(1)
+  })
+  it('does not hide (flash) a presenter that is already excluded from capture', async () => {
+    const h = harness(true, true)
+    capture.mockImplementationOnce(async () => [{ display_id: '1', thumbnail: { isEmpty: () => false, getSize: () => ({ width: 3840, height: 2160 }), toPNG: () => Buffer.from('png') } }])
+    await expect(h.adapter.capture('1', new AbortController().signal)).resolves.toMatchObject({ width: 3840 })
+    expect(h.window.hide).not.toHaveBeenCalled(); expect(h.showTransmissionPreview).not.toHaveBeenCalled()
   })
   it('does not show a previously hidden overlay', async () => {
     vi.useFakeTimers(); const h = harness(false); capture.mockRejectedValueOnce(new Error('denied'))

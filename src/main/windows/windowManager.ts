@@ -19,6 +19,7 @@ export const OVERLAY_MIN_HEIGHT = 420
 export const OVERLAY_EDGE_MARGIN = 16
 const LEGACY_NARROW_WIDTH = 900
 export const CLICK_THROUGH_RECOVERY_SHORTCUT = 'Control+Shift+I'
+const RESIZE_ANIMATION_MS = 160
 
 export interface WindowClickThroughStatus {
   enabled: boolean
@@ -47,6 +48,7 @@ export class WindowManager {
   private recoveryShortcutRegistered = false
   private boundsTimer?: NodeJS.Timeout
   private glassTimer?: NodeJS.Timeout
+  private resizeTween?: NodeJS.Timeout
   private glassDisplayId?: number
   private displayListenersRegistered = false
   private clickThrough = false
@@ -203,8 +205,26 @@ export class WindowManager {
     const current = presenter.getBounds()
     const next = presenterBounds({ ...current, height: Math.ceil(this.presenterHeight * zoom) }, screen.getDisplayMatching(current).workArea)
     if (next.height === current.height && next.y === current.y) return
-    this.resizingContent = true
-    try { presenter.setBounds(next) } finally { this.resizingContent = false }
+    this.animateBounds(presenter, current, next)
+  }
+  /** Eases height changes (folding, new answers) instead of jumping. */
+  private animateBounds(window: BrowserWindow, from: OverlayBounds, to: OverlayBounds): void {
+    clearInterval(this.resizeTween)
+    const apply = (bounds: OverlayBounds): void => {
+      if (window.isDestroyed()) { clearInterval(this.resizeTween); return }
+      this.resizingContent = true
+      try { window.setBounds(bounds) } finally { this.resizingContent = false }
+    }
+    if (!window.isVisible()) { apply(to); return }
+    const started = Date.now()
+    const step = (): void => {
+      const progress = Math.min(1, (Date.now() - started) / RESIZE_ANIMATION_MS)
+      const eased = 1 - (1 - progress) ** 3
+      apply({ ...to, y: Math.round(from.y + (to.y - from.y) * eased), height: Math.round(from.height + (to.height - from.height) * eased) })
+      if (progress >= 1) clearInterval(this.resizeTween)
+    }
+    this.resizeTween = setInterval(step, 16)
+    step()
   }
   /** Text size applies to both windows; the presenter re-fits its height. */
   applyFontScale(scale: number): void {
@@ -242,7 +262,7 @@ export class WindowManager {
   emergencyUnlock(): void { this.setClickThrough(false); void this.store.updateSettings({ clickThrough: false }).catch(() => undefined) }
   showFromTray(): void { this.emergencyUnlock(); if (this.isPresenter) this.showPresenter(); else this.showSetup() }
   openSettingsFromTray(): void { this.emergencyUnlock(); this.openSettings() }
-  prepareToQuit(): void { this.quitting = true; clearTimeout(this.boundsTimer); clearTimeout(this.glassTimer) }
+  prepareToQuit(): void { this.quitting = true; clearTimeout(this.boundsTimer); clearTimeout(this.glassTimer); clearInterval(this.resizeTween) }
 
   /** Display (DIP) behind the presenter; the glass backdrop captures only this screen. */
   get glassDisplay(): GlassDisplay {
