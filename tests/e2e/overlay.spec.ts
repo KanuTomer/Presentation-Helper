@@ -26,7 +26,9 @@ async function openSetup(section: 'settings' | 'privacy' | 'documents' | 'captur
     await page.evaluate((target) => window.presenter.requestSetup(target), section === 'appearance' ? 'settings' : section)
     await page.getByRole('button', { name: 'Return to Setup', exact: true }).click()
   }
-  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).workspace?.transition).toBe('idle')
+  // The presenter workspace is already idle before confirmation starts the
+  // transition, so only setup/idle proves the return was acknowledged.
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).workspace).toMatchObject({ mode: 'setup', transition: 'idle' })
   const names = { settings: 'Session & models', privacy: 'Privacy & data', documents: 'Documents & context', appearance: 'Appearance' }
   if (section === 'capture') await page.getByRole('button', { name: 'Capture compatibility', exact: true }).click()
   else await page.getByRole('button', { name: names[section], exact: true }).click()
@@ -133,7 +135,7 @@ test('requires cancellation before leaving active capture and retains the compos
   expect(rejected).toBe(true)
   expect((await page.evaluate(() => window.presenter.getStatus())).capture.electronReported).toBe(true)
   await page.getByRole('button', { name: 'Cancel operation & return' }).click()
-  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).workspace?.transition).toBe('idle')
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).workspace).toMatchObject({ mode: 'setup', transition: 'idle' })
   const state = await page.evaluate(() => window.presenter.getStatus())
   expect(state).toMatchObject({ workspace: { mode: 'setup' }, operation: 'idle', temporaryAudioExists: false, capture: { electronReported: false } })
   await enterPresenter()
@@ -160,6 +162,9 @@ test('reports real registration, retries while idle, and rejects a second instan
 test('reuses the system-audio toggle after a completed terminal path', async () => {
   const topmost = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())
   const recoveryShortcut = () => application.evaluate(({ globalShortcut }) => globalShortcut.isRegistered('Control+Shift+I'))
+  // A failed earlier test restarts the worker and relaunches Electron, so this
+  // test must not inherit helper readiness from tests that ran before it.
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).helperState, { timeout: 30_000 }).toBe('ready')
   expect(await topmost()).toBe(true)
   expect(await recoveryShortcut()).toBe(true)
   const readiness = await page.evaluate(async () => {
