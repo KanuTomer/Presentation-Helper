@@ -84,7 +84,7 @@ describe('renderer answer-format bridge', () => {
     Object.defineProperty(window, 'presenter', { configurable: true, value: presenter })
 
     render(<PresenterApp />)
-    const question = await screen.findByPlaceholderText('Ask a reviewer question…')
+    const question = await screen.findByPlaceholderText('Ask a question…')
     fireEvent.change(question, { target: { value: 'Explain this architecture.' } })
     await waitFor(() => expect((screen.getByRole('button', { name: /Generate code/ }) as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(screen.getByRole('button', { name: 'Presenter', exact: true }))

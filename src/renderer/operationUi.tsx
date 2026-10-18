@@ -2,12 +2,12 @@ import React, { useEffect, useRef } from 'react'
 import type { AiErrorInfo, AppStatus, OperationState, OperationTimings } from '../shared/contracts'
 
 const stageLabels: Record<Exclude<OperationState, 'idle' | 'error' | 'listening'>, string> = {
-  starting_capture: 'STARTING SYSTEM AUDIO',
-  finalizing: 'FINALIZING RECORDING',
-  transcribing: 'TRANSCRIBING',
-  retrieving: 'RETRIEVING EVIDENCE',
-  generating: 'GENERATING RESPONSE',
-  cancelling: 'CANCELLING'
+  starting_capture: 'Starting system audio',
+  finalizing: 'Finishing recording',
+  transcribing: 'Transcribing',
+  retrieving: 'Finding evidence',
+  generating: 'Writing answer',
+  cancelling: 'Cancelling'
 }
 
 const timingLabels: Array<[keyof OperationTimings, string]> = [
@@ -64,7 +64,7 @@ export function OperationBanner({
   const listening = status.operation === 'listening'
   const endpoint = status.activeAudioEndpoint?.name ?? status.audioSource
   const label = status.operation === 'listening'
-    ? `LISTENING · ${endpoint} · ${(elapsedMs / 1_000).toFixed(1)}s`
+    ? `Listening · ${endpoint} · ${(elapsedMs / 1_000).toFixed(1)}s`
     : stageLabels[status.operation]
 
   return <div
@@ -73,10 +73,10 @@ export function OperationBanner({
     aria-live={listening ? 'assertive' : 'polite'}
     data-operation={status.operation}
   >
-    {listening && <span className="pulse" aria-hidden="true" />}
+    <span className={listening ? 'pulse' : 'progress-dot'} aria-hidden="true" />
     <span>{label}</span>
-    {status.operation === 'generating' && <small>{status.selectedModel} · {status.selectedReasoning ?? 'medium'} reasoning</small>}
-    <button onClick={onCancel}>Esc / Cancel</button>
+    {status.operation === 'generating' && <small>{status.selectedModel} · {status.selectedReasoning ?? 'medium'}</small>}
+    <button onClick={onCancel} title="Esc">Cancel</button>
   </div>
 }
 

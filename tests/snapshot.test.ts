@@ -39,8 +39,11 @@ describe('memory-only screen snapshots', () => {
         : { ...solution, equations: [kind === 'matrix' ? '\\begin{bmatrix}1&2\\\\3&4\\end{bmatrix}' : kind === 'subscript' ? 'a_{n+1}=2a_n' : 'x^2=4'] }
     const local = { ...value, warning: undefined }; expect(solutionResponseSchema.safeParse(local).success).toBe(true)
   })
-  it('requires clarification and valid math steps, and keeps strict provider fields required', () => {
-    expect(solutionResponseSchema.safeParse({ ...solution, warning: undefined, steps: [] }).success).toBe(false)
+  it('accepts imperfect but usable answers, and keeps strict provider fields required', () => {
+    // A real slide answer was marked clarification yet answered directly; it is still worth showing.
+    expect(solutionResponseSchema.safeParse({ ...solution, warning: undefined, steps: [] }).success).toBe(true)
+    expect(solutionResponseSchema.safeParse({ ...solution, warning: undefined, task: 'clarification', clarification: '' }).success).toBe(true)
+    expect(solutionResponseSchema.safeParse({ ...solution, warning: undefined, task: 'poem' }).success).toBe(false)
     expect(snapshotResponseJsonSchema.required).toContain('warning')
   })
 })
@@ -62,7 +65,29 @@ describe('screenshot Responses requests', () => {
   })
   it('rejects forged screenshot document citations', async () => {
     const h = harness({ ...solution, support: 'document-supported', evidence: [{ chunkId: 'forged', documentName: 'fake', location: 'page 1' }] } as typeof solution)
-    await expect(h.ai.generate(SNAPSHOT_QUESTION, [], { snapshotDataUrl: 'data:image/png;base64,eA==' })).rejects.toMatchObject({ code: 'malformed_response' })
+    await expect(h.ai.generate(SNAPSHOT_QUESTION, [], { snapshotDataUrl: 'data:image/png;base64,eA==' })).rejects.toMatchObject({ code: 'malformed_response', message: expect.stringContaining('(unknown citation)') })
+  })
+  it.each([
+    ['empty-string warning and code title', { ...solution, task: 'code', warning: '', codeBlocks: [{ language: 'py', title: '', code: 'print(2)\n' }] }],
+    ['a legibility warning on a self-contained problem', { ...solution, warning: 'The exponent is slightly blurred; read as 2.' }],
+    ['an error explanation without code', { ...solution, task: 'code', steps: [], finalResult: '', explanation: 'The import path is misspelled.' }],
+    ['a project-sounding interpreted problem', { ...solution, interpretedProblem: 'Fix the TypeError thrown by our build script.' }]
+  ])('accepts a screenshot answer with %s', async (_label, output) => {
+    const h = harness(output as typeof solution)
+    await expect(h.ai.generate(SNAPSHOT_QUESTION, [], { snapshotDataUrl: 'data:image/png;base64,eA==' })).resolves.toMatchObject({ responseStyle: 'solution' })
+  })
+  it('accepts a slide question about the project that reports missing evidence as general', async () => {
+    // Shape of a real gpt-6-luna answer that previously failed grounding.
+    const h = harness({ ...solution, task: 'clarification', steps: ['Explain ACID transactions.'], finalResult: 'Sample answer.', clarification: 'What were your actual requirements?', support: 'general-technical', evidenceIssue: 'missing', warning: 'The screenshot supplies speaker-note topics, not evidence of the project decision.' } as unknown as typeof solution)
+    await expect(h.ai.generate(SNAPSHOT_QUESTION, [], { snapshotDataUrl: 'data:image/png;base64,eA==' })).resolves.toMatchObject({
+      responseStyle: 'solution', support: 'unsupported-project-claim', evidenceIssue: 'missing', warning: expect.stringContaining('speaker-note')
+    })
+  })
+  it('names the failed check without echoing response content', async () => {
+    const h = harness({ ...solution, task: 'poem', explanation: 'SECRET-CONTENT' } as unknown as typeof solution)
+    const failure = h.ai.generate(SNAPSHOT_QUESTION, [], { snapshotDataUrl: 'data:image/png;base64,eA==' })
+    await expect(failure).rejects.toMatchObject({ code: 'malformed_response', message: expect.stringContaining('(task: ') })
+    await expect(failure).rejects.not.toMatchObject({ message: expect.stringContaining('SECRET-CONTENT') })
   })
   it('all registry models support images, structured output and medium reasoning', () => {
     expect(MODEL_REGISTRY).toHaveLength(6)

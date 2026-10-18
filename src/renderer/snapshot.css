@@ -1,7 +1,2 @@
-.snapshot-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgb(5 6 10 / .7); }
-.snapshot-preview { width: min(100%, 1000px); max-height: calc(100vh - 40px); overflow: auto; background: #15171d; border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 18px; color: var(--text); }
-.snapshot-preview h2 { font-size: 16px; margin: 0 0 10px; }
-.snapshot-preview img { display: block; width: 100%; max-height: 65vh; object-fit: contain; margin: 12px 0; }
-.snapshot-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .math-equation { overflow: auto; max-width: 100%; padding: 6px 0; }
 .snapshot-solution ol { padding-left: 24px; }

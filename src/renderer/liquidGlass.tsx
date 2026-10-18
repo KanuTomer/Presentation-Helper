@@ -43,7 +43,7 @@ type GlassState = 'live' | 'fallback'
  * protection keeps this window out of its own stream; frames stay on the GPU
  * and the capture stops whenever the presenter is hidden.
  */
-export function LiquidGlass({ haze, enabled }: { haze: number; enabled: boolean }): React.JSX.Element {
+export function LiquidGlass({ haze, enabled, active }: { haze: number; enabled: boolean; active: boolean }): React.JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null)
   const hazeRef = useRef(haze)
   const [state, setState] = useState<GlassState>('fallback')
@@ -68,14 +68,16 @@ export function LiquidGlass({ haze, enabled }: { haze: number; enabled: boolean 
   }, [])
   useEffect(() => {
     const reduced = window.matchMedia?.('(prefers-reduced-transparency: reduce)').matches
-    if (!enabled || reduced || !visible || !display || !canvas.current || !navigator.mediaDevices?.getDisplayMedia) { setState('fallback'); return }
+    // A never-shown window can report itself visible, so presenter mode must
+    // also be active; main refuses the capture otherwise.
+    if (!enabled || !active || reduced || !visible || !display || !canvas.current || !navigator.mediaDevices?.getDisplayMedia) { setState('fallback'); return }
     let cancelled = false
     const glass = GlassRenderer.create(canvas.current, display, hazeRef.current)
     if (!glass) { setState('fallback'); return }
     renderer.current = glass
     void glass.start().then(() => { if (!cancelled) setState('live') }, () => { if (!cancelled) setState('fallback') })
     return () => { cancelled = true; glass.dispose(); if (renderer.current === glass) renderer.current = undefined }
-  }, [enabled, visible, display])
+  }, [enabled, active, visible, display])
   return <canvas ref={canvas} className="liquid-glass" aria-hidden="true" hidden={state !== 'live'} />
 }
 

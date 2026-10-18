@@ -12,6 +12,7 @@ export interface OutboundTransmissionPreviewView {
   operationId: string
   stage: 'transcription' | 'response'
   audio?: { durationMs: number; bytes: number; endpointName: string }
+  screenshot?: boolean
   terminologyHint?: string
   chunks: Array<{
     chunkId: string
@@ -96,23 +97,25 @@ export function TransmissionPreviewPanel({
     return () => { window.cancelAnimationFrame(firstFrame); if (secondFrame) window.cancelAnimationFrame(secondFrame) }
   }, [preview.operationId, preview.stage])
 
+  const parts = preview.audio
+    ? [`${(preview.audio.durationMs / 1_000).toFixed(1)}s audio`, `${Math.ceil(preview.audio.bytes / 1_024)} KiB`]
+    : [...(preview.screenshot ? ['screenshot'] : []), 'question', `${preview.chunks.length} snippet${preview.chunks.length === 1 ? '' : 's'}`, `${preview.rollingTurnCount} recent turn${preview.rollingTurnCount === 1 ? '' : 's'}`, ...(preview.includesProjectSummary ? ['background'] : [])]
+  // One line by default; everything that is sent stays inspectable on demand.
   return <section className="transmission-preview" aria-live="polite" aria-label="OpenAI transmission preview">
-    <h3>{preview.stage === 'transcription' ? 'Audio about to be sent' : 'Answer context about to be sent'}</h3>
-    {preview.audio && <div className="info-grid">
-      <PreviewInfo label="Duration" value={`${(preview.audio.durationMs / 1_000).toFixed(1)} seconds`} />
-      <PreviewInfo label="Size" value={`${Math.ceil(preview.audio.bytes / 1_024)} KiB`} />
-      <PreviewInfo label="Captured endpoint" value={preview.audio.endpointName} />
-    </div>}
-    {preview.terminologyHint && <details><summary>Transcription terminology hint</summary><p>{preview.terminologyHint}</p></details>}
-    <p>{preview.rollingTurnCount} recent conversation turn{preview.rollingTurnCount === 1 ? '' : 's'} included · project summary {preview.includesProjectSummary ? 'included' : 'not included'}.</p>
-    {preview.chunks.length > 0 ? <div className="preview-chunks">
-      <strong>{preview.chunks.length} selected local evidence chunk{preview.chunks.length === 1 ? '' : 's'}</strong>
-      {preview.chunks.map((chunk) => <details key={chunk.chunkId}>
+    <div className="preview-line">
+      <span className="progress-dot" aria-hidden="true" />
+      <strong>{preview.stage === 'transcription' ? 'Sending for transcription' : 'Sending'}</strong>
+      <span className="muted">{parts.join(' · ')}</span>
+      {onCancel && <button type="button" onClick={() => void onCancel()}>Cancel</button>}
+    </div>
+    {(preview.audio || preview.terminologyHint || preview.chunks.length > 0) && <details className="preview-details"><summary>Details</summary>
+      {preview.audio && <p className="muted">From {preview.audio.endpointName}</p>}
+      {preview.terminologyHint && <p className="muted">Vocabulary hint: {preview.terminologyHint}</p>}
+      {preview.chunks.length > 0 && <div className="preview-chunks">{preview.chunks.map((chunk) => <details key={chunk.chunkId}>
         <summary>{chunk.documentName} · {chunk.title ? `${chunk.title} · ` : ''}{chunk.location}</summary>
         <p>{chunk.text}</p>
-      </details>)}
-    </div> : <p className="muted">No document evidence chunk is included.</p>}
-    {onCancel && <button type="button" onClick={() => void onCancel()}>Cancel transmission</button>}
+      </details>)}</div>}
+    </details>}
   </section>
 }
 

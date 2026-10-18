@@ -72,7 +72,7 @@ input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 /* Shared building blocks */
 .stack { display: flex; min-width: 0; flex-direction: column; gap: 10px; }
 .actions, .status-row, .section-heading, .response-labels, .brand { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
-.question-box, .response-card, fieldset, .document, .usage, .info, .stage-timings, .empty, .section-heading, .document-search, .search-results, .inspection, .transmission-preview, .privacy-disclosure, .delete-confirmation, .shortcut-registration-status {
+.question-box, .response-card, fieldset, .document, .usage, .info, .stage-timings, .empty, .section-heading, .document-search, .search-results, .inspection, .privacy-disclosure, .delete-confirmation, .shortcut-registration-status {
   min-width: 0; border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius); padding: 12px;
 }
 fieldset { display: flex; flex-direction: column; gap: 9px; margin: 0; }
@@ -94,8 +94,17 @@ label.toggle, .toggle { flex-direction: row; align-items: center; gap: 8px; }
 .privacy-dot.protected { background: #34d399; }
 
 /* Answers */
-.question-box { display: flex; flex-direction: column; gap: 8px; }
-.question-box textarea { min-height: 72px; height: 72px; }
+.question-box { position: relative; display: flex; flex-direction: column; gap: 8px; }
+/* The bottom of the text box is reserved for the attachment chip and status,
+   so sending never changes the composer's shape. */
+.question-box textarea { --composer-height: 92px; min-height: var(--composer-height); height: var(--composer-height); padding-bottom: 36px; resize: none; }
+.composer-overlay { position: absolute; top: calc(12px + 92px - 34px); left: 18px; right: 18px; display: flex; align-items: center; gap: 6px; min-height: 26px; pointer-events: none; }
+.composer-overlay > * { pointer-events: auto; }
+.composer-status { display: flex; min-width: 0; flex: 1 1 auto; justify-content: flex-end; }
+.attachment-chip { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 2px 4px 2px 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface-raised); font-size: 11px; animation: rise-in 160ms ease-out; }
+.attachment-chip button { border: 0; background: transparent; padding: 0 6px; border-radius: 999px; font-size: 13px; line-height: 1; }
+.snapshot-button { min-width: 96px; }
+.snapshot-button.attached { border-color: var(--accent); background: var(--surface-raised); }
 .response-card { width: 100%; }
 .response-card .category, .support-badge { font-size: 9px; border: 1px solid var(--border-strong); border-radius: 20px; padding: 3px 7px; }
 .response-labels { justify-content: space-between; }
@@ -135,16 +144,28 @@ pre.code-scroll code { color: inherit; background: transparent; font: inherit; }
 .transcript-draft small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .transcript-preview { flex: 1 1 320px; min-width: 0; max-height: 120px; margin: 0; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--field); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* Banners and dialogs */
-.click-through-banner { flex: 0 0 auto; padding: 7px 14px; background: #1d1608; color: #fef08a; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-align: center; }
-.listening-banner, .progress-banner { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; padding: 7px; font-size: 11px; font-weight: 700; letter-spacing: .08em; background: #e11d48; }
-.progress-banner { background: #4338ca; }
-.progress-banner.stage-starting_capture, .progress-banner.stage-finalizing, .progress-banner.stage-cancelling { background: #334155; }
-.progress-banner.stage-transcribing { background: #075985; }
-.progress-banner.stage-retrieving { background: #065f46; }
-.listening-banner button, .progress-banner button { margin-left: auto; padding: 3px 7px; border: 0; }
-.pulse { width: 8px; height: 8px; border-radius: 50%; background: white; animation: pulse 1s infinite; }
+/* Status pills. Operation status and the send preview sit inside the composer
+   overlay; only the click-through warning sits under the title bar. */
+.click-through-banner { flex: 0 0 auto; margin: 0 10px 6px; padding: 5px 10px; border: 1px solid #facc1566; border-radius: 999px; background: var(--surface-raised); color: #fef08a; font-size: 12px; text-align: center; }
+.listening-banner, .progress-banner, .composer-status .transmission-preview {
+  display: flex; min-width: 0; max-width: 100%; align-items: center; gap: 8px; padding: 2px 4px 2px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-raised); font-size: 11px; animation: rise-in 160ms ease-out;
+}
+.listening-banner { border-color: #fb718599; background: rgb(225 29 72 / .32); }
+.listening-banner > span:not(.pulse), .progress-banner > span:not(.progress-dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.listening-banner small, .progress-banner small { color: var(--text-muted); white-space: nowrap; }
+.listening-banner button, .progress-banner button, .preview-line button { flex: 0 0 auto; padding: 1px 9px; border-radius: 999px; font-size: 11px; }
+.pulse { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #fb7185; animation: pulse 1s infinite; }
+.progress-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--accent); animation: pulse 1.4s infinite; }
 @keyframes pulse { 50% { opacity: .25; transform: scale(.7); } }
+.composer-status .transmission-preview { position: relative; }
+.preview-line { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.preview-line .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Details open as a dropdown over the content, not inside the composer. */
+.preview-details > summary { font-size: 11px; white-space: nowrap; }
+.preview-details[open] > :not(summary) { position: absolute; z-index: 20; right: 0; top: calc(100% + 6px); width: min(420px, 80vw); max-height: 40vh; overflow: auto; padding: 10px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: rgb(14 16 22 / .92); }
+.preview-details[open] > summary { margin-bottom: 0; }
+.preview-details p { margin: 4px 0; }
+
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 18px; background: rgb(5 6 10 / .6); -webkit-app-region: no-drag; }
 .click-through-confirmation { display: flex; width: min(480px, 100%); flex-direction: column; gap: 10px; padding: 15px; border: 1px solid #facc155e; border-radius: var(--radius); background: #17130c; color: #fef3c7; }
 .click-through-confirmation p { margin: 0; font-size: 12px; line-height: 1.45; }
@@ -176,7 +197,7 @@ pre.code-scroll code { color: inherit; background: transparent; font: inherit; }
 .usage span { font-size: 20px; color: var(--accent); }
 .retention-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .delete-confirmation { display: flex; flex-direction: column; gap: 8px; border-color: #fb718566; }
-.preview-chunks details, .transmission-preview details { border: 1px solid var(--border); border-radius: var(--radius-small); padding: 8px; }
+.preview-chunks details { border: 1px solid var(--border); border-radius: var(--radius-small); padding: 8px; }
 .budget-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .session-budget progress { width: 100%; height: 8px; border: 0; border-radius: 999px; background: var(--field); }
 .session-budget progress::-webkit-progress-bar { background: var(--field); border-radius: 999px; }
@@ -199,6 +220,14 @@ pre.code-scroll code { color: inherit; background: transparent; font: inherit; }
 .stage-timings dt { color: var(--text-muted); }
 .stage-timings dd { margin: 0; font-variant-numeric: tabular-nums; }
 .test-pattern { height: 110px; display: grid; place-items: center; border-radius: var(--radius); background: repeating-linear-gradient(45deg, #ec4899 0 16px, #22d3ee 16px 32px, #facc15 32px 48px); color: #050711; font-weight: 900; font-size: 20px; }
+
+/* Motion */
+@keyframes rise-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+#presenter-answer, .notice, .ai-error, .transcript-draft, .setup-return-confirmation, .click-through-banner { animation: rise-in 180ms ease-out; }
+.setup-main > .stack { animation: fade-in 160ms ease-out; }
+details[open] > :not(summary) { animation: fade-in 140ms ease-out; }
+button, .setup-nav ul button, .segmented button, input, textarea, select { transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease; }
 
 /* Setup controls */
 .key-row { flex-wrap: nowrap; }
@@ -243,10 +272,9 @@ details[open] > summary { margin-bottom: 8px; }
 .presenter .titlebar strong { font-size: 13px; }
 .presenter .status-row { justify-content: flex-end; }
 .presenter .status-row button { padding: 4px 8px; }
-.capture-label { font-size: 10px; color: var(--text-muted); }
+.capture-label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); }
 .content { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 4px 10px 10px; }
 .workspace-content { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.presenter > .transmission-preview { max-height: 40vh; overflow: auto; flex: 0 1 auto; margin: 0 10px; }
 
 @media (max-width: 820px) {
   .setup { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
