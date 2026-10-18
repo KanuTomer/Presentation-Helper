@@ -399,6 +399,9 @@ export function asAiServiceError(error: unknown): AiServiceError {
   if (value.status === 429 || value.code === 'rate_limit_exceeded') {
     return new AiServiceError('rate_limit', 'OpenAI is temporarily rate limiting requests. Wait for the limit to reset.', true)
   }
+  if (value.code === 'invalid_json_schema') {
+    return new AiServiceError('unknown', 'OpenAI rejected the response schema. Update PresenterAI to the latest build; retrying the same request will not fix this application error.', false)
+  }
   if (value.code === 'session_budget_exceeded') return new AiServiceError('session_budget_exceeded', value.message ?? 'The PresenterAI session budget has been reached.', false)
   if (value.code === 'unpriced_model') return new AiServiceError('unpriced_model', value.message ?? 'The selected model cannot be priced safely.', false)
   if (value.code === 'ETIMEDOUT' || value.name === 'APIConnectionTimeoutError') return new AiServiceError('timeout', 'The OpenAI request timed out.', true)

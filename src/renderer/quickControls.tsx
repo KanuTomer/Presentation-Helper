@@ -77,24 +77,21 @@ export function CopilotQuickControls({
           &lt;/&gt; Code
         </button>
       </div>
-      <button
+      {!clickThrough.enabled && <button
         ref={clickThroughTrigger}
         type="button"
         className={`click-through-control ${clickThrough.enabled ? 'click-through-active' : ''}`}
         disabled={changingClickThrough || (!clickThrough.enabled && !clickThrough.recoveryAvailable)}
         aria-pressed={clickThrough.enabled}
+        aria-label={clickThrough.recoveryAvailable ? 'Enable click-through' : 'Click-through unavailable'}
         title={!clickThrough.recoveryAvailable ? 'The emergency recovery shortcut is unavailable, so click-through is disabled.' : undefined}
         onClick={() => {
           if (clickThrough.enabled) void onSetClickThrough(false).catch(() => undefined)
           else setConfirmingClickThrough(true)
         }}
       >
-        {clickThrough.enabled
-          ? 'Click-through on'
-          : clickThrough.recoveryAvailable
-            ? 'Enable click-through'
-            : 'Click-through unavailable'}
-      </button>
+        Click-through
+      </button>}
       <span className="command-spacer" aria-hidden="true" />
       {children && <div className="command-actions">{children}</div>}
     </section>

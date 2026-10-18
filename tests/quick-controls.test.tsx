@@ -114,7 +114,7 @@ describe('Copilot quick controls', () => {
     expect(screen.getByRole('status').textContent).toContain('CLICK-THROUGH ON · Ctrl+Shift+I')
   })
 
-  it('contains a rejected disable after the parent surfaces the actionable error', async () => {
+  it('removes the mouse recovery button while click-through is active', async () => {
     const setClickThrough = vi.fn().mockRejectedValue(new Error('Persistence unavailable.'))
     render(<CopilotQuickControls
       answerFormat="code"
@@ -123,8 +123,8 @@ describe('Copilot quick controls', () => {
       onSetClickThrough={setClickThrough}
     />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Click-through on' }))
+    expect(screen.queryByRole('button', { name: /Click-through on|Restore clicks|Enable click-through/ })).toBeNull()
     await Promise.resolve()
-    expect(setClickThrough).toHaveBeenCalledWith(false)
+    expect(setClickThrough).not.toHaveBeenCalled()
   })
 })

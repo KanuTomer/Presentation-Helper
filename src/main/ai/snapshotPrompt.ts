@@ -10,6 +10,9 @@ schema.required = Object.keys(schema.properties!)
 const codeBlocks = schema.properties!.codeBlocks
 const blocks = codeBlocks && typeof codeBlocks === 'object' ? codeBlocks.items : undefined
 if (blocks && !Array.isArray(blocks) && typeof blocks === 'object') {
+  // The provider rejects Zod's Unicode-property regex without JavaScript's
+  // Unicode flag. Use the same bounded ASCII identifiers as developer output.
+  blocks.properties!.language = { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9+.#_-]{0,31}$' }
   blocks.properties!.title = { anyOf: [{ type: 'string', maxLength: 120 }, { type: 'null' }] }
   blocks.required = Object.keys(blocks.properties!)
 }

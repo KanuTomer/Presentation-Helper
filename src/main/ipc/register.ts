@@ -53,7 +53,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   const status = (): AppStatus => {
     const { escapeWarning, ...operationStatus } = audio.operations.snapshot()
     return {
-      ...operationStatus, clickThrough: windows.clickThroughStatus,
+      ...operationStatus, workspace: windows.workspaceStatus, clickThrough: windows.clickThroughStatus,
       capture: capture.status(windows.window), listening: audio.listening,
       audioSource: audio.activeEndpoint?.name ?? audio.devices.find((device) => device.id === store.settings.selectedAudioEndpointId)?.name ?? 'Windows default output (WASAPI loopback)',
       temporaryAudioExists: Boolean(audio.temporaryAudio), helperAvailable: audio.helper.available, helperState: audio.helper.state,
@@ -71,6 +71,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   }
   const broadcast = (): void => windows.window?.webContents.send(channels.status, status())
   windows.onClickThroughStatusChange = broadcast
+  windows.onWorkspaceStatusChange = broadcast
   audio.onState = broadcast
   audio.onTranscriptDraft = (draft) => windows.window?.webContents.send(channels.transcriptDraft, transcriptionDraftSchema.parse(draft))
   audio.onError = (error) => windows.window?.webContents.send(channels.appError, error)
@@ -102,11 +103,13 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   const typedAnswers = new TypedAnswerController(ai, audio.operations, transmissionPreview)
   handle(channels.snapshotMonitors, () => snapshots.frames.monitors())
   handle<[unknown]>(channels.captureSnapshot, (_event, monitorId) => {
+    requirePresenter()
     if (monitorId !== undefined && (typeof monitorId !== 'string' || !/^-?\d{1,20}$/.test(monitorId))) throw new Error('Invalid monitor identifier.')
     return snapshots.capture(monitorId as string | undefined)
   })
   handle(channels.discardSnapshot, () => snapshots.frames.clear())
   handle<[unknown]>(channels.solveSnapshot, (_event, id) => {
+    requirePresenter()
     if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/i.test(id)) throw new Error('Invalid screenshot identifier.')
     return snapshots.solve(id)
   })
@@ -152,6 +155,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   handle(channels.deleteApiKey, () => secrets.deleteKey())
   handle(channels.testApiKey, () => ai.testKey())
   handle<[unknown, unknown]>(channels.ask, (_event, question, requestedFormat) => {
+    requirePresenter()
     if (typeof question !== 'string') throw new Error('Invalid question.')
     return typedAnswers.ask(question, parseAnswerFormat(requestedFormat))
   })
@@ -204,8 +208,37 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     if (typeof enabled !== 'boolean') throw new Error('Invalid click-through state.')
     return applyClickThrough(enabled)
   })
+  const requirePresenter = (): void => {
+    if (!windows.isPresenter || windows.workspaceStatus.setupRequest) throw new Error('Enter presenter mode and dismiss the Setup confirmation before starting a request.')
+  }
+  handle(channels.enterPresenter, () => { ensureIdle(audio); windows.enterPresenter() })
+  handle<[unknown]>(channels.requestSetup, (_event, section) => {
+    if (!['settings', 'privacy', 'documents', 'capture'].includes(String(section))) throw new Error('Invalid Setup section.')
+    windows.requestSetup(section as 'settings' | 'privacy' | 'documents' | 'capture')
+  })
+  handle<[unknown]>(channels.confirmSetup, async (_event, cancelActive) => {
+    if (typeof cancelActive !== 'boolean') throw new Error('Invalid cancellation confirmation.')
+    if (windows.workspaceStatus.mode !== 'presenter' || !windows.workspaceStatus.setupRequest) throw new Error('No pending Setup confirmation.')
+    if (audio.operations.isBusy) {
+      if (!cancelActive) throw new Error('Cancel the active operation before leaving presenter mode.')
+      const result = await audio.cancel()
+      if (!result.ok) throw new Error(result.error.message)
+    }
+    ensureIdle(audio)
+    snapshots.frames.clear()
+    windows.confirmSetup()
+  })
+  handle(channels.dismissSetup, () => windows.dismissSetupRequest())
+  handle<[unknown]>(channels.workspaceReady, (_event, id) => {
+    if (typeof id !== 'string' || id.length > 128) throw new Error('Invalid workspace transition.')
+    windows.acknowledgeWorkspace(id)
+  })
+  handle<[unknown]>(channels.resizePresenter, (_event, height) => {
+    if (typeof height !== 'number') throw new Error('Invalid content height.')
+    windows.resizePresenter(height)
+  })
   handle(channels.showSettings, () => windows.openSettings())
-  handle(channels.toggleListening, () => audio.toggleListening())
+  handle(channels.toggleListening, () => { requirePresenter(); return audio.toggleListening() })
   handle<[unknown]>(channels.copyCode, (_event, value) => {
     clipboard.writeText(parseClipboardCode(value))
   })
@@ -235,6 +268,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     audio.acknowledgeTranscriptVisible(operationId)
   })
   handle<[boolean]>(channels.setCaptureProtection, (_event, enabled) => {
+    if (typeof enabled !== 'boolean' || windows.workspaceStatus.transition !== 'idle' || (windows.workspaceStatus.mode === 'presenter' && !enabled)) throw new Error('Presenter protection cannot be disabled. Return to Setup first.')
     if (!windows.window) throw new Error('Overlay window is unavailable.')
     capture.setEnabled(windows.window, enabled); broadcast()
   })

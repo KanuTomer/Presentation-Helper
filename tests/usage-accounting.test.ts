@@ -184,7 +184,7 @@ describe('audio usage accounting', () => {
     await store.initialize()
     expect(store.recoveryWarning).toEqual({ code: 'invalid_json', recoveredAt: '2026-07-16T14:00:00.000Z' })
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-    expect(saved.schemaVersion).toBe(6)
+    expect(saved.schemaVersion).toBe(7)
     expect(saved.windowLayoutRevision).toBe(1)
     expect(saved.recoveryWarning).toEqual(store.recoveryWarning)
     expect(saved.recoveryWarning).not.toHaveProperty('message')
@@ -295,7 +295,7 @@ describe('audio usage accounting', () => {
     await store.setWindowLayout({ x: 1930, y: 80, width: 1100, height: 690 }, WINDOW_LAYOUT_REVISION)
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
     expect(saved).toMatchObject({
-      schemaVersion: 6, windowLayoutRevision: 1,
+      schemaVersion: 7, windowLayoutRevision: 1,
       windowBounds: { x: 1930, y: 80, width: 1100, height: 690 },
       settings: { projectSummary: 'preserved summary' }
     })
@@ -350,7 +350,7 @@ describe('audio usage accounting', () => {
     expect(store.sessionUsageStatus).toMatchObject({ sessionId: 'migrated-session', actualUsd: 0 })
 
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-    expect(saved.schemaVersion).toBe(6)
+    expect(saved.schemaVersion).toBe(7)
     expect(saved.settings).not.toHaveProperty('opacity')
     expect(saved.settings).not.toHaveProperty('inrPerUsd')
     expect(saved.sessionBudget).toMatchObject({ sessionId: 'migrated-session', actualUsd: 0, reservations: [] })
@@ -425,7 +425,7 @@ describe('audio usage accounting', () => {
     })
 
     const saved = JSON.parse(await readFile(join(userData, 'presenterai.json'), 'utf8'))
-    expect(saved.schemaVersion).toBe(6)
+    expect(saved.schemaVersion).toBe(7)
     expect(saved.settings.neonIntensity).toBe(0.65)
     expect(saved.settings).not.toHaveProperty('glassTint')
     expect(saved.sessionBudget).toMatchObject({ sessionId: 'preserved-session', actualUsd: 0.02 })

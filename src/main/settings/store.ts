@@ -18,7 +18,7 @@ import { appSettingsSchema, parseSettingsPatch, validateSettingsMutation, valida
 export { USAGE_PRICING_VERSION } from '../ai/pricing.js'
 export type { SettingsRecoveryWarning } from '../../shared/contracts.js'
 
-export const SETTINGS_SCHEMA_VERSION = 6
+export const SETTINGS_SCHEMA_VERSION = 7
 export const WINDOW_LAYOUT_REVISION = 1
 export { LISTENING_CONSENT_VERSION } from '../../shared/contracts.js'
 export const MAX_RECENT_USAGE_RECORDS = 100
@@ -105,6 +105,7 @@ interface StoredData {
   windowLayoutRevision: number
   settings: AppSettings
   windowBounds?: { x: number; y: number; width: number; height: number }
+  presenterLayout?: { x: number; y: number; width: number }
   documents: DocumentInfo[]
   captureResults: CaptureCompatibilityResult[]
   usage: UsageSummary
@@ -236,6 +237,12 @@ const storedDataShape = {
 const storedDataSchema: z.ZodType<StoredData> = z.object({
   schemaVersion: z.literal(SETTINGS_SCHEMA_VERSION),
   windowLayoutRevision: z.number().int().min(0).max(WINDOW_LAYOUT_REVISION),
+  ...storedDataShape,
+  presenterLayout: boundsSchema.omit({ height: true }).optional()
+}).strict()
+const storedDataV6Schema = z.object({
+  schemaVersion: z.literal(6),
+  windowLayoutRevision: z.number().int().min(0).max(WINDOW_LAYOUT_REVISION),
   ...storedDataShape
 }).strict()
 const storedDataV2Schema = z.object({
@@ -339,6 +346,15 @@ export class SettingsStore {
     }
 
     const rawVersion = isRecord(raw) ? raw.schemaVersion : undefined
+    if (rawVersion === 6) {
+      const previous = storedDataV6Schema.safeParse(raw)
+      if (previous.success) {
+        const bounds = previous.data.windowBounds
+        this.data = { ...previous.data, schemaVersion: SETTINGS_SCHEMA_VERSION,
+          ...(bounds ? { presenterLayout: { x: bounds.x, y: bounds.y, width: bounds.width } } : {}) }
+        await this.flush(); return
+      }
+    }
     if (rawVersion === 5) {
       const previous = storedDataV5Schema.safeParse(raw)
       if (previous.success) {
@@ -378,7 +394,7 @@ export class SettingsStore {
         return
       }
     }
-    const warningCode: RecoveryReason = rawVersion !== undefined && rawVersion !== 2 && rawVersion !== 3 && rawVersion !== 4 && rawVersion !== 5 && rawVersion !== SETTINGS_SCHEMA_VERSION
+    const warningCode: RecoveryReason = rawVersion !== undefined && rawVersion !== 2 && rawVersion !== 3 && rawVersion !== 4 && rawVersion !== 5 && rawVersion !== 6 && rawVersion !== SETTINGS_SCHEMA_VERSION
       ? 'unsupported_schema'
       : 'invalid_shape'
     this.data = this.migrateOrRecover(raw, warningCode)
@@ -411,6 +427,11 @@ export class SettingsStore {
     }
   }
   get windowBounds(): StoredData['windowBounds'] { return this.data.windowBounds && { ...this.data.windowBounds } }
+  get presenterLayout(): StoredData['presenterLayout'] { return this.data.presenterLayout && { ...this.data.presenterLayout } }
+  async setPresenterLayout(value: NonNullable<StoredData['presenterLayout']>): Promise<void> {
+    this.data.presenterLayout = boundsSchema.omit({ height: true }).parse(value)
+    await this.flush()
+  }
 
   async updateSettings(value: Partial<AppSettings>): Promise<AppSettings> {
     const patch = parseSettingsPatch(value)
@@ -521,6 +542,7 @@ export class SettingsStore {
   }
   async clearWindowBounds(): Promise<void> {
     delete this.data.windowBounds
+    delete this.data.presenterLayout
     this.data.windowLayoutRevision = WINDOW_LAYOUT_REVISION
     await this.flush()
   }
@@ -528,6 +550,7 @@ export class SettingsStore {
   async clearSettingsData(): Promise<void> {
     this.data.settings = structuredClone(defaultSettings)
     delete this.data.windowBounds
+    delete this.data.presenterLayout
     this.data.windowLayoutRevision = WINDOW_LAYOUT_REVISION
     delete this.data.privacyConsent
     delete this.data.recoveryWarning
@@ -613,7 +636,7 @@ export class SettingsStore {
 
   private migrateOrRecover(raw: unknown, reason: RecoveryReason): StoredData {
     if (!isRecord(raw)) return this.recoveredDefaults(reason)
-    if (raw.schemaVersion !== undefined && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== 4 && raw.schemaVersion !== 5 && raw.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
+    if (raw.schemaVersion !== undefined && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== 4 && raw.schemaVersion !== 5 && raw.schemaVersion !== 6 && raw.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
       return this.recoveredDefaults(reason)
     }
 
@@ -624,6 +647,7 @@ export class SettingsStore {
       : parseLayoutRevision(raw.windowLayoutRevision)
     data.settings = recoverSettings(raw.settings)
     data.windowBounds = recoveredBounds
+    data.presenterLayout = parseOptional(boundsSchema.omit({ height: true }), raw.presenterLayout)
     data.documents = parseArrayItems(documentSchema, raw.documents)
     data.captureResults = parseArrayItems(captureResultSchema, raw.captureResults)
     data.usage = usageSummarySchema.safeParse(raw.usage).success

@@ -1,5 +1,23 @@
 @import "tailwindcss";
 
+.workspace-setup { background:#0b1020; }
+.workspace-content { display:flex; flex-direction:column; gap:10px; min-width:0; }
+.setup-footer { display:flex; flex:0 0 auto; padding:12px 16px; align-items:center; justify-content:space-between; gap:12px; background:var(--glass-panel); border-top:1px solid var(--glass-border); }
+.setup-footer span { color:var(--text-secondary); font-size:12px; }
+.group-settings > [data-group]:not([data-group="settings"]), .group-audio > [data-group]:not([data-group="audio"]), .group-appearance > [data-group]:not([data-group="appearance"]) { display:none; }
+.settings-group > .stage-timings { display:none; }
+.group-audio > .stage-timings { display:block; }
+.workspace-presenter > .transmission-preview { max-height:40vh; overflow:auto; flex:0 1 auto; }
+.workspace-presenter .titlebar { padding:7px 11px; }
+.workspace-presenter .capture-label { font-size:10px; color:var(--text-secondary); }
+.workspace-presenter .status-row { flex-wrap:wrap; justify-content:flex-end; }
+.workspace-presenter .status-row button { padding:4px 7px; }
+.workspace-presenter .content { padding:10px; }
+.setup-return-confirmation { flex:0 0 auto; padding:12px; margin:8px 10px; background:var(--glass-surface); border:1px solid #9faed4; border-radius:12px; }
+.setup-return-confirmation p { margin:6px 0 10px; }
+.setup-return-confirmation .actions { justify-content:flex-end; flex-wrap:wrap; }
+@media(max-width:680px){.setup-footer,.setup-tabs{flex-wrap:wrap}.workspace-presenter .capture-label{display:none}}
+
 :root {
   color: #F3F6FF;
   background: transparent;

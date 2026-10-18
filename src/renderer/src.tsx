@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { SetupReturnConfirmation, usePresenterSizing } from './workspace'
 import type {
   AiErrorInfo, AnswerFormat, ApiKeyStatus, AppSettings, AppStatus, AssistantResponse, DocumentInfo,
   TranscriptionDraft, UsageLedger
@@ -22,9 +23,10 @@ import {
   ListeningConsentPanel, PrivacyDisclosure, RetentionControls, SessionBudgetPanel, TransmissionPreviewPanel, UsageEstimatePanel
 } from './privacyControls'
 
-type View = 'copilot' | 'documents' | 'settings' | 'privacy' | 'capture'
+type View = 'copilot' | 'documents' | 'settings' | 'audio' | 'appearance' | 'privacy' | 'capture'
 
 export const blankStatus: AppStatus = {
+  workspace: { mode: 'setup', transition: 'idle' },
   operation: 'idle', operationTimings: {}, listening: false, audioSource: 'System output (WASAPI loopback)', temporaryAudioExists: false, helperAvailable: false,
   helperState: 'missing', audioDevices: [], shortcutWarnings: [], shortcutRegistrations: [], capture: { requested: false, electronReported: false, verifiedResults: [] },
   clickThrough: { enabled: false, recoveryShortcut: 'Control+Shift+I', recoveryAvailable: false },
@@ -38,7 +40,7 @@ export const blankStatus: AppStatus = {
 const blankApiKeyStatus: ApiKeyStatus = { configured: false, masked: false, protection: 'unavailable' }
 
 export function App(): React.JSX.Element {
-  const [view, setView] = useState<View>('copilot')
+  const [view, setView] = useState<View>('settings')
   const [status, setStatus] = useState(blankStatus)
   const [settings, setSettings] = useState<AppSettings>()
   const [documents, setDocuments] = useState<DocumentInfo[]>([])
@@ -50,6 +52,24 @@ export function App(): React.JSX.Element {
   const [aiError, setAiError] = useState<AiErrorInfo>()
   const [apiKeyStatus, setApiKeyStatus] = useState<ApiKeyStatus>(blankApiKeyStatus)
   const [recordingMs, setRecordingMs] = useState(0)
+  const [folded, setFolded] = useState(false)
+  const shellRef = useRef<HTMLElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const workspace = status.workspace ?? { mode: 'setup' as const, transition: 'idle' as const }
+  const presenterMode = workspace.mode === 'presenter'
+  const busy = status.operation !== 'idle' && status.operation !== 'error'
+  usePresenterSizing(shellRef, contentRef, presenterMode)
+  useEffect(() => { setFolded(false) }, [response])
+  useEffect(() => {
+    if (!workspace.transitionId) return
+    const id = workspace.transitionId
+    // Hidden native windows may pause animation frames. React's committed DOM
+    // is sufficient for the main process to show the requested workspace.
+    void window.presenter.acknowledgeWorkspace(id).catch((error) => setAiError({ code: 'unknown', message: (error as Error).message, retryable: false }))
+  }, [workspace.transitionId])
+  useEffect(() => {
+    if (!presenterMode && workspace.setupRequest) setView(workspace.setupRequest)
+  }, [presenterMode, workspace.setupRequest])
   const input = useRef<HTMLTextAreaElement>(null)
   const questionRef = useRef('')
   const composerRevision = useRef(0)
@@ -182,8 +202,13 @@ export function App(): React.JSX.Element {
   }
 
   const neonIntensity = settings?.neonIntensity ?? 0.65
+  const openSetup = (section: 'settings' | 'privacy' | 'documents' | 'capture' = 'settings'): void => {
+    if (presenterMode) void window.presenter.requestSetup(section).catch((error) => showAiError({ code: 'unknown', message: (error as Error).message, retryable: false }))
+    else setView(section)
+  }
   return <main
-    className={`shell ${status.listening ? 'is-listening' : ''}`}
+    ref={shellRef}
+    className={`shell workspace-${workspace.mode} ${status.listening ? 'is-listening' : ''}`}
     style={{ '--neon-intensity': neonIntensity } as React.CSSProperties}
   >
       <QuietGlassLayer />
@@ -193,41 +218,46 @@ export function App(): React.JSX.Element {
       onCancel={() => window.presenter.cancel().then((result) => { if (!result.ok) showAiError(result.error) })}
       onError={(message) => showAiError({ code: 'privacy_preview_unavailable', message, retryable: true })}
     />}
-    <header className="titlebar drag-region">
-      <div className="brand"><span className="brand-mark">P</span><div><strong>PresenterAI</strong><small>local-first copilot</small></div></div>
+    <header className="titlebar drag-region" inert={presenterMode && Boolean(workspace.setupRequest)}>
+      <div className="brand"><span className="brand-mark">P</span><div><strong>PresenterAI</strong>{!presenterMode && <small>Prepare your session</small>}</div></div>
       <div className="status-row no-drag">
         <span className={`privacy-dot ${status.capture.electronReported ? 'protected' : 'warning'}`} />
-        <button className="icon-button" onClick={() => setView('capture')} title="Capture protection status">{status.capture.electronReported ? 'Electron: on*' : 'Unverified'}</button>
+        {presenterMode ? <><span className="capture-label">{status.capture.electronReported ? 'Protection requested · unverified*' : 'Protection unavailable'}</span><button onClick={() => openSetup()}>← Setup</button>{response && <button aria-expanded={!folded} aria-controls="presenter-answer" onClick={() => setFolded(!folded)}>{folded ? 'Show answer' : 'Fold answer'}</button>}</> : <button className="icon-button" onClick={() => setView('capture')}>Capture compatibility</button>}
       </div>
     </header>
 
     <OperationBanner status={status} elapsedMs={recordingMs} onError={showAiError} onCancel={() => { void window.presenter.cancel().then((result) => { if (!result.ok) showAiError(result.error) }) }} />
     <ClickThroughBanner status={status.clickThrough} />
 
-    <nav className="tabs no-drag">
-      {(['copilot', 'documents', 'settings', 'privacy'] as View[]).map((item) => <button key={item} className={view === item ? 'active' : ''} onClick={() => setView(item)}>{item}</button>)}
-    </nav>
+    {!presenterMode && <nav className="tabs setup-tabs no-drag" aria-label="Setup sections">
+      {([['settings', 'Session & models'], ['documents', 'Documents & context'], ['audio', 'Audio & shortcuts'], ['appearance', 'Appearance'], ['privacy', 'Privacy & data']] as Array<[View, string]>).map(([item, label]) => <button key={item} className={view === item ? 'active' : ''} onClick={() => setView(item)}>{label}</button>)}
+    </nav>}
+    {presenterMode && <SetupReturnConfirmation workspace={workspace} busy={busy} onError={(message) => showAiError({ code: 'unknown', message, retryable: false })} />}
 
-    <section className="content no-drag" tabIndex={0} aria-label={`${view} content`} onKeyDown={handleContentScrollKey}>
+    <section className="content no-drag" tabIndex={0} aria-label={`${presenterMode ? 'copilot' : view} content`} onKeyDown={handleContentScrollKey} inert={presenterMode && Boolean(workspace.setupRequest)}>
+      <div ref={contentRef} className="workspace-content">
+      {workspace.error && <Notice tone="danger">{workspace.error}</Notice>}
       {status.settingsRecoveryWarning && <Notice tone="warning"><strong>Settings were recovered safely.</strong> The prior file was {status.settingsRecoveryWarning.code.replaceAll('_', ' ')}. <button onClick={async () => { await window.presenter.dismissSettingsRecoveryWarning(); await refresh() }}>Dismiss</button></Notice>}
-      {view === 'copilot' && <Copilot onSnapshotResponse={(value) => { setResponse(value); setAiError(undefined); void refresh() }} question={question} setQuestion={setQuestionFromUser} transcriptDraft={transcriptDraft} resolveTranscript={(choice) => {
+      {presenterMode && <Copilot folded={folded} onSnapshotResponse={(value) => { setResponse(value); setAiError(undefined); void refresh() }} question={question} setQuestion={setQuestionFromUser} transcriptDraft={transcriptDraft} resolveTranscript={(choice) => {
         if (!transcriptDraft) return
         if (choice !== 'discard') setQuestionFromUser(mergeTranscriptDraft(questionRef.current, transcriptDraft.draft.text, choice))
         setTranscriptDraft(undefined); setTimeout(() => input.current?.focus(), 0)
-      }} answerFormat={answerFormat} setAnswerFormat={setAnswerFormat} onSetClickThrough={setClickThrough} input={input} ask={() => ask()} retry={() => ask(lastSubmittedFormat.current)} response={response} aiError={aiError ?? status.operationError} openSettings={() => setView('settings')} openPrivacy={() => setView('privacy')} hasKey={apiKeyStatus.configured} status={status} onAudioError={showAiError} />}
-      {view === 'documents' && <DocumentsView documents={documents} onChange={refresh} />}
-      {view === 'settings' && settings && <Settings settings={settings} status={status} recordingMs={recordingMs} apiKeyStatus={apiKeyStatus} onNeonIntensityChange={updateNeonIntensity} onChange={refresh} />}
-      {view === 'privacy' && <Privacy status={status} recordingMs={recordingMs} documents={documents} usage={usage} settings={settings} onNewSession={async () => {
+      }} answerFormat={answerFormat} setAnswerFormat={setAnswerFormat} onSetClickThrough={setClickThrough} input={input} ask={() => ask()} retry={() => ask(lastSubmittedFormat.current)} response={response} aiError={aiError ?? status.operationError} openSettings={() => openSetup()} openPrivacy={() => openSetup('privacy')} hasKey={apiKeyStatus.configured} status={status} onAudioError={showAiError} />}
+      {!presenterMode && view === 'documents' && <><DocumentsView documents={documents} onChange={refresh} /><fieldset><legend>Project summary</legend><textarea value={settings?.projectSummary ?? ''} onChange={(event) => { void window.presenter.updateSettings({ projectSummary: event.target.value }).then(() => refresh()) }} placeholder="Optional user-authored project background" /></fieldset></>}
+      {!presenterMode && ['settings', 'audio', 'appearance'].includes(view) && settings && <Settings group={view as 'settings' | 'audio' | 'appearance'} settings={settings} status={status} recordingMs={recordingMs} apiKeyStatus={apiKeyStatus} onNeonIntensityChange={updateNeonIntensity} onChange={refresh} />}
+      {!presenterMode && view === 'privacy' && <Privacy status={status} recordingMs={recordingMs} documents={documents} usage={usage} settings={settings} onNewSession={async () => {
         await window.presenter.startNewSession()
         clearRendererSession()
         await refresh()
       }} onDeleteAllSuccess={clearRendererSession} onChange={refresh} />}
-      {view === 'capture' && <CaptureStatus status={status} onChange={refresh} />}
+      {!presenterMode && view === 'capture' && <CaptureStatus status={status} onChange={refresh} />}
+      </div>
     </section>
+    {!presenterMode && <footer className="setup-footer"><span>Listening off · Setup may appear in recordings</span><button className="primary" disabled={!settings || busy || workspace.transition !== 'idle'} onClick={() => void window.presenter.enterPresenterMode().catch((error) => setAiError({ code: 'unknown', message: (error as Error).message, retryable: false }))}>Enter presenter mode →</button></footer>}
   </main>
 }
 
-function Copilot(props: { onSnapshotResponse(response: AssistantResponse): void; question: string; setQuestion(v: string): void; transcriptDraft?: { draft: TranscriptionDraft; conflict: boolean }; resolveTranscript(choice: 'replace' | 'append' | 'discard'): void; answerFormat: AnswerFormat; setAnswerFormat(v: AnswerFormat): void; onSetClickThrough(enabled: boolean): Promise<void>; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; retry(): void; response?: AssistantResponse; aiError?: AiErrorInfo; openSettings(): void; openPrivacy(): void; hasKey: boolean; status: AppStatus; onAudioError(error: AiErrorInfo): void }) {
+function Copilot(props: { folded: boolean; onSnapshotResponse(response: AssistantResponse): void; question: string; setQuestion(v: string): void; transcriptDraft?: { draft: TranscriptionDraft; conflict: boolean }; resolveTranscript(choice: 'replace' | 'append' | 'discard'): void; answerFormat: AnswerFormat; setAnswerFormat(v: AnswerFormat): void; onSetClickThrough(enabled: boolean): Promise<void>; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; retry(): void; response?: AssistantResponse; aiError?: AiErrorInfo; openSettings(): void; openPrivacy(): void; hasKey: boolean; status: AppStatus; onAudioError(error: AiErrorInfo): void }) {
   const busy = props.status.operation !== 'idle' && props.status.operation !== 'error'
   const canSubmit = props.hasKey && Boolean(props.question.trim()) && !busy && !props.transcriptDraft?.conflict
   const retryIsSafe = props.status.operationKind !== 'audio' && !['busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio', 'invalid_transcript', 'capture_timeout', 'transcript_display_unavailable'].includes(props.aiError?.code ?? '')
@@ -249,11 +279,11 @@ function Copilot(props: { onSnapshotResponse(response: AssistantResponse): void;
       </CopilotQuickControls>
     </div>
     {props.aiError && <AiErrorPanel error={props.aiError} allowRetry={retryIsSafe} onRetry={props.retry} onOpenSettings={props.openSettings} onOpenPrivacy={props.openPrivacy} />}
-    {props.response ? <ResponseCard response={props.response} onCopyCode={(code) => window.presenter.copyCode(code)} /> : <div className="empty"><div className="wave">∿</div><h2>Ready when you are</h2><p>Type a question, or toggle system-audio listening. After transcription, review the draft and press Ctrl + Enter.</p></div>}
+    {props.response && !props.folded && <div id="presenter-answer"><ResponseCard response={props.response} onCopyCode={(code) => window.presenter.copyCode(code)} /></div>}
   </div>
 }
 
-function Settings({ settings, status, recordingMs, apiKeyStatus, onNeonIntensityChange, onChange }: { settings: AppSettings; status: AppStatus; recordingMs: number; apiKeyStatus: ApiKeyStatus; onNeonIntensityChange(value: number): void; onChange(): Promise<void> }) {
+function Settings({ group, settings, status, recordingMs, apiKeyStatus, onNeonIntensityChange, onChange }: { group: 'settings' | 'audio' | 'appearance'; settings: AppSettings; status: AppStatus; recordingMs: number; apiKeyStatus: ApiKeyStatus; onNeonIntensityChange(value: number): void; onChange(): Promise<void> }) {
   const keyInput = useRef<HTMLInputElement>(null)
   const [message, setMessage] = useState(''); const [failure, setFailure] = useState('')
   const update = async (patch: Partial<AppSettings>) => {
@@ -262,9 +292,9 @@ function Settings({ settings, status, recordingMs, apiKeyStatus, onNeonIntensity
     catch (error) { setFailure((error as Error).message || 'The setting could not be saved.') }
   }
   const busy = status.operation !== 'idle' && status.operation !== 'error'
-  return <div className="stack"><h2>Settings</h2>
+  return <div className={`stack settings-group group-${group}`}><h2>{group === 'audio' ? 'Audio & shortcuts' : group === 'appearance' ? 'Appearance' : 'Session & models'}</h2>
     {failure && <Notice tone="danger">{failure}</Notice>}
-    <fieldset className="appearance-settings"><legend>Appearance</legend>
+    <fieldset className="appearance-settings" data-group="appearance"><legend>Appearance</legend>
       <label className="neon-control">
         <span>Accent intensity <output>{Math.round(settings.neonIntensity * 100)}%</output></span>
         <input
@@ -279,13 +309,13 @@ function Settings({ settings, status, recordingMs, apiKeyStatus, onNeonIntensity
       </label>
       <p className="muted">Controls static blue-violet rims and button accents only. Text and reading surfaces stay fixed.</p>
     </fieldset>
-    <fieldset><legend>OpenAI API key</legend><p>{apiKeyStatus.configured ? 'A masked, DPAPI-encrypted key is stored for this Windows user.' : 'No API key is stored.'}</p>{apiKeyStatus.updatedAt && <small>Last replaced {new Date(apiKeyStatus.updatedAt).toLocaleString()}</small>}<p className="muted">Protection: {apiKeyStatus.protection === 'windows-dpapi' ? 'Windows DPAPI' : 'secure storage unavailable'}. DPAPI primarily protects against other Windows users, not every process already running as you.</p><input ref={keyInput} type="password" autoComplete="off" placeholder="sk-…" /><div className="actions"><button className="primary" onClick={async () => { const value = keyInput.current?.value.trim() ?? ''; if (keyInput.current) keyInput.current.value = ''; try { await window.presenter.saveApiKey(value); setMessage('Key saved.'); await onChange() } catch (e) { setFailure((e as Error).message || 'The API key could not be saved.') } }}>Save key</button><button disabled={!apiKeyStatus.configured} onClick={async () => { try { setMessage((await window.presenter.testApiKey()).message) } catch (e) { setFailure((e as Error).message || 'The API key could not be tested.') } }}>Test</button><button disabled={!apiKeyStatus.configured} onClick={async () => { try { await window.presenter.deleteApiKey(); await onChange() } catch (e) { setFailure((e as Error).message || 'The API key could not be deleted.') } }}>Delete</button></div>{message && <small>{message}</small>}</fieldset>
-    <fieldset><legend>Answer model</legend><select value={settings.modelMode} onChange={(e) => void update({ modelMode: e.target.value as AppSettings['modelMode'] })}><option value="normal">Normal · {settings.normalModel}</option><option value="strong">Strong · {settings.strongModel}</option></select></fieldset>
-    <fieldset><legend>System audio output</legend><p className="muted">PresenterAI captures all sound played through the selected Windows output device. It does not listen to the microphone.</p><div className="helper-health"><span className={`health-dot ${status.helperState}`} /><strong>{status.helperState}</strong></div>{status.operation === 'listening' && <p>Recording: {(recordingMs / 1000).toFixed(1)} seconds</p>}<Info label="Active capture endpoint" value={status.activeAudioEndpoint?.name ?? 'None — listening is off'} />{status.helperError && <Notice tone={status.helperState === 'failed' ? 'danger' : 'warning'}>{status.helperError}</Notice>}{status.helperState === 'missing' && <p className="muted">Reinstall PresenterAI or run the packaged build so the Windows helper is available.</p>}{status.helperState === 'failed' && <p className="muted">An unsigned helper may have been blocked by Windows Smart App Control or App Control. PresenterAI never disables that protection. Retry after using a trusted-signed build or an authorized development environment.</p>}<label>Preferred output device<select value={settings.selectedAudioEndpointId ?? ''} disabled={!status.helperAvailable} onChange={(e) => void update({ selectedAudioEndpointId: e.target.value || undefined })}><option value="">Windows default output</option>{status.audioDevices.map((device) => <option value={device.id} key={device.id}>{device.name}{device.isDefault ? ' (default)' : ''}</option>)}</select></label><button onClick={async () => { setFailure(''); try { await window.presenter.refreshAudioDevices(); await onChange() } catch (e) { setFailure((e as Error).message || 'The Windows audio helper could not be retried.') } }}>{status.helperState === 'failed' ? 'Retry helper' : 'Refresh devices'}</button>{status.shortcutWarnings.map((warning) => <Notice tone="warning" key={warning}>{warning}</Notice>)}</fieldset>
-    <ApprovedVocabularyEditor terms={settings.approvedVocabulary} onChange={(approvedVocabulary) => update({ approvedVocabulary })} />
-    <fieldset><legend>Project summary</legend><textarea value={settings.projectSummary} onChange={(e) => void update({ projectSummary: e.target.value })} placeholder="Optional user-authored facts that may be sent with each request." /></fieldset>
-    <ShortcutSettingsPanel askShortcut={settings.askShortcut} hideShortcut={settings.hideShortcut} listenShortcut={settings.listenShortcut} disabled={busy} onChange={update} registrations={status.shortcutRegistrations} onRetry={async () => { await window.presenter.retryShortcuts(); await onChange() }} />
-    <fieldset><legend>Model and reasoning</legend>{(['normal', 'strong'] as const).map((mode) => <div key={mode}>
+    <fieldset data-group="settings"><legend>OpenAI API key</legend><p>{apiKeyStatus.configured ? 'A masked, DPAPI-encrypted key is stored for this Windows user.' : 'No API key is stored.'}</p>{apiKeyStatus.updatedAt && <small>Last replaced {new Date(apiKeyStatus.updatedAt).toLocaleString()}</small>}<p className="muted">Protection: {apiKeyStatus.protection === 'windows-dpapi' ? 'Windows DPAPI' : 'secure storage unavailable'}. DPAPI primarily protects against other Windows users, not every process already running as you.</p><input ref={keyInput} type="password" autoComplete="off" placeholder="sk-…" /><div className="actions"><button className="primary" onClick={async () => { const value = keyInput.current?.value.trim() ?? ''; if (keyInput.current) keyInput.current.value = ''; try { await window.presenter.saveApiKey(value); setMessage('Key saved.'); await onChange() } catch (e) { setFailure((e as Error).message || 'The API key could not be saved.') } }}>Save key</button><button disabled={!apiKeyStatus.configured} onClick={async () => { try { setMessage((await window.presenter.testApiKey()).message) } catch (e) { setFailure((e as Error).message || 'The API key could not be tested.') } }}>Test</button><button disabled={!apiKeyStatus.configured} onClick={async () => { try { await window.presenter.deleteApiKey(); await onChange() } catch (e) { setFailure((e as Error).message || 'The API key could not be deleted.') } }}>Delete</button></div>{message && <small>{message}</small>}</fieldset>
+    <fieldset data-group="settings"><legend>Answer model</legend><select value={settings.modelMode} onChange={(e) => void update({ modelMode: e.target.value as AppSettings['modelMode'] })}><option value="normal">Normal · {settings.normalModel}</option><option value="strong">Strong · {settings.strongModel}</option></select></fieldset>
+    <fieldset data-group="audio"><legend>System audio output</legend><p className="muted">PresenterAI captures all sound played through the selected Windows output device. It does not listen to the microphone.</p><div className="helper-health"><span className={`health-dot ${status.helperState}`} /><strong>{status.helperState}</strong></div>{status.operation === 'listening' && <p>Recording: {(recordingMs / 1000).toFixed(1)} seconds</p>}<Info label="Active capture endpoint" value={status.activeAudioEndpoint?.name ?? 'None — listening is off'} />{status.helperError && <Notice tone={status.helperState === 'failed' ? 'danger' : 'warning'}>{status.helperError}</Notice>}{status.helperState === 'missing' && <p className="muted">Reinstall PresenterAI or run the packaged build so the Windows helper is available.</p>}{status.helperState === 'failed' && <p className="muted">An unsigned helper may have been blocked by Windows Smart App Control or App Control. PresenterAI never disables that protection. Retry after using a trusted-signed build or an authorized development environment.</p>}<label>Preferred output device<select value={settings.selectedAudioEndpointId ?? ''} disabled={!status.helperAvailable} onChange={(e) => void update({ selectedAudioEndpointId: e.target.value || undefined })}><option value="">Windows default output</option>{status.audioDevices.map((device) => <option value={device.id} key={device.id}>{device.name}{device.isDefault ? ' (default)' : ''}</option>)}</select></label><button onClick={async () => { setFailure(''); try { await window.presenter.refreshAudioDevices(); await onChange() } catch (e) { setFailure((e as Error).message || 'The Windows audio helper could not be retried.') } }}>{status.helperState === 'failed' ? 'Retry helper' : 'Refresh devices'}</button>{status.shortcutWarnings.map((warning) => <Notice tone="warning" key={warning}>{warning}</Notice>)}</fieldset>
+    <div data-group="audio"><ApprovedVocabularyEditor terms={settings.approvedVocabulary} onChange={(approvedVocabulary) => update({ approvedVocabulary })} /></div>
+
+    <div data-group="audio"><ShortcutSettingsPanel askShortcut={settings.askShortcut} hideShortcut={settings.hideShortcut} listenShortcut={settings.listenShortcut} disabled={busy} onChange={update} registrations={status.shortcutRegistrations} onRetry={async () => { await window.presenter.retryShortcuts(); await onChange() }} /></div>
+    <fieldset data-group="settings"><legend>Model and reasoning</legend>{(['normal', 'strong'] as const).map((mode) => <div key={mode}>
       <label>{mode === 'normal' ? 'Normal model' : 'Strong model'}<select value={mode === 'normal' ? settings.normalModel : settings.strongModel} onChange={(event) => void update(mode === 'normal' ? { normalModel: event.target.value } : { strongModel: event.target.value })}>{MODEL_REGISTRY.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label>
       <label>{mode === 'normal' ? 'Normal reasoning' : 'Strong reasoning'}<select value={(mode === 'normal' ? settings.normalReasoning : settings.strongReasoning) ?? 'medium'} onChange={(event) => void update(mode === 'normal' ? { normalReasoning: event.target.value as 'low' | 'medium' | 'high' } : { strongReasoning: event.target.value as 'low' | 'medium' | 'high' })}>{['low', 'medium', 'high'].map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label>
     </div>)}<p className="muted">No application spending cap. Reasoning and output tokens are billable. Models never switch automatically; account-level limits still apply.</p></fieldset>

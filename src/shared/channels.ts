@@ -1,4 +1,6 @@
 export const channels = {
+  enterPresenter: 'workspace:enter', requestSetup: 'workspace:request-setup', confirmSetup: 'workspace:confirm-setup',
+  dismissSetup: 'workspace:dismiss-setup', workspaceReady: 'workspace:ready', resizePresenter: 'workspace:resize',
   snapshotMonitors: 'snapshot:monitors', captureSnapshot: 'snapshot:capture', discardSnapshot: 'snapshot:discard', solveSnapshot: 'snapshot:solve',
   status: 'app:status', getStatus: 'app:get-status', getSettings: 'settings:get', updateSettings: 'settings:update',
   getApiKeyStatus: 'secrets:status', saveApiKey: 'secrets:save-key', deleteApiKey: 'secrets:delete-key', testApiKey: 'secrets:test-key',

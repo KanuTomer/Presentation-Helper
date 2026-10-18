@@ -32,7 +32,12 @@ await page.route('**/*', (route) => { const url = route.request().url(); if (url
 const check = async (id, action) => { try { await action(); results.push({ id, outcome: 'Pass', source: 'synthetic UI fixture' }) } catch (error) { results.push({ id, outcome: 'Fail', detail: error.message, source: 'synthetic UI fixture' }) } }
 const require = (condition, message) => { if (!condition) throw new Error(message) }
 const capture = async (name) => { const file = `${name}.png`; await page.screenshot({ path: join(output, 'screenshots', file) }); screenshots.push(file) }
-const tab = async (name) => { if (name === 'capture') await page.getByTitle('Capture protection status').click(); else await page.getByRole('button', { name, exact: true }).click() }
+const tab = async (name) => {
+  if (name === 'copilot') { await page.evaluate(() => window.presenter.enterPresenterMode()); return }
+  await page.evaluate(async (section) => { await window.presenter.requestSetup(section); await window.presenter.confirmSetup(false) }, name === 'settings' ? 'settings' : name)
+  if (name === 'capture') await page.getByRole('button', { name: 'Capture compatibility', exact: true }).click()
+  else await page.getByRole('button', { name: { settings: 'Appearance', documents: 'Documents & context', privacy: 'Privacy & data' }[name], exact: true }).click()
+}
 const submit = async (scenario) => {
   await page.evaluate((name) => window.__audit.scenario(name), scenario)
   await tab('copilot'); await page.locator('.question-box textarea').fill('Synthetic question for renderer audit only.')

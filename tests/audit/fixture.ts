@@ -28,6 +28,11 @@ const responses: Record<string, AssistantResponse> = {
 }
 const usage = { summary: { inputTokens: 2100, outputTokens: 900, audioMinutes: 0, transcriptionInputTokens: 0, transcriptionAudioTokens: 0, transcriptionOutputTokens: 0, estimatedUsd: .01, pricingVersion: 'synthetic-only' }, recent: [{ id: 'synthetic-unpriced', requestedModel: 'synthetic-model', returnedModel: 'synthetic-unknown', endpoint: 'responses', inputTokens: 100, outputTokens: 50, reasoningTokens: 20, timestamp: '2026-09-30T00:00:00Z', pricingVersion: 'synthetic-only', priced: false }], rollups: [] }
 const bridge = {
+  enterPresenterMode: async () => { status = { ...status, workspace: { mode: 'presenter', transition: 'idle' } }; emit('status', status) },
+  requestSetup: async (section: 'settings' | 'privacy' | 'documents' | 'capture' = 'settings') => { status = { ...status, workspace: { mode: status.workspace?.mode ?? 'presenter', transition: 'idle', setupRequest: section } }; emit('status', status) },
+  confirmSetup: async () => { status = { ...status, workspace: { ...status.workspace!, mode: 'setup', transition: 'idle' } }; emit('status', status) },
+  dismissSetupRequest: async () => { status = { ...status, workspace: { ...status.workspace!, setupRequest: undefined } }; emit('status', status) },
+  acknowledgeWorkspace: async () => undefined, resizePresenter: async () => undefined,
   getStatus: async () => status, getSettings: async () => settings,
   updateSettings: async (patch: Partial<AppSettings>) => (settings = { ...settings, ...patch }),
   getApiKeyStatus: async () => ({ configured: scenario !== 'keyless', masked: false, protection: 'unavailable' }),
@@ -55,7 +60,7 @@ const bridge = {
 }
 window.presenter = bridge as unknown as PresenterAPI
 // Initialization happens before importing the auto-mounting production renderer.
-status = { operation: 'idle', operationTimings: {}, listening: false, temporaryAudioExists: false, audioSource: 'Synthetic output', helperAvailable: false, helperState: 'failed', helperError: 'Synthetic helper failure — no native capture was attempted.', audioDevices: [], shortcutWarnings: [], shortcutRegistrations: [{ purpose: 'ask', accelerator: settings.askShortcut, status: 'registered' }, { purpose: 'hide', accelerator: settings.hideShortcut, status: 'registered' }, { purpose: 'recovery', accelerator: 'Control+Shift+I', status: 'unavailable' }], capture: { requested: true, electronReported: true, verifiedResults: [] }, clickThrough: { enabled: false, recoveryAvailable: false, recoveryShortcut: 'Control+Shift+I' }, privacyConsent: { requiredVersion: 4, satisfied: false }, sessionUsage: { sessionId: 'synthetic-session', startedAt: '2026-09-30T00:00:00Z', actualUsd: .01, inputTokens: 2100, outputTokens: 900, reasoningTokens: 300, unpricedRequests: 1, pricingVersion: 'synthetic-only' } }
+status = { workspace: { mode: 'presenter', transition: 'idle' }, operation: 'idle', operationTimings: {}, listening: false, temporaryAudioExists: false, audioSource: 'Synthetic output', helperAvailable: false, helperState: 'failed', helperError: 'Synthetic helper failure — no native capture was attempted.', audioDevices: [], shortcutWarnings: [], shortcutRegistrations: [{ purpose: 'ask', accelerator: settings.askShortcut, status: 'registered' }, { purpose: 'hide', accelerator: settings.hideShortcut, status: 'registered' }, { purpose: 'recovery', accelerator: 'Control+Shift+I', status: 'unavailable' }], capture: { requested: true, electronReported: true, verifiedResults: [] }, clickThrough: { enabled: false, recoveryAvailable: false, recoveryShortcut: 'Control+Shift+I' }, privacyConsent: { requiredVersion: 4, satisfied: false }, sessionUsage: { sessionId: 'synthetic-session', startedAt: '2026-09-30T00:00:00Z', actualUsd: .01, inputTokens: 2100, outputTokens: 900, reasoningTokens: 300, unpricedRequests: 1, pricingVersion: 'synthetic-only' } }
 Object.assign(window, { __audit: {
   settings: () => settings,
   scenario: (name: string) => { scenario = name },

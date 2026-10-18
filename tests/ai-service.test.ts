@@ -370,6 +370,11 @@ describe('structured code AI service', () => {
 })
 
 describe('AI error and retry contract', () => {
+  it('explains provider schema rejection without exposing the raw error or treating it as malformed output', () => {
+    const info = toAiErrorInfo({ status: 400, code: 'invalid_json_schema', message: 'Private provider request details' })
+    expect(info).toEqual({ code: 'unknown', message: 'OpenAI rejected the response schema. Update PresenterAI to the latest build; retrying the same request will not fix this application error.', retryable: false })
+    expect(info.message).not.toContain('Private provider request details')
+  })
   it.each([
     [{ status: 401 }, 'invalid_key', false], [{ status: 429, code: 'rate_limit_exceeded' }, 'rate_limit', true],
     [{ status: 429, code: 'insufficient_quota', type: 'insufficient_quota' }, 'quota', false],
