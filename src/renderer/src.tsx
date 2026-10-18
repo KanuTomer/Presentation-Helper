@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { SetupReturnConfirmation, usePresenterSizing } from './workspace'
+import { SetupReturnConfirmation, usePresenterSizing, useWorkspaceAcknowledgement } from './workspace'
 import type {
   AiErrorInfo, AnswerFormat, ApiKeyStatus, AppSettings, AppStatus, AssistantResponse, DocumentInfo,
   TranscriptionDraft, UsageLedger
@@ -60,13 +60,7 @@ export function App(): React.JSX.Element {
   const busy = status.operation !== 'idle' && status.operation !== 'error'
   usePresenterSizing(shellRef, contentRef, presenterMode)
   useEffect(() => { setFolded(false) }, [response])
-  useEffect(() => {
-    if (!workspace.transitionId) return
-    const id = workspace.transitionId
-    // Hidden native windows may pause animation frames. React's committed DOM
-    // is sufficient for the main process to show the requested workspace.
-    void window.presenter.acknowledgeWorkspace(id).catch((error) => setAiError({ code: 'unknown', message: (error as Error).message, retryable: false }))
-  }, [workspace.transitionId])
+  useWorkspaceAcknowledgement(workspace.transitionId, setAiError)
   useEffect(() => {
     if (!presenterMode && workspace.setupRequest) setView(workspace.setupRequest)
   }, [presenterMode, workspace.setupRequest])

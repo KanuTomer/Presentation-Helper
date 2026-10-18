@@ -34,6 +34,16 @@ async function openSetup(section: 'settings' | 'privacy' | 'documents' | 'captur
 
 test.beforeEach(async ({}, info) => { if (!info.title.startsWith('starts in normal Setup')) await enterPresenter() })
 
+test.afterEach(async ({}, info) => {
+  if (info.status === info.expectedStatus || !application) return
+  const diagnostic = await application.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    return { visible: window?.isVisible(), backgroundThrottling: window?.webContents.getBackgroundThrottling(), bounds: window?.getBounds() }
+  }).catch(() => ({ unavailable: true }))
+  const workspace = await page.evaluate(async () => (await window.presenter.getStatus()).workspace).catch(() => undefined)
+  await info.attach('workspace-readiness', { body: JSON.stringify({ ...diagnostic, workspace }), contentType: 'application/json' })
+})
+
 test.beforeAll(async () => {
   userData = await mkdtemp(join(tmpdir(), 'presenterai-e2e-'))
   await writeFile(join(userData, 'presenterai.json'), JSON.stringify({
@@ -84,6 +94,7 @@ test('starts in normal Setup and enters presenter only through the explicit acti
   await expect(page.getByRole('button', { name: 'Enter presenter mode →' })).toBeVisible()
   await enterPresenter()
   expect((await page.evaluate(() => window.presenter.getStatus())).capture.electronReported).toBe(true)
+  expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.getBackgroundThrottling())).toBe(true)
 })
 
 test('registers renderer IPC before delayed helper initialization completes', async () => {

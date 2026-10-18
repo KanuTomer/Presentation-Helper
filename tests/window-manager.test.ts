@@ -355,7 +355,7 @@ describe('workspace transition safety', () => {
     const capture = { setEnabled: vi.fn((_window, enabled) => { protectedWindow = enabled && protectionWorks }), status: () => ({ electronReported: protectedWindow }) }
     const window = { isDestroyed: () => false, getBounds: () => bounds,
       setBounds: vi.fn((value) => { bounds = value }), setMinimumSize: vi.fn(), setSkipTaskbar: vi.fn(), setAlwaysOnTop: vi.fn(),
-      setIgnoreMouseEvents: vi.fn(), hide: vi.fn(), show: vi.fn(), focus: vi.fn(), webContents: { send: vi.fn() } }
+      setIgnoreMouseEvents: vi.fn(), hide: vi.fn(), show: vi.fn(), focus: vi.fn(), webContents: { send: vi.fn(), getBackgroundThrottling: vi.fn(() => true), setBackgroundThrottling: vi.fn() } }
     const windows = new WindowManager(store as never, capture as never)
     windows.window = window as never
     return { windows, window, store, capture }
@@ -364,14 +364,19 @@ describe('workspace transition safety', () => {
     const { windows, window, capture } = await fixture()
     expect(windows.workspaceStatus).toEqual({ mode: 'setup', transition: 'idle' })
     windows.enterPresenter()
+    expect(window.webContents.setBackgroundThrottling).toHaveBeenCalledWith(false)
+    expect(window.webContents.setBackgroundThrottling.mock.invocationCallOrder[0]).toBeLessThan(window.hide.mock.invocationCallOrder[0])
     expect(window.hide.mock.invocationCallOrder[0]).toBeLessThan(capture.setEnabled.mock.invocationCallOrder[0])
     expect(window.show).not.toHaveBeenCalled()
     expect(window.getBounds()).toMatchObject({ width: 860, height: 180 })
     windows.acknowledgeWorkspace('stale')
     expect(window.show).not.toHaveBeenCalled()
+    expect(window.webContents.setBackgroundThrottling).not.toHaveBeenCalledWith(true)
     windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
     expect(windows.isPresenter).toBe(true)
     expect(window.show).toHaveBeenCalledOnce()
+    expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true)
+    expect(window.show.mock.invocationCallOrder[0]).toBeLessThan(window.webContents.setBackgroundThrottling.mock.invocationCallOrder[1])
     windows.prepareToQuit()
   })
   it('fails closed when Electron cannot confirm content protection', async () => {
@@ -379,6 +384,38 @@ describe('workspace transition safety', () => {
     expect(() => windows.enterPresenter()).toThrow(/protection/)
     expect(windows.workspaceStatus.mode).toBe('setup')
     expect(window.setSkipTaskbar).not.toHaveBeenCalledWith(true)
+    expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true)
+    windows.prepareToQuit()
+  })
+  it('restores throttling on timeout, reacquires it for tray retry, and releases it on shutdown', async () => {
+    vi.useFakeTimers()
+    const { windows, window } = await fixture()
+    try {
+      windows.enterPresenter()
+      const expired = windows.workspaceStatus.transitionId!
+      vi.advanceTimersByTime(8_000)
+      expect(window.show).not.toHaveBeenCalled()
+      expect(windows.workspaceStatus.error).toContain('remains hidden')
+      expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true)
+      windows.showFromTray()
+      expect(windows.workspaceStatus.transitionId).not.toBe(expired)
+      expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false)
+      windows.acknowledgeWorkspace(expired)
+      expect(window.show).not.toHaveBeenCalled()
+      expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false)
+      windows.prepareToQuit()
+      expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true)
+    } finally { windows.prepareToQuit(); vi.useRealTimers() }
+  })
+  it('preserves previously disabled throttling and releases the lease if protection is lost', async () => {
+    const { windows, window, capture } = await fixture()
+    window.webContents.getBackgroundThrottling.mockReturnValue(false)
+    windows.enterPresenter()
+    capture.setEnabled(window, false)
+    windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
+    expect(window.show).not.toHaveBeenCalled()
+    expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false)
+    expect(windows.workspaceStatus.error).toContain('protection was lost')
     windows.prepareToQuit()
   })
   it('retains protection throughout Setup confirmation and removes it only after Setup paints', async () => {
@@ -392,10 +429,12 @@ describe('workspace transition safety', () => {
     expect(windows.workspaceStatus.setupRequest).toBeUndefined()
     windows.requestSetup('privacy'); windows.confirmSetup()
     expect(capture.status().electronReported).toBe(true)
+    expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false)
     expect(window.hide).toHaveBeenCalledTimes(2)
     windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
     expect(capture.status().electronReported).toBe(false)
     expect(window.setSkipTaskbar).toHaveBeenLastCalledWith(false)
+    expect(window.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true)
     expect(store.setPresenterLayout.mock.calls[0][0]).not.toHaveProperty('height')
     windows.prepareToQuit()
   })

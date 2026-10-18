@@ -41,6 +41,7 @@ export class WindowManager {
   private quitting = false
   private workspace: WorkspaceStatus = { mode: 'setup', transition: 'idle' }
   private transitionTimer?: NodeJS.Timeout
+  private transitionRenderer?: { window: BrowserWindow; throttling: boolean }
   private resizingContent = false
   private presenterHeight = 180
   onWorkspaceStatusChange?: () => void
@@ -93,6 +94,7 @@ export class WindowManager {
       this.window?.hide()
     })
     this.window.on('closed', () => {
+      this.releaseTransitionRenderer()
       this.unregisterDisplayListeners()
       this.window = undefined
     })
@@ -126,6 +128,7 @@ export class WindowManager {
     clearTimeout(this.boundsTimer)
     const setupBounds = window.getBounds()
     void this.store.setWindowBounds(setupBounds)
+    this.keepTransitionRendererActive(window)
     window.hide()
     this.capture.setEnabled(window, true)
     if (!this.capture.status(window).electronReported) {
@@ -133,6 +136,7 @@ export class WindowManager {
       this.workspace.error = 'Windows capture protection could not be enabled. Presenter mode was not opened.'
       this.onWorkspaceStatusChange?.()
       this.showFocusedTopmost(window)
+      this.releaseTransitionRenderer()
       throw new Error(this.workspace.error)
     }
     this.setClickThrough(false)
@@ -161,6 +165,7 @@ export class WindowManager {
     clearTimeout(this.boundsTimer)
     const { x, y, width } = window.getBounds()
     void this.store.setPresenterLayout({ x, y, width })
+    this.keepTransitionRendererActive(window)
     window.hide()
     this.setClickThrough(false)
     this.workspace = { ...this.workspace, mode: 'setup', transition: 'leaving', transitionId: randomUUID(), error: undefined }
@@ -178,11 +183,12 @@ export class WindowManager {
       window.setSkipTaskbar(false)
     } else if (!this.capture.status(window).electronReported) {
       this.workspace.error = 'Capture protection was lost. The presenter window remains hidden.'
-      this.onWorkspaceStatusChange?.(); return
+      this.onWorkspaceStatusChange?.(); this.releaseTransitionRenderer(); return
     }
     this.workspace = { ...this.workspace, transition: 'idle', transitionId: undefined, error: undefined }
     this.onWorkspaceStatusChange?.()
     this.showFocusedTopmost(window)
+    this.releaseTransitionRenderer()
   }
   resizePresenter(height: number): void {
     if (!Number.isFinite(height) || height < 80 || height > 100_000) throw new Error('Invalid presenter content height.')
@@ -197,13 +203,27 @@ export class WindowManager {
     try { window.setBounds(next) } finally { this.resizingContent = false }
   }
   private beginTransition(): void {
+    this.keepTransitionRendererActive(this.ensureWindow())
     clearTimeout(this.transitionTimer)
     this.transitionTimer = setTimeout(() => {
       this.workspace.error = 'The workspace could not be rendered safely. The window remains hidden; use the tray to retry.'
       this.onWorkspaceStatusChange?.()
+      this.releaseTransitionRenderer()
     }, 8000)
     this.transitionTimer.unref?.()
     this.onWorkspaceStatusChange?.()
+  }
+  private keepTransitionRendererActive(window: BrowserWindow): void {
+    if (this.transitionRenderer?.window === window) return
+    this.releaseTransitionRenderer()
+    const throttling = window.webContents.getBackgroundThrottling()
+    window.webContents.setBackgroundThrottling(false)
+    this.transitionRenderer = { window, throttling }
+  }
+  private releaseTransitionRenderer(): void {
+    const renderer = this.transitionRenderer
+    this.transitionRenderer = undefined
+    if (renderer && !renderer.window.isDestroyed()) renderer.window.webContents.setBackgroundThrottling(renderer.throttling)
   }
   focusAsk(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); if (this.isPresenter) window.webContents.send(channels.focusAsk) }
   openSettings(): void { this.requestSetup('settings') }
@@ -224,7 +244,7 @@ export class WindowManager {
   emergencyUnlock(): void { this.setClickThrough(false); void this.store.updateSettings({ clickThrough: false }).catch(() => undefined) }
   showFromTray(): void { this.emergencyUnlock(); this.showFocusedTopmost(this.ensureWindow()) }
   openSettingsFromTray(): void { this.emergencyUnlock(); this.openSettings() }
-  prepareToQuit(): void { this.quitting = true; clearTimeout(this.boundsTimer); clearTimeout(this.transitionTimer) }
+  prepareToQuit(): void { this.quitting = true; clearTimeout(this.boundsTimer); clearTimeout(this.transitionTimer); this.releaseTransitionRenderer() }
 
   registerShortcuts(): boolean {
     return this.registerShortcutSet(this.store.settings.askShortcut, this.store.settings.hideShortcut)
