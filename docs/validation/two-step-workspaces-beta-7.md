@@ -32,8 +32,10 @@ Date: 2026-10-18. Source implementation and scoped automated validation complete
 
 ## Open gates
 
-The fresh dependency audit reports **11 advisories: 2 high, 8 moderate, 1 low**. High findings are `http-cache-semantics` and `source-map-js`; KaTeX's recommended fix is a breaking 0.19.0 upgrade. No dependency upgrades or audit suppressions are included in this layout change. This blocks a fully green release gate.
+PR #9's first Windows run failed the dependency audit with **11 advisories: 2 high, 8 moderate, 1 low**. The separately authorized CI repair updates only compatible transitive dependencies: `http-cache-semantics` 4.2.0 → 4.3.0 and `source-map-js` 1.2.1 → 1.2.2. The required `npm audit --audit-level=high` gate now passes locally. **Nine lower-severity advisories remain: 8 moderate and 1 low**, including a KaTeX recommendation requiring a breaking 0.19.0 upgrade. No forced upgrades, overrides, advisory suppressions or weaker checks were used; this is not a zero-vulnerability claim.
 
 Manual desktop checks are pending: native DPI (including 175%), contrasting desktop backgrounds, smooth native corners, practical resize/recovery, and each named capture-protection compatibility path. Automated effective zoom and renderer corner samples do not substitute for these checks. Existing M0–M2 and M5–M8 manual/live acceptance remains unchanged.
 
-The workspace implementation used no Computer Use, API-key access, paid evaluation, or signing purchase. Unrelated social-card files remain untouched. No merge is included in the subsequent GitHub delivery.
+Before the CI repair, the user confirmed that the rebuilt beta.7 installer's Setup/presenter transitions, folding/resizing, scrolling, smooth corners and Ctrl+Shift+I recovery after hide/show passed. This scoped confirmation does not complete the broader DPI, hardware or capture-compatibility matrices above. The dependency repair does not change Electron, rendering code or native helper code.
+
+The workspace implementation used no Computer Use, API-key access, paid evaluation, or signing purchase. Unrelated social-card files remain untouched. The user subsequently authorized the compatible dependency repair and PR #9 merge only after green Windows CI.
