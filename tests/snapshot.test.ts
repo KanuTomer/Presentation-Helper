@@ -72,4 +72,12 @@ describe('screenshot Responses requests', () => {
     const codeBlocks = snapshotResponseJsonSchema.properties!.codeBlocks as { items: { required: string[] } }
     expect(codeBlocks.items.required).toEqual(['language', 'title', 'code'])
   })
+  it('uses a provider-compatible bounded language identifier without Unicode regex escapes', () => {
+    const codeBlocks = snapshotResponseJsonSchema.properties!.codeBlocks as { items: { properties: { language: { pattern: string } } } }
+    const pattern = codeBlocks.items.properties.language.pattern
+    expect(pattern).toBe('^[A-Za-z0-9][A-Za-z0-9+.#_-]{0,31}$')
+    const language = new RegExp(pattern)
+    for (const value of ['tsx', 'C++', 'C#', 'objective-c', 'plain_text', 'a'.repeat(32)]) expect(language.test(value)).toBe(true)
+    for (const value of ['', '<script>', 'java script', 'a'.repeat(33)]) expect(language.test(value)).toBe(false)
+  })
 })

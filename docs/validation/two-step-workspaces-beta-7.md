@@ -22,6 +22,14 @@ Date: 2026-10-18. Source implementation and scoped automated validation complete
 - Initial native tests failed while an installed copy held the global shortcuts. After that copy exited, the clean final suite passed. The scroll fixture was moved into measured content, and recovery assertions now wait for pending content-size changes to settle; assertions were not removed.
 - Detailed local logs are ignored `artifacts/beta7-*`; installer diagnostics are in `artifacts/installer/`.
 
+## Snapshot schema follow-up
+
+- A user-authorized GPT-6 Luna diagnostic using a generated arithmetic PNG reproduced HTTP 400 `invalid_json_schema`: the provider rejected the generated Unicode-property language regex.
+- Replacing only that pattern in memory completed successfully and produced a locally validated math solution. Returned usage was 646 input tokens and 225 output tokens (including 42 reasoning tokens), estimated at USD 0.0001771. No desktop content was sent; credentials, images, prompts, answers and reasoning content were not persisted.
+- Production snapshot output now uses the same bounded ASCII language identifiers as developer output. Schema rejection gets an actionable, non-retryable message without exposing provider payloads. Regression tests failed before the fix and passed afterward.
+- Final pre-push Vitest: **415/415**, 59 files; targeted snapshot/AI suite: **56/56**. Typecheck, production build, helper publishing, NSIS packaging, packaged FTS5 and helper health passed. No additional paid request was made while applying or packaging the fix.
+- Rebuilt beta.7 installer SHA256: `88807607647ec012754501fd538bbb6b418c2ae73dc82f9e54dbb3d3dcf47280`. The packaged main bundle was verified against the built bundle. The full installer lifecycle was not repeated for this schema-only follow-up.
+
 ## Open gates
 
 The fresh dependency audit reports **11 advisories: 2 high, 8 moderate, 1 low**. High findings are `http-cache-semantics` and `source-map-js`; KaTeX's recommended fix is a breaking 0.19.0 upgrade. No dependency upgrades or audit suppressions are included in this layout change. This blocks a fully green release gate.
