@@ -38,4 +38,6 @@ Manual desktop checks are pending: native DPI (including 175%), contrasting desk
 
 Before the CI repair, the user confirmed that the rebuilt beta.7 installer's Setup/presenter transitions, folding/resizing, scrolling, smooth corners and Ctrl+Shift+I recovery after hide/show passed. This scoped confirmation does not complete the broader DPI, hardware or capture-compatibility matrices above. The dependency repair does not change Electron, rendering code or native helper code.
 
+The next Windows run passed the audit but stalled in Playwright's first native mouse click while the button handler hides/resizes the window; the remaining 13 Electron tests passed, and the focused transition passed locally. The transition helper now activates the real DOM button after visibility/enabled checks, avoiding the native mouse acknowledgement race, and explicitly asserts presenter mode, idle transition and native visibility. Physical mouse behavior remains covered by the user's manual confirmation; DOM activation is not represented as a physical-input test.
+
 The workspace implementation used no Computer Use, API-key access, paid evaluation, or signing purchase. Unrelated social-card files remain untouched. The user subsequently authorized the compatible dependency repair and PR #9 merge only after green Windows CI.

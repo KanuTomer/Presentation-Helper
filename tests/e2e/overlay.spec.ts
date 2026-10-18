@@ -10,9 +10,16 @@ let userData: string
 
 async function enterPresenter(): Promise<void> {
   if ((await page.evaluate(() => window.presenter.getStatus())).workspace?.mode !== 'presenter') {
-    await page.getByRole('button', { name: 'Enter presenter mode →' }).click()
+    const enter = page.getByRole('button', { name: 'Enter presenter mode →' })
+    await expect(enter).toBeVisible()
+    await expect(enter).toBeEnabled()
+    // The handler deliberately hides/resizes the native window. Hosted Windows
+    // can stall CDP's mouse-up acknowledgement during that transition; activate
+    // the actual button handler without waiting on a disappearing mouse target.
+    await enter.dispatchEvent('click')
   }
-  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).workspace?.transition).toBe('idle')
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).workspace).toMatchObject({ mode: 'presenter', transition: 'idle' })
+  await expect.poll(async () => (await e2eState()).visible).toBe(true)
 }
 async function openSetup(section: 'settings' | 'privacy' | 'documents' | 'capture' | 'appearance' = 'settings'): Promise<void> {
   if ((await page.evaluate(() => window.presenter.getStatus())).workspace?.mode === 'presenter') {
