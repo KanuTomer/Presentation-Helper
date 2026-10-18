@@ -121,7 +121,7 @@ function appSettings(): AppSettings {
 async function harness(
   overrides: Partial<AiService> = {},
   initialSettings: Partial<AppSettings> = {},
-  controllerOptions: { transmissionPreviewGate?: TransmissionPreviewGate; onListeningConsentRequired?: () => void } = {}
+  controllerOptions: { transmissionPreviewGate?: TransmissionPreviewGate; onListeningConsentRequired?: () => void; canStartCapture?: () => boolean } = {}
 ) {
   const directory = await mkdtemp(join(tmpdir(), 'presenter-audio-test-'))
   const helper = new FakeHelper()
@@ -182,6 +182,16 @@ async function waitForIdle(h: Awaited<ReturnType<typeof harness>>): Promise<void
 beforeEach(() => vi.restoreAllMocks())
 
 describe('audio controller operation lifecycle', () => {
+  it('ignores the native listening shortcut in Setup and rearms it in presenter mode', async () => {
+    let allowed = false
+    const h = await harness({}, {}, { canStartCapture: () => allowed })
+    try {
+      await h.controller.initialize()
+      const toggle = vi.spyOn(h.controller, 'toggleListening').mockResolvedValue({ ok: true })
+      h.helper.onShortcutDown?.(); expect(toggle).not.toHaveBeenCalled()
+      allowed = true; h.helper.onShortcutDown?.(); expect(toggle).toHaveBeenCalledOnce()
+    } finally { await h.controller.dispose(); await h.cleanup() }
+  })
   it('rejects user-initiated shortcut changes while the native helper is unavailable', async () => {
     const h = await harness()
     h.helper.setLifecycle('missing')

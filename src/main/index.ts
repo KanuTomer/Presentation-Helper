@@ -84,7 +84,8 @@ if (packagedFtsSmoke) {
     audio = new AudioController(ai, store, operations, {
       ...(e2eSyntheticHelper ? { helper: e2eSyntheticHelper } : {}),
       transmissionPreviewGate: transmissionPreview,
-      onListeningConsentRequired: () => windows?.openPrivacy()
+      onListeningConsentRequired: () => windows?.openPrivacy(),
+      canStartCapture: () => Boolean(windows?.isPresenter && !windows.workspaceStatus.setupRequest)
     })
     // Register the complete renderer contract before the native helper starts.
     // Defender, first-run extraction, or a missing helper may otherwise leave

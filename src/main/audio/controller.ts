@@ -37,6 +37,7 @@ export interface AudioControllerOptions {
   idGenerator?: () => string
   transmissionPreviewGate?: TransmissionPreviewGate
   onListeningConsentRequired?: () => void
+  canStartCapture?: () => boolean
 }
 
 export class AudioController {
@@ -71,6 +72,7 @@ export class AudioController {
     await this.cleanupStale()
     this.helper.onState = () => this.notify()
     this.helper.onShortcutDown = () => {
+      if (this.options.canStartCapture && !this.options.canStartCapture()) return
       void this.toggleListening().then((result) => { if (!result.ok) this.report(result.error) })
     }
     // The native hook still emits key-up so it can rearm the configured

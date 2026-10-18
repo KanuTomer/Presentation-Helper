@@ -429,7 +429,16 @@ export interface ShortcutRegistrationStatus {
   status: 'registered' | 'unavailable'
 }
 
+export interface WorkspaceStatus {
+  mode: 'setup' | 'presenter'
+  transition: 'idle' | 'entering' | 'leaving'
+  transitionId?: string
+  setupRequest?: 'settings' | 'privacy' | 'documents' | 'capture'
+  error?: string
+}
+
 export interface AppStatus {
+  workspace?: WorkspaceStatus
   operation: OperationState
   operationId?: string
   operationKind?: OperationKind
@@ -555,6 +564,12 @@ export interface PresenterAPI {
   dismissSettingsRecoveryWarning(): Promise<void>
   setClickThrough(enabled: boolean): Promise<ClickThroughStatus>
   showSettings(): Promise<void>
+  enterPresenterMode(): Promise<void>
+  requestSetup(section?: 'settings' | 'privacy' | 'documents' | 'capture'): Promise<void>
+  confirmSetup(cancelActive: boolean): Promise<void>
+  dismissSetupRequest(): Promise<void>
+  acknowledgeWorkspace(transitionId: string): Promise<void>
+  resizePresenter(contentHeight: number): Promise<void>
   toggleListening(): Promise<OperationActionResult>
   copyCode(code: string): Promise<void>
   ackListeningIndicator(operationId: string): Promise<void>

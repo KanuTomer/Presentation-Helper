@@ -3,11 +3,12 @@ import {
   type BrowserWindowConstructorOptions
 } from 'electron'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { is } from '@electron-toolkit/utils'
 import { channels } from '../../shared/channels.js'
 import { WINDOW_LAYOUT_REVISION, type SettingsStore } from '../settings/store.js'
 import type { CaptureProtection } from './captureProtection.js'
-import type { ShortcutRegistrationStatus } from '../../shared/contracts.js'
+import type { ShortcutRegistrationStatus, WorkspaceStatus } from '../../shared/contracts.js'
 
 export interface OverlayBounds { x: number; y: number; width: number; height: number }
 export interface WorkArea { x: number; y: number; width: number; height: number }
@@ -38,8 +39,19 @@ export class WindowManager {
   private displayListenersRegistered = false
   private clickThrough = false
   private quitting = false
+  private workspace: WorkspaceStatus = { mode: 'setup', transition: 'idle' }
+  private transitionTimer?: NodeJS.Timeout
+  private resizingContent = false
+  private presenterHeight = 180
+  onWorkspaceStatusChange?: () => void
   onClickThroughStatusChange?: ClickThroughStatusListener
-  private readonly handleDisplayChange = (): void => this.notifySurfaceRestored()
+  private readonly handleDisplayChange = (): void => {
+    if (this.window && this.workspace.transition === 'idle') {
+      if (this.isPresenter) this.resizePresenter(this.presenterHeight)
+      else { const bounds = this.validBounds(this.window.getBounds()); if (bounds) this.window.setBounds(bounds) }
+    }
+    this.notifySurfaceRestored()
+  }
   constructor(private store: SettingsStore, private capture: CaptureProtection) {}
 
   create(): BrowserWindow {
@@ -50,15 +62,15 @@ export class WindowManager {
       : this.validBounds(this.store.windowBounds) ?? this.defaultBounds()
     const windowOptions: BrowserWindowConstructorOptions = {
       ...initialBounds,
-      minWidth: OVERLAY_MIN_WIDTH, minHeight: OVERLAY_MIN_HEIGHT, frame: false, transparent: true, alwaysOnTop: true,
-      skipTaskbar: true, resizable: true, movable: true, show: false, backgroundColor: '#00000000',
+      minWidth: OVERLAY_MIN_WIDTH, minHeight: OVERLAY_MIN_HEIGHT, frame: false, transparent: true, alwaysOnTop: false,
+      skipTaskbar: false, resizable: true, movable: true, show: false, backgroundColor: '#00000000',
       hasShadow: false, roundedCorners: true,
       webPreferences: { preload: join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false }
     }
     this.window = new BrowserWindow(windowOptions)
     // Applying the Electron-supported screen-saver level after native window
     // creation keeps the transparent overlay topmost without changing focus.
-    this.window.setAlwaysOnTop(true, 'screen-saver')
+    this.window.setAlwaysOnTop(false)
     this.registerDisplayListeners()
     if (requiresLayoutMigration) void this.store.setWindowLayout(initialBounds, WINDOW_LAYOUT_REVISION)
     const hadPersistedClickThrough = this.store.settings.clickThrough
@@ -70,7 +82,7 @@ export class WindowManager {
     // interactive and clears the stale persisted value.
     this.setClickThrough(false)
     if (hadPersistedClickThrough) void this.store.updateSettings({ clickThrough: false }).catch(() => undefined)
-    this.capture.setEnabled(this.window, true)
+    this.capture.setEnabled(this.window, false)
     this.window.once('ready-to-show', () => {
       if (!this.window) return
       this.showInactiveTopmost(this.window)
@@ -103,15 +115,100 @@ export class WindowManager {
       this.applyClickThrough(false)
       throw new Error(`Click-through requires the ${CLICK_THROUGH_RECOVERY_SHORTCUT} recovery shortcut.`)
     }
+    if (enabled && this.workspace.mode !== 'presenter') throw new Error('Enter presenter mode before enabling click-through.')
     this.applyClickThrough(enabled)
   }
-  focusAsk(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); window.webContents.send(channels.focusAsk) }
-  openSettings(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); window.webContents.send(channels.openSettings) }
-  openPrivacy(): void {
-    this.emergencyUnlock()
+  get workspaceStatus(): WorkspaceStatus { return { ...this.workspace } }
+  get isPresenter(): boolean { return this.workspace.mode === 'presenter' && this.workspace.transition === 'idle' }
+  enterPresenter(): void {
+    if (this.workspace.mode === 'presenter' || this.workspace.transition !== 'idle') return
     const window = this.ensureWindow()
+    clearTimeout(this.boundsTimer)
+    const setupBounds = window.getBounds()
+    void this.store.setWindowBounds(setupBounds)
+    window.hide()
+    this.capture.setEnabled(window, true)
+    if (!this.capture.status(window).electronReported) {
+      this.capture.setEnabled(window, false)
+      this.workspace.error = 'Windows capture protection could not be enabled. Presenter mode was not opened.'
+      this.onWorkspaceStatusChange?.()
+      this.showFocusedTopmost(window)
+      throw new Error(this.workspace.error)
+    }
+    this.setClickThrough(false)
+    this.workspace = { mode: 'presenter', transition: 'entering', transitionId: randomUUID() }
+    window.setMinimumSize(600, 120)
+    const saved = this.store.presenterLayout
+    const area = screen.getDisplayMatching(setupBounds).workArea
+    window.setBounds(presenterBounds({ x: saved?.x ?? setupBounds.x, y: saved?.y ?? setupBounds.y, width: saved?.width ?? 860, height: this.presenterHeight }, area))
+    window.setSkipTaskbar(true)
+    window.setAlwaysOnTop(true, 'screen-saver')
+    this.beginTransition()
+  }
+  requestSetup(section: NonNullable<WorkspaceStatus['setupRequest']> = 'settings'): void {
+    if (this.workspace.transition !== 'idle') return
+    const window = this.ensureWindow()
+    this.emergencyUnlock()
+    this.workspace = { ...this.workspace, setupRequest: section }
+    this.onWorkspaceStatusChange?.()
     this.showFocusedTopmost(window)
-    window.webContents.send(channels.openPrivacy)
+    if (this.workspace.mode === 'setup') window.webContents.send(section === 'privacy' ? channels.openPrivacy : channels.openSettings)
+  }
+  dismissSetupRequest(): void { this.workspace = { ...this.workspace, setupRequest: undefined }; this.onWorkspaceStatusChange?.() }
+  confirmSetup(): void {
+    if (this.workspace.mode !== 'presenter' || !this.workspace.setupRequest || this.workspace.transition !== 'idle') throw new Error('No pending Setup confirmation.')
+    const window = this.ensureWindow()
+    clearTimeout(this.boundsTimer)
+    const { x, y, width } = window.getBounds()
+    void this.store.setPresenterLayout({ x, y, width })
+    window.hide()
+    this.setClickThrough(false)
+    this.workspace = { ...this.workspace, mode: 'setup', transition: 'leaving', transitionId: randomUUID(), error: undefined }
+    window.setMinimumSize(OVERLAY_MIN_WIDTH, OVERLAY_MIN_HEIGHT)
+    window.setBounds(this.validBounds(this.store.windowBounds) ?? this.defaultBounds())
+    this.beginTransition()
+  }
+  acknowledgeWorkspace(id: string): void {
+    if (this.workspace.transition === 'idle' || this.workspace.transitionId !== id) return
+    const window = this.ensureWindow()
+    clearTimeout(this.transitionTimer)
+    if (this.workspace.mode === 'setup') {
+      this.capture.setEnabled(window, false)
+      window.setAlwaysOnTop(false)
+      window.setSkipTaskbar(false)
+    } else if (!this.capture.status(window).electronReported) {
+      this.workspace.error = 'Capture protection was lost. The presenter window remains hidden.'
+      this.onWorkspaceStatusChange?.(); return
+    }
+    this.workspace = { ...this.workspace, transition: 'idle', transitionId: undefined, error: undefined }
+    this.onWorkspaceStatusChange?.()
+    this.showFocusedTopmost(window)
+  }
+  resizePresenter(height: number): void {
+    if (!Number.isFinite(height) || height < 80 || height > 100_000) throw new Error('Invalid presenter content height.')
+    const zoom = this.window?.webContents.getZoomFactor?.() ?? 1
+    this.presenterHeight = Math.ceil(height)
+    if (this.workspace.mode !== 'presenter') return
+    const window = this.ensureWindow()
+    const current = window.getBounds()
+    const next = presenterBounds({ ...current, height: Math.ceil(this.presenterHeight * zoom) }, screen.getDisplayMatching(current).workArea)
+    if (next.height === current.height && next.y === current.y) return
+    this.resizingContent = true
+    try { window.setBounds(next) } finally { this.resizingContent = false }
+  }
+  private beginTransition(): void {
+    clearTimeout(this.transitionTimer)
+    this.transitionTimer = setTimeout(() => {
+      this.workspace.error = 'The workspace could not be rendered safely. The window remains hidden; use the tray to retry.'
+      this.onWorkspaceStatusChange?.()
+    }, 8000)
+    this.transitionTimer.unref?.()
+    this.onWorkspaceStatusChange?.()
+  }
+  focusAsk(): void { const window = this.ensureWindow(); this.showFocusedTopmost(window); if (this.isPresenter) window.webContents.send(channels.focusAsk) }
+  openSettings(): void { this.requestSetup('settings') }
+  openPrivacy(): void {
+    this.requestSetup('privacy')
   }
   showTransmissionPreview(): void { this.showInactiveTopmost(this.ensureWindow()) }
   get hasTray(): boolean { return Boolean(this.tray) }
@@ -127,7 +224,7 @@ export class WindowManager {
   emergencyUnlock(): void { this.setClickThrough(false); void this.store.updateSettings({ clickThrough: false }).catch(() => undefined) }
   showFromTray(): void { this.emergencyUnlock(); this.showFocusedTopmost(this.ensureWindow()) }
   openSettingsFromTray(): void { this.emergencyUnlock(); this.openSettings() }
-  prepareToQuit(): void { this.quitting = true }
+  prepareToQuit(): void { this.quitting = true; clearTimeout(this.boundsTimer); clearTimeout(this.transitionTimer) }
 
   registerShortcuts(): boolean {
     return this.registerShortcutSet(this.store.settings.askShortcut, this.store.settings.hideShortcut)
@@ -224,7 +321,16 @@ export class WindowManager {
       { type: 'separator' }, { label: 'Quit', click: () => app.quit() }
     ]))
   }
-  private persistBounds(): void { clearTimeout(this.boundsTimer); this.boundsTimer = setTimeout(() => { if (this.window) void this.store.setWindowBounds(this.window.getBounds()) }, 250) }
+  private persistBounds(): void {
+    if (this.resizingContent || this.workspace.transition !== 'idle') return
+    clearTimeout(this.boundsTimer)
+    this.boundsTimer = setTimeout(() => {
+      if (!this.window || this.workspace.transition !== 'idle') return
+      const bounds = this.window.getBounds()
+      if (this.isPresenter) { const { x, y, width } = bounds; void this.store.setPresenterLayout({ x, y, width }); this.resizePresenter(this.presenterHeight) }
+      else void this.store.setWindowBounds(bounds)
+    }, 250)
+  }
   private validBounds(bounds?: OverlayBounds): OverlayBounds | undefined {
     if (!bounds) return undefined
     const displays = screen.getAllDisplays()
@@ -250,16 +356,22 @@ export class WindowManager {
   private defaultBounds(): OverlayBounds { return defaultOverlayBounds(screen.getPrimaryDisplay().workArea) }
 
   private showInactiveTopmost(window: BrowserWindow): void {
+    if (this.workspace.transition !== 'idle') { this.onWorkspaceStatusChange?.(); return }
     window.showInactive()
     // The screen-saver level is the Electron-supported topmost tier that
     // remains effective over fullscreen presentation windows.
-    window.setAlwaysOnTop(true, 'screen-saver')
+    window.setAlwaysOnTop(this.isPresenter, this.isPresenter ? 'screen-saver' : 'normal')
     this.notifySurfaceRestored(window)
   }
 
   private showFocusedTopmost(window: BrowserWindow): void {
+    if (this.workspace.transition !== 'idle') {
+      if (this.workspace.error) { this.workspace = { ...this.workspace, transitionId: randomUUID(), error: undefined }; this.beginTransition() }
+      else this.onWorkspaceStatusChange?.()
+      return
+    }
     window.show()
-    window.setAlwaysOnTop(true, 'screen-saver')
+    window.setAlwaysOnTop(this.isPresenter, this.isPresenter ? 'screen-saver' : 'normal')
     window.focus()
     this.notifySurfaceRestored(window)
   }
@@ -299,6 +411,14 @@ export function defaultOverlayBounds(area: WorkArea): OverlayBounds {
     width,
     height
   }
+}
+
+export function presenterBounds(bounds: OverlayBounds, area: WorkArea): OverlayBounds {
+  const margin = OVERLAY_EDGE_MARGIN
+  const width = Math.min(Math.max(600, bounds.width), Math.max(1, area.width - margin * 2))
+  const height = Math.min(Math.max(120, bounds.height), Math.max(1, area.height - margin * 2))
+  return { x: Math.max(area.x + margin, Math.min(bounds.x, area.x + area.width - margin - width)),
+    y: Math.max(area.y + margin, Math.min(bounds.y, area.y + area.height - margin - height)), width, height }
 }
 
 export function migrateLegacyOverlayBounds(bounds: OverlayBounds, area: WorkArea): OverlayBounds {

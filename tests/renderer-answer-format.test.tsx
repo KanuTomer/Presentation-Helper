@@ -50,13 +50,13 @@ describe('renderer answer-format bridge', () => {
     let statusListener: ((status: typeof blankStatus) => void) | undefined
     const ask = vi.fn()
       .mockImplementationOnce(() => {
-        statusListener?.({ ...blankStatus, operation: 'generating', operationKind: 'typed' })
+        statusListener?.({ ...blankStatus, workspace: { mode: 'presenter', transition: 'idle' }, operation: 'generating', operationKind: 'typed' })
         return first.promise
       })
       .mockResolvedValueOnce({ ok: true, response: developerResponse })
     const noopSubscription = vi.fn(() => () => undefined)
     const presenter = {
-      getStatus: vi.fn(async () => blankStatus),
+      getStatus: vi.fn(async () => ({ ...blankStatus, workspace: { mode: 'presenter', transition: 'idle' } })),
       getSettings: vi.fn(async () => settings),
       listDocuments: vi.fn(async () => []),
       getApiKeyStatus: vi.fn(async () => ({
@@ -97,6 +97,11 @@ describe('renderer answer-format bridge', () => {
 
     first.resolve({ ok: true, response: presenterResponse })
     await screen.findByText('A presenter response.')
+    fireEvent.click(screen.getByRole('button', { name: 'Fold answer' }))
+    expect(screen.queryByText('A presenter response.')).toBeNull()
+    expect(screen.queryAllByRole('button', { name: 'Show answer' })).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Show answer' }))
+    expect(screen.getByText('A presenter response.')).toBeTruthy()
     fireEvent.change(question, { target: { value: 'Write the TypeScript implementation.' } })
     fireEvent.click(screen.getByRole('button', { name: /Generate code/ }))
 

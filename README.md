@@ -6,7 +6,7 @@ PresenterAI is a private, local-first Windows copilot for presentations, technic
 
 ## What it does
 
-- Starts in **Code** mode with structured, copyable source-code cards; **Presenter** mode produces short, natural answers designed to be spoken aloud.
+- Uses **Code** as the default answer style with copyable source-code cards; the **Presenter** answer style produces short, natural answers designed to be spoken aloud.
 - Indexes PPTX, PDF, Markdown, and UTF-8 text locally with SQLite FTS5 and sends only selected evidence chunks to OpenAI.
 - Captures bounded **Windows system output**, not microphone audio, through a restricted .NET helper. The transcript is shown as an editable draft before it can be submitted.
 - Keeps the OpenAI key in Electron `safeStorage` (Windows DPAPI), keeps conversation state local, and sends Responses requests with `store:false`.
@@ -17,10 +17,10 @@ PresenterAI is a private, local-first Windows copilot for presentations, technic
 
 ## How it works
 
-1. **Set up** — add an OpenAI API key in Settings and optionally import presentation documents.
-2. **Ask** — type a question, or toggle system-audio capture and review the resulting transcript.
+1. **Set up** — the normal Setup window opens first. Choose models, add a key, import documents, and review privacy settings.
+2. **Enter presenter mode** — open the compact protected workspace, then type a question or review a system-audio transcript.
 3. **Generate** — choose Code or Presenter and submit with `Ctrl+Enter`; PresenterAI retrieves up to five relevant local chunks.
-4. **Review** — read the answer, copy code, and inspect the evidence or warning before speaking.
+4. **Review** — the window grows with its answer. Use **Fold answer / Show answer** to keep the composer compact without losing the response.
 
 For a screen problem, press **Snapshot**, review the complete monitor image, then **Send**. Use **Retake** or **Discard** if it contains unwanted information. On multiple displays, select the monitor first. Math screenshots produce a mathematical solution even in Code mode; unclear screens produce a focused clarification.
 
@@ -45,11 +45,13 @@ npm run dev
 
 On first run:
 
-1. Open **Settings**, save the API key, and use the connection test.
-2. Open **Documents** to import non-sensitive PPTX, PDF, Markdown, or text fixtures.
+1. In **Session & models**, save the API key and choose models and reasoning.
+2. Open **Documents & context** to import non-sensitive PPTX, PDF, Markdown, or text fixtures.
 3. Review and accept the listening disclosure before the first system-audio capture.
 4. Confirm that listening is off and test `Ctrl+Shift+I` before enabling click-through.
-5. Type a question in **Copilot** and press `Ctrl+Enter`.
+5. Click **Enter presenter mode**, type a question, and press `Ctrl+Enter`.
+
+Setup is a normal desktop window and may appear in recordings. Presenter mode requests Windows capture exclusion where supported; it is not a universal guarantee. Returning through **Setup** or tray Settings requires a warning inside the protected workspace before Setup is exposed. Active work must finish or be explicitly cancelled first. Ask/listen shortcuts do not enter presenter mode from Setup.
 
 The typed/document workflow still runs if the helper is unavailable; only system-audio controls are disabled.
 

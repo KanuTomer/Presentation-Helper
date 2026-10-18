@@ -11,6 +11,21 @@ async function create() {
   const store = new SettingsStore(); await store.initialize(); return { store, SettingsStore, path: join(userData, 'presenterai.json') }
 }
 describe('uncapped persistent session usage', () => {
+  it('migrates v6 workspace bounds without changing settings or recorded spending', async () => {
+    const { store, SettingsStore, path } = await create()
+    await store.setWindowBounds({ x: 100, y: 200, width: 920, height: 700 })
+    await store.recordUsage({ endpoint: 'responses', requestedModel: 'gpt-6-luna', returnedModel: 'gpt-6-luna', inputTokens: 50, outputTokens: 20 })
+    const old = JSON.parse(await readFile(path, 'utf8')); old.schemaVersion = 6
+    await writeFile(path, JSON.stringify(old))
+    const next = new SettingsStore(); await next.initialize()
+    expect(next.recoveryWarning).toBeUndefined()
+    expect(next.settings).toEqual(store.settings)
+    expect(next.sessionUsageStatus).toEqual(store.sessionUsageStatus)
+    expect(next.presenterLayout).toEqual({ x: 100, y: 200, width: 920 })
+    await next.setPresenterLayout({ x: 50, y: 60, width: 860 })
+    expect(JSON.parse(await readFile(path, 'utf8')).presenterLayout).not.toHaveProperty('height')
+    await next.clearWindowBounds(); expect(next.presenterLayout).toBeUndefined()
+  })
   it('defaults new installations to GPT-6 and medium reasoning', async () => {
     const { store } = await create()
     expect(store.settings).toMatchObject({ normalModel: 'gpt-6-luna', strongModel: 'gpt-6.1-sol', normalReasoning: 'medium', strongReasoning: 'medium' })

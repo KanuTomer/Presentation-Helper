@@ -111,6 +111,7 @@ describe('window recovery shortcuts', () => {
     windows.onClickThroughStatusChange = (status) => statuses.push(status)
 
     expect(windows.registerShortcuts()).toBe(true)
+    ;(windows as unknown as { workspace: unknown }).workspace = { mode: 'presenter', transition: 'idle' }
     windows.setClickThrough(true)
     windows.emergencyUnlock()
 
@@ -203,6 +204,7 @@ describe('window recovery shortcuts', () => {
       isVisible: () => visible,
       getBounds: () => ({ x: 100, y: 100, width: 1100, height: 720 }),
       setAlwaysOnTop: vi.fn(),
+      setBounds: vi.fn(),
       setIgnoreMouseEvents: vi.fn(),
       showInactive: vi.fn(() => { visible = true }),
       show: vi.fn(() => { visible = true }),
@@ -307,7 +309,7 @@ describe('window recovery shortcuts', () => {
     expect(updateSettings).toHaveBeenCalledWith({ clickThrough: false })
   })
 
-  it('makes Privacy interactive before showing a consent-required acknowledgement', async () => {
+  it('requests protected confirmation before opening Privacy from presenter mode', async () => {
     const updateSettings = vi.fn(async () => undefined)
     const store = {
       settings: { askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H' },
@@ -323,6 +325,7 @@ describe('window recovery shortcuts', () => {
       webContents: { send: vi.fn() }
     }
     windows.window = fakeWindow as never
+    ;(windows as unknown as { workspace: unknown }).workspace = { mode: 'presenter', transition: 'idle' }
     windows.setClickThrough(true)
 
     windows.openPrivacy()
@@ -333,9 +336,83 @@ describe('window recovery shortcuts', () => {
     expect(fakeWindow.show).toHaveBeenCalledOnce()
     expect(fakeWindow.setAlwaysOnTop).toHaveBeenCalledWith(true, 'screen-saver')
     expect(fakeWindow.focus).toHaveBeenCalledOnce()
-    expect(fakeWindow.webContents.send).toHaveBeenCalledWith('ui:open-privacy')
+    expect(fakeWindow.webContents.send).not.toHaveBeenCalledWith('ui:open-privacy')
+    expect(windows.workspaceStatus).toMatchObject({ mode: 'presenter', setupRequest: 'privacy' })
   })
 
+})
+
+describe('workspace transition safety', () => {
+  async function fixture(protectionWorks = true) {
+    const { WindowManager } = await import('../src/main/windows/windowManager')
+    const area = { x: 0, y: 0, width: 1920, height: 1080 }
+    getDisplayMatching.mockReturnValue({ workArea: area })
+    let bounds = { x: 100, y: 100, width: 1100, height: 720 }
+    let protectedWindow = false
+    const store = { settings: { askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H' },
+      windowBounds: { ...bounds }, presenterLayout: undefined,
+      setWindowBounds: vi.fn(async () => undefined), setPresenterLayout: vi.fn(async () => undefined), updateSettings: vi.fn(async () => undefined) }
+    const capture = { setEnabled: vi.fn((_window, enabled) => { protectedWindow = enabled && protectionWorks }), status: () => ({ electronReported: protectedWindow }) }
+    const window = { isDestroyed: () => false, getBounds: () => bounds,
+      setBounds: vi.fn((value) => { bounds = value }), setMinimumSize: vi.fn(), setSkipTaskbar: vi.fn(), setAlwaysOnTop: vi.fn(),
+      setIgnoreMouseEvents: vi.fn(), hide: vi.fn(), show: vi.fn(), focus: vi.fn(), webContents: { send: vi.fn() } }
+    const windows = new WindowManager(store as never, capture as never)
+    windows.window = window as never
+    return { windows, window, store, capture }
+  }
+  it('starts normal, hides before protection, and shows only after the matching render acknowledgement', async () => {
+    const { windows, window, capture } = await fixture()
+    expect(windows.workspaceStatus).toEqual({ mode: 'setup', transition: 'idle' })
+    windows.enterPresenter()
+    expect(window.hide.mock.invocationCallOrder[0]).toBeLessThan(capture.setEnabled.mock.invocationCallOrder[0])
+    expect(window.show).not.toHaveBeenCalled()
+    expect(window.getBounds()).toMatchObject({ width: 860, height: 180 })
+    windows.acknowledgeWorkspace('stale')
+    expect(window.show).not.toHaveBeenCalled()
+    windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
+    expect(windows.isPresenter).toBe(true)
+    expect(window.show).toHaveBeenCalledOnce()
+    windows.prepareToQuit()
+  })
+  it('fails closed when Electron cannot confirm content protection', async () => {
+    const { windows, window } = await fixture(false)
+    expect(() => windows.enterPresenter()).toThrow(/protection/)
+    expect(windows.workspaceStatus.mode).toBe('setup')
+    expect(window.setSkipTaskbar).not.toHaveBeenCalledWith(true)
+    windows.prepareToQuit()
+  })
+  it('retains protection throughout Setup confirmation and removes it only after Setup paints', async () => {
+    const { windows, window, store, capture } = await fixture()
+    windows.enterPresenter(); windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
+    expect(() => windows.confirmSetup()).toThrow(/confirmation/)
+    windows.openSettingsFromTray()
+    expect(windows.workspaceStatus).toMatchObject({ mode: 'presenter', setupRequest: 'settings' })
+    expect(capture.status().electronReported).toBe(true)
+    windows.dismissSetupRequest()
+    expect(windows.workspaceStatus.setupRequest).toBeUndefined()
+    windows.requestSetup('privacy'); windows.confirmSetup()
+    expect(capture.status().electronReported).toBe(true)
+    expect(window.hide).toHaveBeenCalledTimes(2)
+    windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
+    expect(capture.status().electronReported).toBe(false)
+    expect(window.setSkipTaskbar).toHaveBeenLastCalledWith(false)
+    expect(store.setPresenterLayout.mock.calls[0][0]).not.toHaveProperty('height')
+    windows.prepareToQuit()
+  })
+  it('clamps dynamic height, shrinks again, and rejects invalid size notifications', async () => {
+    const { windows, window } = await fixture()
+    windows.enterPresenter(); windows.acknowledgeWorkspace(windows.workspaceStatus.transitionId!)
+    windows.resizePresenter(5000); expect(window.getBounds().height).toBe(1048)
+    windows.resizePresenter(175); expect(window.getBounds().height).toBe(175)
+    for (const height of [NaN, Infinity, -1, 100001]) expect(() => windows.resizePresenter(height)).toThrow(/height/)
+    windows.prepareToQuit()
+  })
+  it('does not send focus-to-ask from Setup or allow click-through there', async () => {
+    const { windows, window } = await fixture()
+    windows.focusAsk()
+    expect(window.webContents.send).not.toHaveBeenCalledWith('ui:focus-ask')
+    expect(() => windows.setClickThrough(true)).toThrow()
+  })
 })
 
 describe('wide overlay bounds', () => {

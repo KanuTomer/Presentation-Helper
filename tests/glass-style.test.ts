@@ -55,7 +55,7 @@ describe('quiet-glass presentation', () => {
       readFile(new URL('../src/renderer/src.tsx', import.meta.url), 'utf8'),
       readFile(new URL('../src/renderer/style.css', import.meta.url), 'utf8')
     ])
-    expect(source).toContain('<fieldset className="appearance-settings"><legend>Appearance</legend>')
+    expect(source).toContain('<fieldset className="appearance-settings" data-group="appearance"><legend>Appearance</legend>')
     expect(source).not.toContain('<footer>')
     expect(css).toMatch(/\.quick-controls\s*\{[^}]*display:flex;[^}]*min-height:40px;/u)
     expect(css).toContain('@media (max-width: 599px)')

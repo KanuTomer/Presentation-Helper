@@ -8,6 +8,25 @@ let application: ElectronApplication
 let page: Page
 let userData: string
 
+async function enterPresenter(): Promise<void> {
+  if ((await page.evaluate(() => window.presenter.getStatus())).workspace?.mode !== 'presenter') {
+    await page.getByRole('button', { name: 'Enter presenter mode →' }).click()
+  }
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).workspace?.transition).toBe('idle')
+}
+async function openSetup(section: 'settings' | 'privacy' | 'documents' | 'capture' | 'appearance' = 'settings'): Promise<void> {
+  if ((await page.evaluate(() => window.presenter.getStatus())).workspace?.mode === 'presenter') {
+    await page.evaluate((target) => window.presenter.requestSetup(target), section === 'appearance' ? 'settings' : section)
+    await page.getByRole('button', { name: 'Return to Setup', exact: true }).click()
+  }
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).workspace?.transition).toBe('idle')
+  const names = { settings: 'Session & models', privacy: 'Privacy & data', documents: 'Documents & context', appearance: 'Appearance' }
+  if (section === 'capture') await page.getByRole('button', { name: 'Capture compatibility', exact: true }).click()
+  else await page.getByRole('button', { name: names[section], exact: true }).click()
+}
+
+test.beforeEach(async ({}, info) => { if (!info.title.startsWith('starts in normal Setup')) await enterPresenter() })
+
 test.beforeAll(async () => {
   userData = await mkdtemp(join(tmpdir(), 'presenterai-e2e-'))
   await writeFile(join(userData, 'presenterai.json'), JSON.stringify({
@@ -50,12 +69,58 @@ test.afterAll(async () => {
   if (userData) await rm(userData, { recursive: true, force: true })
 })
 
+test('starts in normal Setup and enters presenter only through the explicit action', async () => {
+  const state = await page.evaluate(() => window.presenter.getStatus())
+  expect(state.workspace).toMatchObject({ mode: 'setup', transition: 'idle' })
+  expect(state.capture.electronReported).toBe(false)
+  expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isAlwaysOnTop())).toBe(false)
+  await expect(page.getByRole('button', { name: 'Enter presenter mode →' })).toBeVisible()
+  await enterPresenter()
+  expect((await page.evaluate(() => window.presenter.getStatus())).capture.electronReported).toBe(true)
+})
+
 test('registers renderer IPC before delayed helper initialization completes', async () => {
   const settings = await page.evaluate(() => window.presenter.getSettings())
   expect(settings.listenShortcut).toBe('Control+Shift+Space')
   await expect.poll(async () => Boolean((await e2eState()).audioInitialized), {
     timeout: 30_000, message: 'audio initialization did not reach a terminal state'
   }).toBe(true)
+})
+
+test('grows and folds native presenter height from measured content without persisting an automatic height', async () => {
+  const height = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getBounds().height)
+  await page.waitForTimeout(150)
+  const compact = await height()
+  await page.locator('.workspace-content').evaluate((element) => {
+    const fixture = document.createElement('div'); fixture.id = 'synthetic-response-size'; fixture.style.height = '280px'; fixture.style.flexShrink = '0'; element.append(fixture)
+  })
+  await expect.poll(height).toBeGreaterThan(compact + 200)
+  await page.locator('#synthetic-response-size').evaluate((element) => { element.style.height = '10000px' })
+  const maximum = await application.evaluate(({ BrowserWindow, screen }) => screen.getDisplayMatching(BrowserWindow.getAllWindows()[0]!.getBounds()).workArea.height - 32)
+  await expect.poll(height).toBeLessThanOrEqual(maximum)
+  await page.locator('#synthetic-response-size').evaluate((element) => element.remove())
+  await expect.poll(height).toBe(compact)
+})
+
+test('requires cancellation before leaving active capture and retains the composer across Setup', async () => {
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).helperState, { timeout: 30_000 }).toBe('ready')
+  const composer = page.getByPlaceholder('Ask a reviewer question…')
+  await composer.fill('Retain this reviewer question across workspaces.')
+  await page.evaluate(() => window.presenter.acceptListeningConsent(4))
+  const started = await page.evaluate(() => window.presenter.toggleListening())
+  expect(started.ok).toBe(true)
+  await page.evaluate(() => window.presenter.requestSetup('settings'))
+  await expect(page.getByRole('alertdialog', { name: 'Leave presenter mode?' })).toBeVisible()
+  const rejected = await page.evaluate(async () => { try { await window.presenter.confirmSetup(false); return false } catch { return true } })
+  expect(rejected).toBe(true)
+  expect((await page.evaluate(() => window.presenter.getStatus())).capture.electronReported).toBe(true)
+  await page.getByRole('button', { name: 'Cancel operation & return' }).click()
+  await expect.poll(async () => (await page.evaluate(() => window.presenter.getStatus())).workspace?.transition).toBe('idle')
+  const state = await page.evaluate(() => window.presenter.getStatus())
+  expect(state).toMatchObject({ workspace: { mode: 'setup' }, operation: 'idle', temporaryAudioExists: false, capture: { electronReported: false } })
+  await enterPresenter()
+  await expect(composer).toHaveValue('Retain this reviewer question across workspaces.')
+  await composer.fill('')
 })
 
 test('reports real registration, retries while idle, and rejects a second instance of the same profile', async () => {
@@ -165,7 +230,7 @@ test('creates a protected transparent overlay with hardened preferences, smooth 
 })
 
 test('starts code-first, keeps the command bar compact, and exposes Accent intensity in Settings', async () => {
-  await page.getByRole('button', { name: 'copilot' }).click()
+  await enterPresenter()
   const presenter = page.getByRole('button', { name: 'Presenter', exact: true })
   const code = page.getByRole('button', { name: '</> Code' })
   await expect(code).toHaveAttribute('aria-pressed', 'true')
@@ -178,24 +243,24 @@ test('starts code-first, keeps the command bar compact, and exposes Accent inten
   await expect(page.locator('.command-bar')).toHaveCSS('min-height', '40px')
   expect(await page.locator('.command-bar').evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(44)
 
-  await page.getByRole('button', { name: 'settings', exact: true }).click()
+  await openSetup('appearance')
   const neon = page.getByRole('slider', { name: 'Accent intensity' })
   await expect(neon.locator('xpath=ancestor::fieldset/legend')).toHaveText('Appearance')
   await neon.fill('0')
   await expect.poll(async () => page.locator('.shell').evaluate((element) => getComputedStyle(element).getPropertyValue('--neon-intensity').trim())).toBe('0')
-  await page.getByRole('button', { name: 'copilot', exact: true }).click()
+  await enterPresenter()
   const zeroEmission = await page.locator('.primary').first().evaluate((element) => getComputedStyle(element).boxShadow)
   expect(zeroEmission).toContain('rgba(160, 158, 255, 0)')
-  await page.getByRole('button', { name: 'settings', exact: true }).click()
+  await openSetup('appearance')
   await neon.fill('1')
-  await page.getByRole('button', { name: 'copilot', exact: true }).click()
+  await enterPresenter()
   const fullEmission = await page.locator('.primary').first().evaluate((element) => getComputedStyle(element).boxShadow)
   expect(fullEmission).not.toBe(zeroEmission)
   expect(fullEmission).not.toContain('rgba(160, 158, 255, 0)')
-  await page.getByRole('button', { name: 'settings', exact: true }).click()
+  await openSetup('appearance')
   await neon.fill('0.65')
   await expect.poll(async () => (await page.evaluate(() => window.presenter.getSettings())).neonIntensity).toBe(0.65)
-  await page.getByRole('button', { name: 'copilot', exact: true }).click()
+  await enterPresenter()
 
   const shell = page.locator('.shell')
   await expect(shell).toHaveCSS('border-radius', '24px')
@@ -209,10 +274,10 @@ test('scrolls every long tab by wheel and keyboard at wide and minimum sizes', a
       BrowserWindow.getAllWindows()[0]?.setContentSize(size.width, size.height)
     }, { width, height })
     for (const tab of ['copilot', 'documents', 'settings', 'privacy', 'capture'] as const) {
-      if (tab === 'capture') await page.getByTitle('Capture protection status').click()
-      else await page.getByRole('button', { name: tab, exact: true }).click()
+      if (tab === 'copilot') await enterPresenter()
+      else await openSetup(tab)
       const content = page.locator('.content')
-      await content.evaluate((element) => {
+      await page.locator('.workspace-content').evaluate((element) => {
         const fixture = document.createElement('div')
         fixture.className = 'e2e-scroll-fixture'
         fixture.setAttribute('aria-hidden', 'true')
@@ -221,6 +286,8 @@ test('scrolls every long tab by wheel and keyboard at wide and minimum sizes', a
         element.append(fixture)
       })
       await expect.poll(async () => content.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+      // Allow content-driven native resizing to settle before sending wheel input.
+      await page.waitForTimeout(150)
       await content.evaluate((element) => { element.scrollTop = 0 })
       await content.hover()
       await page.mouse.wheel(0, 360)
@@ -238,7 +305,7 @@ test('scrolls every long tab by wheel and keyboard at wide and minimum sizes', a
 })
 
 test('keeps wheel and touchpad-style deltas inside nested code scrolling surfaces', async () => {
-  await page.getByRole('button', { name: 'copilot', exact: true }).click()
+  await enterPresenter()
   const code = page.locator('.content').evaluate((content) => {
     const card = document.createElement('article')
     card.className = 'code-block-card e2e-code-card'
@@ -261,7 +328,7 @@ test('keeps wheel and touchpad-style deltas inside nested code scrolling surface
 test('keeps quick controls and rounded clipping usable across scale factors', async () => {
   for (const size of [{ width: 1100, height: 720 }, { width: 680, height: 420 }]) {
     await application.evaluate(({ BrowserWindow }, nextSize) => BrowserWindow.getAllWindows()[0]?.setContentSize(nextSize.width, nextSize.height), size)
-    await page.getByRole('button', { name: 'copilot', exact: true }).click()
+    await enterPresenter()
     for (const scale of [1, 1.25, 1.5, 2]) {
       await application.evaluate(({ BrowserWindow }, zoomFactor) => {
         BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(zoomFactor)
@@ -315,6 +382,8 @@ test('keeps quick controls and rounded clipping usable across scale factors', as
 })
 
 test('provides tray recovery, hide/show, and emergency click-through escape', async () => {
+  // A preceding width/zoom change can still be settling content-sized bounds.
+  await page.waitForTimeout(350)
   const initial = await e2eState()
   expect(initial).toMatchObject({ tray: true, emergencyShortcut: true, clickThrough: false })
   await page.evaluate(() => {
@@ -355,7 +424,7 @@ test('provides tray recovery, hide/show, and emergency click-through escape', as
     await expectRestoredSurface(cycle + 1)
   }
 
-  await page.getByRole('button', { name: 'copilot', exact: true }).click()
+  await enterPresenter()
   await page.getByRole('button', { name: 'Enable click-through' }).click()
   const confirmation = page.getByRole('alertdialog', { name: 'Enable click-through?' })
   await expect(confirmation).toContainText('Ctrl+Shift+I')
@@ -365,7 +434,9 @@ test('provides tray recovery, hide/show, and emergency click-through escape', as
   await expect(page.locator('.click-through-banner')).toContainText('CLICK-THROUGH ON · Ctrl+Shift+I')
   await application.evaluate(() => (globalThis as any).__presenterE2E.traySettings())
   await expect.poll(async () => (await e2eState()).clickThrough).toBe(false)
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+  await expect(page.getByRole('alertdialog', { name: 'Leave presenter mode?' })).toBeVisible()
+  expect((await page.evaluate(() => window.presenter.getStatus())).capture.electronReported).toBe(true)
+  await page.getByRole('button', { name: 'Stay in presenter' }).click()
 
   await page.evaluate(() => window.presenter.setClickThrough(true))
   await expect.poll(async () => (await e2eState()).clickThrough).toBe(true)
