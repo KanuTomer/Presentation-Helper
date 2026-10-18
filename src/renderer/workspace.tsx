@@ -1,5 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react'
-import type { WorkspaceStatus } from '../shared/contracts'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { AiErrorInfo, WorkspaceStatus } from '../shared/contracts'
+
+/** A hidden native window must not need a painted frame to acknowledge its DOM. */
+export function useWorkspaceAcknowledgement(transitionId: string | undefined, onError: (error: AiErrorInfo) => void): void {
+  useLayoutEffect(() => {
+    if (!transitionId) return
+    let active = true
+    void window.presenter.acknowledgeWorkspace(transitionId).catch((error) => {
+      if (active) onError({ code: 'unknown', message: (error as Error).message, retryable: false })
+    })
+    return () => { active = false }
+  }, [transitionId, onError])
+}
 
 export function SetupReturnConfirmation({ workspace, busy, onError }: { workspace: WorkspaceStatus; busy: boolean; onError(message: string): void }): React.JSX.Element | null {
   const dialog = useRef<HTMLElement>(null)

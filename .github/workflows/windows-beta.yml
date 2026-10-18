@@ -100,6 +100,14 @@ jobs:
       - name: Run Electron overlay smoke tests
         run: npx playwright test
 
+      - name: Upload Electron failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PresenterAI-Electron-failure-${{ github.run_id }}
+          path: test-results/
+          if-no-files-found: ignore
+
       - name: Evaluate Milestone 4 retrieval offline
         run: npm run eval:m4
 
