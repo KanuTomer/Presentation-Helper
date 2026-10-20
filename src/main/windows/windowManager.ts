@@ -5,6 +5,7 @@ import {
 import { join } from 'node:path'
 import { is } from '@electron-toolkit/utils'
 import { channels } from '../../shared/channels.js'
+import { PRESENTER_SHORTCUTS } from '../../shared/presenterShortcuts.js'
 import { WINDOW_LAYOUT_REVISION, type SettingsStore } from '../settings/store.js'
 import type { CaptureProtection } from './captureProtection.js'
 import type { GlassDisplay, ShortcutRegistrationStatus, WorkspaceStatus } from '../../shared/contracts.js'
@@ -20,6 +21,7 @@ export const OVERLAY_EDGE_MARGIN = 16
 const LEGACY_NARROW_WIDTH = 900
 export const CLICK_THROUGH_RECOVERY_SHORTCUT = 'Control+Shift+I'
 const RESIZE_ANIMATION_MS = 160
+const PRESENTER_SHORTCUT_WARNING = 'Presenter shortcuts unavailable:'
 
 export interface WindowClickThroughStatus {
   enabled: boolean
@@ -59,6 +61,9 @@ export class WindowManager {
   private presenterHeight = 180
   onWorkspaceStatusChange?: () => void
   onClickThroughStatusChange?: ClickThroughStatusListener
+  /** Turns click-through on through the same persisted path as the button. */
+  onEnableClickThrough?: () => void
+  private presenterShortcutsRegistered = new Set<string>()
   private readonly handleDisplayChange = (): void => {
     const setup = this.setupWindow
     if (setup && !setup.isDestroyed()) { const bounds = this.validBounds(setup.getBounds()); if (bounds) setup.setBounds(bounds) }
@@ -166,6 +171,7 @@ export class WindowManager {
     const area = screen.getDisplayMatching(setupBounds).workArea
     presenter.setBounds(presenterBounds({ x: saved?.x ?? setupBounds.x, y: saved?.y ?? setupBounds.y, width: saved?.width ?? 860, height: this.presenterHeight }, area))
     this.workspace = { mode: 'presenter' }
+    this.registerPresenterShortcuts()
     setup?.hide()
     this.onWorkspaceStatusChange?.()
     if (this.presenterReady) this.showPresenter()
@@ -189,6 +195,7 @@ export class WindowManager {
     }
     this.setClickThrough(false)
     presenter?.hide()
+    this.unregisterPresenterShortcuts()
     this.workspace = { ...this.workspace, mode: 'setup', error: undefined }
     const setup = this.setupWindow ?? this.create()
     // A capture-compatibility test may have protected Setup; Setup is never stealth.
@@ -262,7 +269,25 @@ export class WindowManager {
   emergencyUnlock(): void { this.setClickThrough(false); void this.store.updateSettings({ clickThrough: false }).catch(() => undefined) }
   showFromTray(): void { this.emergencyUnlock(); if (this.isPresenter) this.showPresenter(); else this.showSetup() }
   openSettingsFromTray(): void { this.emergencyUnlock(); this.openSettings() }
-  prepareToQuit(): void { this.quitting = true; clearTimeout(this.boundsTimer); clearTimeout(this.glassTimer); clearInterval(this.resizeTween) }
+  prepareToQuit(): void { this.quitting = true; clearTimeout(this.boundsTimer); clearTimeout(this.glassTimer); clearInterval(this.resizeTween); this.unregisterPresenterShortcuts() }
+
+  /** Presenter controls work without clicking, so no cursor moves across a shared screen. */
+  private registerPresenterShortcuts(): void {
+    const failed: string[] = []
+    for (const { accelerator, command, keys } of PRESENTER_SHORTCUTS) {
+      if (this.presenterShortcutsRegistered.has(accelerator)) continue
+      const registered = globalShortcut.register(accelerator, () => this.presenterWindow?.webContents.send(channels.presenterCommand, command))
+      if (registered) this.presenterShortcutsRegistered.add(accelerator)
+      else failed.push(keys)
+    }
+    this.shortcutWarnings = this.shortcutWarnings.filter((warning) => !warning.startsWith(PRESENTER_SHORTCUT_WARNING))
+    if (failed.length) this.shortcutWarnings.push(`${PRESENTER_SHORTCUT_WARNING} ${failed.join(', ')}. Another app is using them.`)
+  }
+  private unregisterPresenterShortcuts(): void {
+    for (const accelerator of this.presenterShortcutsRegistered) globalShortcut.unregister(accelerator)
+    this.presenterShortcutsRegistered.clear()
+    this.shortcutWarnings = this.shortcutWarnings.filter((warning) => !warning.startsWith(PRESENTER_SHORTCUT_WARNING))
+  }
 
   /** Display (DIP) behind the presenter; the glass backdrop captures only this screen. */
   get glassDisplay(): GlassDisplay {
@@ -406,10 +431,18 @@ export class WindowManager {
     return warnings
   }
 
+  /**
+   * Ctrl+Shift+I turns click-through off immediately and unconditionally, or
+   * on while presenting. The same key always turns it off again.
+   */
+  private toggleClickThroughFromShortcut(): void {
+    if (this.clickThrough || !this.isPresenter || !this.onEnableClickThrough) { this.emergencyUnlock(); return }
+    this.onEnableClickThrough()
+  }
   private ensureRecoveryShortcut(): boolean {
     if (this.isRecoveryRegistered()) return true
     this.recoveryShortcutRegistered = false
-    if (globalShortcut.register(CLICK_THROUGH_RECOVERY_SHORTCUT, () => this.emergencyUnlock())) {
+    if (globalShortcut.register(CLICK_THROUGH_RECOVERY_SHORTCUT, () => this.toggleClickThroughFromShortcut())) {
       this.recoveryShortcutRegistered = true
       this.notifyClickThroughStatus()
       return true

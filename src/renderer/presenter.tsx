@@ -10,6 +10,17 @@ import { ResponseCard } from './responseCard'
 import { ScreenshotChip, SnapshotButton } from './snapshot'
 import { canInsertTranscriptDirectly, mergeTranscriptDraft, TranscriptDraftNotice } from './transcriptDraft'
 import { SetupReturnConfirmation, usePresenterSizing } from './workspace'
+import { presenterKeys, type PresenterCommand } from '../shared/presenterShortcuts'
+
+/** Audio and display failures need a new capture, not a resend of the same request. */
+function retryAllowed(status: AppStatus, error?: AiErrorInfo): boolean {
+  return status.operationKind !== 'audio' && !['busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio', 'invalid_transcript', 'capture_timeout', 'transcript_display_unavailable'].includes(error?.code ?? '')
+}
+
+function codeBlocksOf(response?: AssistantResponse): Array<{ code: string }> {
+  if (!response) return []
+  return response.responseStyle === 'presenter' ? response.codeBlocks ?? [] : response.codeBlocks
+}
 
 type SetupSection = 'settings' | 'privacy' | 'documents' | 'capture'
 
@@ -21,9 +32,12 @@ export function PresenterApp(): React.JSX.Element {
   const [response, setResponse] = useState<AssistantResponse>()
   const [transcriptDraft, setTranscriptDraft] = useState<{ draft: TranscriptionDraft; conflict: boolean }>()
   const [aiError, setAiError] = useState<AiErrorInfo>()
-  const [folded, setFolded] = useState(false)
+  // Folding belongs to one answer, so a new answer always starts unfolded.
+  const [foldedAnswer, setFoldedAnswer] = useState<AssistantResponse>()
   const [attachment, setAttachment] = useState<ScreenshotAttachment>()
   const [attaching, setAttaching] = useState(false)
+  const [flash, setFlash] = useState<PresenterCommand>()
+  const copyIndex = useRef(0)
   const recordingMs = useRecordingMs(status)
   const shellRef = useRef<HTMLElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -35,7 +49,9 @@ export function PresenterApp(): React.JSX.Element {
   const workspace = status.workspace ?? { mode: 'presenter' as const }
   const confirming = Boolean(workspace.setupRequest)
   usePresenterSizing(shellRef, contentRef, true)
-  useEffect(() => { setFolded(false) }, [response])
+  const folded = Boolean(response) && foldedAnswer === response
+  const toggleFold = (): void => setFoldedAnswer((current) => current === response ? undefined : response)
+  useEffect(() => { copyIndex.current = 0 }, [response])
   const showAiError = useCallback((value: AiErrorInfo) => setAiError(value), [])
   const setQuestionFromUser = useCallback((value: string) => {
     composerRevision.current += 1
@@ -131,11 +147,54 @@ export function PresenterApp(): React.JSX.Element {
       throw error
     }
   }
+  const resolveTranscript = (choice: 'replace' | 'append' | 'discard'): void => {
+    if (!transcriptDraft) return
+    if (choice !== 'discard') setQuestionFromUser(mergeTranscriptDraft(questionRef.current, transcriptDraft.draft.text, choice))
+    setTranscriptDraft(undefined); setTimeout(() => input.current?.focus(), 0)
+  }
+  // Global shortcuts (registered by main only while presenting) run the same
+  // actions as the buttons, and only when the button itself would be enabled.
+  const runCommand = useRef<(command: PresenterCommand) => void>(() => undefined)
+  runCommand.current = (command) => {
+    if (confirming) return
+    const busy = isBusy(status)
+    const shownError = aiError ?? status.operationError
+    const ran = ((): boolean => {
+      switch (command) {
+        case 'send':
+          if (!apiKeyStatus.configured || busy || transcriptDraft?.conflict || !(question.trim() || attachment)) return false
+          void ask(); return true
+        case 'snapshot': if (busy || attaching) return false; void toggleAttachment(); return true
+        case 'format': if (busy) return false; setAnswerFormat((format) => format === 'code' ? 'presenter' : 'code'); return true
+        case 'fold': if (!response) return false; toggleFold(); return true
+        case 'copy': {
+          const blocks = codeBlocksOf(response)
+          if (!blocks.length || folded) return false
+          void window.presenter.copyCode(blocks[copyIndex.current++ % blocks.length]!.code)
+          return true
+        }
+        case 'retry':
+          if (busy || !shownError?.retryable || !retryAllowed(status, shownError)) return false
+          void ask(lastSubmittedFormat.current); return true
+        case 'transcript-replace': case 'transcript-append':
+          if (!transcriptDraft?.conflict) return false
+          resolveTranscript(command === 'transcript-replace' ? 'replace' : 'append'); return true
+        case 'transcript-discard': if (!transcriptDraft) return false; resolveTranscript('discard'); return true
+      }
+    })()
+    if (ran) { setFlash(undefined); requestAnimationFrame(() => setFlash(command)) }
+  }
+  useEffect(() => window.presenter.onPresenterCommand((command) => runCommand.current(command)), [])
+  useEffect(() => {
+    if (!flash) return
+    const timer = setTimeout(() => setFlash(undefined), 300)
+    return () => clearTimeout(timer)
+  }, [flash])
   const openSetup = (section: SetupSection = 'settings'): void => {
     void window.presenter.requestSetup(section).catch((error) => showAiError({ code: 'unknown', message: (error as Error).message, retryable: false }))
   }
   const appearance = status.appearance ?? { glassHaze: 0.5, liveGlass: true }
-  return <main ref={shellRef} className={`shell presenter ${status.listening ? 'is-listening' : ''}`}>
+  return <main ref={shellRef} className={`shell presenter ${status.listening ? 'is-listening' : ''}`} data-flash={flash}>
     <LiquidGlass haze={appearance.glassHaze} enabled={appearance.liveGlass} active={workspace.mode === 'presenter'} />
     <header className="titlebar drag-region" inert={confirming}>
       <div className="brand"><span className="brand-mark">P</span><strong>PresenterAI</strong></div>
@@ -143,7 +202,7 @@ export function PresenterApp(): React.JSX.Element {
         <span className="capture-label" title="Windows was asked to hide this window from screen capture. Test each recording app.">
           <span className={`privacy-dot ${status.capture.electronReported ? 'protected' : 'warning'}`} />{status.capture.electronReported ? 'Hidden' : 'Visible to capture'}
         </span>
-        {response && <button aria-expanded={!folded} aria-controls="presenter-answer" onClick={() => setFolded(!folded)}>{folded ? 'Show answer' : 'Fold answer'}</button>}
+        {response && <button className="fold-button" aria-expanded={!folded} aria-controls="presenter-answer" title={presenterKeys('fold')} onClick={toggleFold}>{folded ? 'Show answer' : 'Fold answer'}</button>}
         <button onClick={() => openSetup()}>← Setup</button>
       </div>
     </header>
@@ -152,11 +211,7 @@ export function PresenterApp(): React.JSX.Element {
     <section className="content no-drag" tabIndex={0} aria-label="copilot content" onKeyDown={handleContentScrollKey} inert={confirming}>
       <div ref={contentRef} className="workspace-content">
         {workspace.error && <Notice tone="danger">{workspace.error}</Notice>}
-        <Copilot folded={folded} onSnapshotResponse={(value) => { setResponse(value); setAiError(undefined); void refresh() }} question={question} setQuestion={setQuestionFromUser} transcriptDraft={transcriptDraft} resolveTranscript={(choice) => {
-          if (!transcriptDraft) return
-          if (choice !== 'discard') setQuestionFromUser(mergeTranscriptDraft(questionRef.current, transcriptDraft.draft.text, choice))
-          setTranscriptDraft(undefined); setTimeout(() => input.current?.focus(), 0)
-        }} answerFormat={answerFormat} setAnswerFormat={setAnswerFormat} onSetClickThrough={setClickThrough} input={input} ask={() => ask()} retry={() => ask(lastSubmittedFormat.current)} response={response} aiError={aiError ?? status.operationError} openSettings={() => openSetup()} openPrivacy={() => openSetup('privacy')} hasKey={apiKeyStatus.configured} status={status} onAudioError={showAiError} attachment={attachment} attaching={attaching} onToggleAttachment={() => void toggleAttachment()} composerStatus={<>
+        <Copilot folded={folded} onSnapshotResponse={(value) => { setResponse(value); setAiError(undefined); void refresh() }} question={question} setQuestion={setQuestionFromUser} transcriptDraft={transcriptDraft} resolveTranscript={resolveTranscript} answerFormat={answerFormat} setAnswerFormat={setAnswerFormat} onSetClickThrough={setClickThrough} input={input} ask={() => ask()} retry={() => ask(lastSubmittedFormat.current)} response={response} aiError={aiError ?? status.operationError} openSettings={() => openSetup()} openPrivacy={() => openSetup('privacy')} hasKey={apiKeyStatus.configured} status={status} onAudioError={showAiError} attachment={attachment} attaching={attaching} onToggleAttachment={() => void toggleAttachment()} composerStatus={<>
           {status.outboundPreview && <TransmissionPreviewPanel
             preview={status.outboundPreview}
             onRendered={(operationId, stage) => window.presenter.acknowledgeTransmissionPreview(operationId, stage)}
@@ -173,7 +228,7 @@ export function PresenterApp(): React.JSX.Element {
 function Copilot(props: { folded: boolean; onSnapshotResponse(response: AssistantResponse): void; question: string; setQuestion(v: string): void; transcriptDraft?: { draft: TranscriptionDraft; conflict: boolean }; resolveTranscript(choice: 'replace' | 'append' | 'discard'): void; answerFormat: AnswerFormat; setAnswerFormat(v: AnswerFormat): void; onSetClickThrough(enabled: boolean): Promise<void>; input: React.RefObject<HTMLTextAreaElement | null>; ask(): void; retry(): void; response?: AssistantResponse; aiError?: AiErrorInfo; openSettings(): void; openPrivacy(): void; hasKey: boolean; status: AppStatus; onAudioError(error: AiErrorInfo): void; attachment?: ScreenshotAttachment; attaching: boolean; onToggleAttachment(): void; composerStatus: React.ReactNode }) {
   const busy = isBusy(props.status)
   const canSubmit = props.hasKey && (Boolean(props.question.trim()) || Boolean(props.attachment)) && !busy && !props.transcriptDraft?.conflict
-  const retryIsSafe = props.status.operationKind !== 'audio' && !['busy', 'helper_unavailable', 'device_unavailable', 'invalid_audio', 'invalid_transcript', 'capture_timeout', 'transcript_display_unavailable'].includes(props.aiError?.code ?? '')
+  const retryIsSafe = retryAllowed(props.status, props.aiError)
   return <div className="stack">
     {!props.hasKey && <Notice tone="warning">Add your OpenAI API key in Setup before asking a question.</Notice>}
     <div className="question-box">
@@ -191,7 +246,7 @@ function Copilot(props: { folded: boolean; onSnapshotResponse(response: Assistan
         onAnswerFormatChange={props.setAnswerFormat}
         onSetClickThrough={props.onSetClickThrough}
       >
-        <button className="primary" disabled={!canSubmit} title={busy ? 'Another operation is active.' : props.transcriptDraft?.conflict ? 'Resolve the pending transcript first.' : undefined} onClick={() => void props.ask()}>{props.answerFormat === 'code' ? 'Generate code' : 'Ask presenter'} <kbd>Ctrl↵</kbd></button>
+        <button className="primary composer-send" disabled={!canSubmit} title={busy ? 'Another operation is active.' : props.transcriptDraft?.conflict ? 'Resolve the pending transcript first.' : `Send (${presenterKeys('send')}, or Ctrl+Enter while typing)`} onClick={() => void props.ask()}>{props.answerFormat === 'code' ? 'Generate code' : 'Ask presenter'} <kbd>Ctrl+Alt+↵</kbd></button>
         <ToggleListenButton status={props.status} onError={props.onAudioError} />
         <SnapshotButton attached={Boolean(props.attachment)} pending={props.attaching} disabled={busy} onToggle={props.onToggleAttachment} />
       </CopilotQuickControls>

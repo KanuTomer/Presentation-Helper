@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { PRESENTER_SHORTCUTS } from '../../shared/presenterShortcuts.js'
 import type { AppSettings } from '../../shared/contracts.js'
 
 const emergencyShortcut = 'CONTROL+SHIFT+I'
@@ -86,8 +87,11 @@ export function validateSettingsMutation(
     ['Hide/show', canonicalAccelerator(next.hideShortcut)],
     ['Listening toggle', canonicalAccelerator(next.listenShortcut)]
   ] as const
+  const presenterKeys = new Map(PRESENTER_SHORTCUTS.map((shortcut) => [shortcut.accelerator.toUpperCase(), shortcut.keys]))
   for (const [label, accelerator] of shortcuts) {
     if (accelerator === emergencyShortcut) throw new Error(`${label} cannot replace the emergency interaction shortcut.`)
+    const reserved = presenterKeys.get(accelerator)
+    if (reserved) throw new Error(`${label} cannot use ${reserved}; it is reserved for presenter controls.`)
   }
   const seen = new Map<string, string>()
   for (const [label, accelerator] of shortcuts) {

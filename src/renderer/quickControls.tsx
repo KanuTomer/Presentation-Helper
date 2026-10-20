@@ -57,7 +57,7 @@ export function CopilotQuickControls({
 
   return <>
     <section className="quick-controls command-bar" aria-label="Copilot quick controls">
-      <div className="answer-format" role="group" aria-label="Answer style">
+      <div className="answer-format" role="group" aria-label="Answer style" title="Switch with Ctrl+Alt+F">
         <button
           type="button"
           className={answerFormat === 'presenter' ? 'active' : ''}
@@ -84,7 +84,7 @@ export function CopilotQuickControls({
         disabled={changingClickThrough || (!clickThrough.enabled && !clickThrough.recoveryAvailable)}
         aria-pressed={clickThrough.enabled}
         aria-label={clickThrough.recoveryAvailable ? 'Enable click-through' : 'Click-through unavailable'}
-        title={!clickThrough.recoveryAvailable ? 'The emergency recovery shortcut is unavailable, so click-through is disabled.' : undefined}
+        title={!clickThrough.recoveryAvailable ? 'The emergency recovery shortcut is unavailable, so click-through is disabled.' : 'Click-through (Ctrl+Shift+I turns it on or off)'}
         onClick={() => {
           if (clickThrough.enabled) void onSetClickThrough(false).catch(() => undefined)
           else setConfirmingClickThrough(true)

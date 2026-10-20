@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { channels } from '../shared/channels.js'
 import type { PresenterAPI } from '../shared/contracts.js'
 import { parseTranscriptDraft } from './transcriptValidation.js'
+import { isPresenterCommand } from '../shared/presenterShortcuts.js'
 
 const api: PresenterAPI = {
   getStatus: () => ipcRenderer.invoke(channels.getStatus),
@@ -59,6 +60,7 @@ const api: PresenterAPI = {
   onSurfaceRestored: (callback) => { const listener = () => callback(); ipcRenderer.on(channels.surfaceRestored, listener); return () => ipcRenderer.removeListener(channels.surfaceRestored, listener) },
   getGlassDisplay: () => ipcRenderer.invoke(channels.getGlassDisplay),
   onGlassDisplay: (callback) => { const listener = (_event: Electron.IpcRendererEvent, display: Parameters<typeof callback>[0]) => callback(display); ipcRenderer.on(channels.glassDisplay, listener); return () => ipcRenderer.removeListener(channels.glassDisplay, listener) },
+  onPresenterCommand: (callback) => { const listener = (_event: Electron.IpcRendererEvent, command: unknown) => { if (isPresenterCommand(command)) callback(command) }; ipcRenderer.on(channels.presenterCommand, listener); return () => ipcRenderer.removeListener(channels.presenterCommand, listener) },
   onTranscriptDraft: (callback) => { const listener = (_event: Electron.IpcRendererEvent, draft: unknown) => { const parsed = parseTranscriptDraft(draft); if (parsed) callback(parsed) }; ipcRenderer.on(channels.transcriptDraft, listener); return () => ipcRenderer.removeListener(channels.transcriptDraft, listener) },
   onError: (callback) => { const listener = (_event: Electron.IpcRendererEvent, error: Parameters<typeof callback>[0]) => callback(error); ipcRenderer.on(channels.appError, listener); return () => ipcRenderer.removeListener(channels.appError, listener) }
 }

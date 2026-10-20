@@ -7,7 +7,7 @@ import { StageTimingSummary } from './operationUi'
 import {
   ListeningConsentPanel, PrivacyDisclosure, RetentionControls, SessionBudgetPanel, UsageEstimatePanel
 } from './privacyControls'
-import { ShortcutSettingsPanel } from './shortcutRecorder'
+import { PresenterShortcutList, ShortcutSettingsPanel } from './shortcutRecorder'
 import { ApprovedVocabularyEditor } from './vocabularyEditor'
 
 type Section = 'settings' | 'documents' | 'audio' | 'shortcuts' | 'appearance' | 'privacy' | 'capture'
@@ -64,6 +64,7 @@ export function SetupApp(): React.JSX.Element {
         {section === 'settings' && settings && <SessionSettings settings={settings} apiKeyStatus={apiKeyStatus} onChange={refresh} />}
         {section === 'audio' && settings && <AudioSettings settings={settings} status={status} recordingMs={recordingMs} onChange={refresh} onOpenPrivacy={() => setSection('privacy')} />}
         {section === 'shortcuts' && settings && <ShortcutSettingsPanel askShortcut={settings.askShortcut} hideShortcut={settings.hideShortcut} listenShortcut={settings.listenShortcut} disabled={busy} onChange={async (patch) => { await window.presenter.updateSettings(patch); await refresh() }} registrations={status.shortcutRegistrations} onRetry={async () => { await window.presenter.retryShortcuts(); await refresh() }} />}
+        {section === 'shortcuts' && <PresenterShortcutList />}
         {section === 'appearance' && settings && <AppearanceSettings settings={settings} setSettings={setSettings} onError={setError} onPreview={enterPresenter} />}
         {section === 'privacy' && <Privacy status={status} recordingMs={recordingMs} documents={documents} usage={usage} settings={settings} onChange={refresh} />}
         {section === 'capture' && <CaptureStatus status={status} onChange={refresh} />}

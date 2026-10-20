@@ -8,7 +8,7 @@ import './snapshot.css'
  */
 export function SnapshotButton({ attached, pending, disabled, onToggle }: { attached: boolean; pending: boolean; disabled: boolean; onToggle(): void }): React.JSX.Element {
   return <button type="button" className={`snapshot-button ${attached ? 'attached' : ''}`} aria-pressed={attached} disabled={disabled || pending} onClick={onToggle}
-    title={attached ? 'Remove the attached screenshot' : 'Attach a screenshot of this screen to your message'}>
+    title={`${attached ? 'Remove the attached screenshot' : 'Attach a screenshot of this screen to your message'} (Ctrl+Alt+S)`}>
     {pending ? 'Capturing…' : attached ? 'Snapshot ✓' : 'Snapshot'}
   </button>
 }

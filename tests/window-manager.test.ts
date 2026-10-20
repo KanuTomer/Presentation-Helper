@@ -341,6 +341,47 @@ describe('two-window workspaces', () => {
     windows.prepareToQuit()
   })
 
+  it('registers presenter shortcuts only while presenting and forwards them to the presenter', async () => {
+    const { windows, created } = await created2()
+    windows.create(); const [, presenter] = created
+    expect(registered.has('Control+Alt+S')).toBe(false)
+    presenter!.fire('ready-to-show'); windows.enterPresenter()
+    for (const key of ['Control+Alt+Enter', 'Control+Alt+S', 'Control+Alt+F', 'Control+Alt+A', 'Control+Alt+C', 'Control+Alt+R', 'Control+Alt+1', 'Control+Alt+2', 'Control+Alt+3']) expect(registered.has(key)).toBe(true)
+    const snapshot = register.mock.calls.find(([key]) => key === 'Control+Alt+S')![1] as () => void
+    snapshot()
+    expect(presenter!.webContents.send).toHaveBeenCalledWith('presenter:command', 'snapshot')
+    windows.requestSetup('settings'); windows.confirmSetup()
+    expect(registered.has('Control+Alt+S')).toBe(false)
+    presenter!.fire('ready-to-show'); windows.enterPresenter(); windows.prepareToQuit()
+    expect(registered.has('Control+Alt+Enter')).toBe(false)
+  })
+
+  it('reports presenter shortcuts another app already owns', async () => {
+    const { windows, created } = await created2()
+    windows.create(); const [, presenter] = created
+    register.mockImplementation((key: string) => key !== 'Control+Alt+F')
+    presenter!.fire('ready-to-show'); windows.enterPresenter()
+    expect(windows.shortcutWarnings.join(' ')).toContain('Ctrl+Alt+F')
+    windows.requestSetup('settings'); windows.confirmSetup()
+    expect(windows.shortcutWarnings.join(' ')).not.toContain('Ctrl+Alt+F')
+    windows.prepareToQuit()
+  })
+
+  it('toggles click-through with Ctrl+Shift+I while presenting and only turns it off elsewhere', async () => {
+    const { windows, created } = await created2()
+    windows.create(); const [, presenter] = created
+    const toggle = register.mock.calls.find(([key]) => key === 'Control+Shift+I')![1] as () => void
+    windows.onEnableClickThrough = () => windows.setClickThrough(true)
+    toggle()
+    expect(windows.isClickThrough).toBe(false) // not presenting: never turns on
+    presenter!.fire('ready-to-show'); windows.enterPresenter()
+    toggle(); expect(windows.isClickThrough).toBe(true)
+    expect(presenter!.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true })
+    toggle(); expect(windows.isClickThrough).toBe(false)
+    expect(presenter!.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, { forward: true })
+    windows.prepareToQuit()
+  })
+
   it('grants the glass capture only to the presenter frame while presenting', async () => {
     const { windows, created } = await created2()
     windows.create(); const [, presenter] = created

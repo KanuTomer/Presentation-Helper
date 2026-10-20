@@ -32,7 +32,7 @@ export function CodeBlockCard({ block, onCopy }: { block: CodeBlock; onCopy?: Co
         type="button"
         className="code-copy-button"
         disabled={!onCopy}
-        title={onCopy ? 'Copy code' : 'Code copying is unavailable.'}
+        title={onCopy ? 'Copy code (Ctrl+Alt+C)' : 'Code copying is unavailable.'}
         aria-label={`Copy ${label}`}
         onClick={() => void copy()}
       >{copyState === 'copied' ? 'Copied' : 'Copy'}</button>
