@@ -1,7 +1,7 @@
 export const channels = {
   enterPresenter: 'workspace:enter', requestSetup: 'workspace:request-setup', confirmSetup: 'workspace:confirm-setup',
   dismissSetup: 'workspace:dismiss-setup', resizePresenter: 'workspace:resize',
-  getGlassDisplay: 'glass:get-display', glassDisplay: 'glass:display',
+  getGlassDisplay: 'glass:get-display', glassDisplay: 'glass:display', presenterCommand: 'presenter:command',
   attachScreenshot: 'snapshot:attach', discardScreenshot: 'snapshot:discard', askAboutScreen: 'snapshot:ask',
   status: 'app:status', getStatus: 'app:get-status', getSettings: 'settings:get', updateSettings: 'settings:update',
   getApiKeyStatus: 'secrets:status', saveApiKey: 'secrets:save-key', deleteApiKey: 'secrets:delete-key', testApiKey: 'secrets:test-key',

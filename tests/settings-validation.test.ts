@@ -52,6 +52,12 @@ describe('runtime settings validation', () => {
     expect(appSettingsSchema.parse(stored)).toMatchObject({ glassHaze: 0.5, fontScale: 1, liveGlass: true })
   })
 
+  it('keeps editable shortcuts off the fixed presenter keys', () => {
+    expect(() => validateSettingsMutation(settings, { askShortcut: 'Control+Alt+S' }, false)).toThrow(/reserved for presenter controls/)
+    expect(() => validateSettingsMutation(settings, { hideShortcut: 'Ctrl+Alt+1' }, false)).toThrow(/Ctrl\+Alt\+1/)
+    expect(() => validateSettingsMutation(settings, { askShortcut: 'Control+Alt+Q' }, false)).not.toThrow()
+  })
+
   it('normalizes approved vocabulary without accepting duplicate or oversized terms', () => {
     expect(parseSettingsPatch({ approvedVocabulary: ['  WASAPI ', 'wasapi', 'FTS5'] }).approvedVocabulary).toEqual(['WASAPI', 'FTS5'])
     expect(() => parseSettingsPatch({ approvedVocabulary: ['x'.repeat(65)] })).toThrow(/1–64/i)

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import type { ShortcutRegistrationStatus } from '../shared/contracts'
+import { PRESENTER_SHORTCUTS } from '../shared/presenterShortcuts'
 
 export interface ShortcutSettings {
   askShortcut: string
@@ -124,7 +125,19 @@ export function ShortcutSettingsPanel({
     <ul className="shortcut-registration-status" aria-label="Shortcut registration status">{registrations.map((item) => <li key={item.purpose}>{item.purpose}: <kbd>{item.accelerator}</kbd> — {item.status}</li>)}</ul>
     {retryError && <p className="notice danger" role="alert">{retryError}</p>}
     {registrations.some((item) => item.status === 'unavailable') && <p className="notice warning">Quit duplicate PresenterAI copies, then retry or change a configurable shortcut. Windows does not identify the conflicting application.</p>}
-    <p className="muted">Ctrl+Shift+I always turns click-through off. Tray → Show PresenterAI works too.</p>
+    <p className="muted">Ctrl+Shift+I turns click-through on or off while presenting (always off from anywhere). Tray → Show PresenterAI also restores clicks.</p>
+  </fieldset>
+}
+
+/** Fixed keys, active only while presenter mode is open. */
+export function PresenterShortcutList(): React.JSX.Element {
+  return <fieldset className="presenter-shortcuts">
+    <legend>While presenting</legend>
+    <p className="muted">These work from any app while the presenter is open, so you never need to click it.</p>
+    <dl>{PRESENTER_SHORTCUTS.map((shortcut) => <div key={shortcut.command}><dt>{shortcut.label}</dt><dd><kbd>{shortcut.keys}</kbd></dd></div>)}
+      <div><dt>Click-through on / off</dt><dd><kbd>Ctrl+Shift+I</kbd></dd></div>
+      <div><dt>Cancel the current request</dt><dd><kbd>Esc</kbd></dd></div>
+    </dl>
   </fieldset>
 }
 

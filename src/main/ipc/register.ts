@@ -74,6 +74,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   const broadcast = (): void => send(channels.status, status())
   windows.onClickThroughStatusChange = broadcast
   windows.onWorkspaceStatusChange = broadcast
+  windows.onEnableClickThrough = () => { void applyClickThrough(true).catch(() => windows.emergencyUnlock()) }
   audio.onState = broadcast
   audio.onTranscriptDraft = (draft) => windows.presenterWindow?.webContents.send(channels.transcriptDraft, transcriptionDraftSchema.parse(draft))
   audio.onError = (error) => send(channels.appError, error)

@@ -1,3 +1,4 @@
+import type { PresenterCommand } from './presenterShortcuts.js'
 import { z } from 'zod'
 
 const unicodeBoundedString = (minimum: number, maximum: number) => z.string().min(minimum).refine(
@@ -594,6 +595,8 @@ export interface PresenterAPI {
   /** Bounds (DIP) of the display behind the presenter, for the liquid-glass backdrop. */
   getGlassDisplay(): Promise<GlassDisplay>
   onGlassDisplay(callback: (display: GlassDisplay) => void): () => void
+  /** Presenter keyboard shortcuts, delivered while presenter mode is active. */
+  onPresenterCommand(callback: (command: PresenterCommand) => void): () => void
   onTranscriptDraft(callback: (draft: TranscriptionDraft) => void): () => void
   onError(callback: (error: AiErrorInfo) => void): () => void
 }

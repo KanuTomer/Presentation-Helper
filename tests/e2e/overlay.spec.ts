@@ -311,6 +311,26 @@ test('attaches a screenshot to the composer without hiding the presenter, and re
   await expect(page.getByRole('button', { name: 'Snapshot', exact: true })).toHaveAttribute('aria-pressed', 'false')
 })
 
+test('claims presenter shortcuts only while presenting and runs their actions', async () => {
+  const isRegistered = (key: string) => application.evaluate(({ globalShortcut }, accelerator) => globalShortcut.isRegistered(accelerator), key)
+  expect(await isRegistered('Control+Alt+S')).toBe(true)
+  const command = (name: string) => application.evaluate(({ BrowserWindow }, value) => {
+    BrowserWindow.getAllWindows().find((item) => item.webContents.getURL().includes('view=presenter'))!.webContents.send('presenter:command', value)
+  }, name)
+  await command('format')
+  await expect(page.getByRole('button', { name: 'Presenter', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await command('format')
+  await expect(page.getByRole('button', { name: '</> Code' })).toHaveAttribute('aria-pressed', 'true')
+  await command('snapshot')
+  await expect(page.getByRole('status').filter({ hasText: 'Screenshot attached' })).toBeVisible()
+  await command('snapshot')
+  await expect(page.getByRole('status').filter({ hasText: 'Screenshot attached' })).toHaveCount(0)
+  await openSetup('settings')
+  expect(await isRegistered('Control+Alt+S')).toBe(false)
+  await enterPresenter()
+  expect(await isRegistered('Control+Alt+S')).toBe(true)
+})
+
 test('keeps wheel and touchpad-style deltas inside nested code scrolling surfaces', async () => {
   await page.locator('.content').evaluate((content) => {
     const card = document.createElement('article')

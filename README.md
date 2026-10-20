@@ -13,6 +13,7 @@ PresenterAI is a private, local-first Windows copilot for presentations, technic
 - Solves visible math problems, coding exercises, and errors through **Snapshot → Preview → Send → Solution**. No cropping or extra prompt is required.
 - Offers GPT-6 Luna/Sol/Astra, GPT-6.1 Sol, and GPT-5.6 Luna/Terra with independently selected Normal/Strong reasoning levels.
 - Prepares in an ordinary **Setup** window, then presents in a separate always-on-top window that is hidden from screen capture. The presenter uses adjustable "liquid glass": it blurs a live view of the screen behind it, and the view never leaves the PC. Windows acrylic blur is the fallback for low-power PCs. Appearance has Haze and Text size controls.
+- Every presenter control has a keyboard shortcut while presenting, so you never move the cursor across a shared screen: Ctrl+Alt+Enter send, Ctrl+Alt+S snapshot, Ctrl+Alt+F Code/Presenter, Ctrl+Alt+A fold, Ctrl+Alt+C copy code, Ctrl+Alt+R retry, Ctrl+Alt+1/2/3 transcript choices, Ctrl+Shift+I click-through on/off, Esc cancel.
 - Provides tray controls, configurable shortcuts, fail-closed click-through recovery, and USD usage estimates without application spending caps.
 - Makes no telemetry, analytics, account, cloud-database, or hosted-backend connection.
 

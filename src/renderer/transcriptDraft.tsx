@@ -36,7 +36,7 @@ export function TranscriptDraftNotice({
   return <section className={`transcript-draft ${conflict ? 'conflict' : ''}`} role="status" aria-live="polite">
     <div><strong>{conflict ? 'A transcript is ready' : 'Transcript inserted — review before sending'}</strong><small>{(draft.durationMs / 1_000).toFixed(1)}s from {draft.endpointName}</small></div>
     {conflict
-      ? <><p className="transcript-preview" aria-label="Recognized transcript">{draft.text}</p><div className="actions"><button type="button" className="primary" onClick={() => onResolve('replace')}>Replace</button><button type="button" onClick={() => onResolve('append')}>Append</button><button type="button" onClick={() => onResolve('discard')}>Discard</button></div></>
-      : <button type="button" onClick={() => onResolve('discard')}>Dismiss</button>}
+      ? <><p className="transcript-preview" aria-label="Recognized transcript">{draft.text}</p><div className="actions"><button type="button" className="primary" title="Ctrl+Alt+1" onClick={() => onResolve('replace')}>Replace</button><button type="button" title="Ctrl+Alt+2" onClick={() => onResolve('append')}>Append</button><button type="button" title="Ctrl+Alt+3" onClick={() => onResolve('discard')}>Discard</button></div></>
+      : <button type="button" title="Ctrl+Alt+3" onClick={() => onResolve('discard')}>Dismiss</button>}
   </section>
 }

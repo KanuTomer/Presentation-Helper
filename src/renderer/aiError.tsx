@@ -20,7 +20,7 @@ export function AiErrorPanel({ error, onRetry, onOpenSettings, onOpenPrivacy, al
     <div className="actions">
       {['invalid_key', 'helper_unavailable', 'device_unavailable'].includes(error.code) && <button onClick={onOpenSettings}>Open Settings</button>}
       {error.code === 'listening_consent_required' && onOpenPrivacy && <button onClick={onOpenPrivacy}>Open Privacy</button>}
-      {error.retryable && allowRetry && <button onClick={onRetry}>Retry</button>}
+      {error.retryable && allowRetry && <button className="retry-button" title="Retry (Ctrl+Alt+R)" onClick={onRetry}>Retry</button>}
     </div>
   </div>
 }

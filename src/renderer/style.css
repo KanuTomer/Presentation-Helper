@@ -229,7 +229,17 @@ pre.code-scroll code { color: inherit; background: transparent; font: inherit; }
 details[open] > :not(summary) { animation: fade-in 140ms ease-out; }
 button, .setup-nav ul button, .segmented button, input, textarea, select { transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease; }
 
+/* A shortcut briefly highlights the control it pressed. */
+@keyframes key-flash { from { box-shadow: 0 0 0 0 rgb(139 151 255 / .75); } to { box-shadow: 0 0 0 7px rgb(139 151 255 / 0); } }
+.shell[data-flash="send"] .composer-send, .shell[data-flash="snapshot"] .snapshot-button, .shell[data-flash="format"] .answer-format,
+.shell[data-flash="fold"] .fold-button, .shell[data-flash="copy"] .code-copy-button, .shell[data-flash="retry"] .retry-button,
+.shell[data-flash^="transcript"] .transcript-draft { animation: key-flash 300ms ease-out; }
+
 /* Setup controls */
+.presenter-shortcuts dl { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin: 0; }
+.presenter-shortcuts dl div { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.presenter-shortcuts dd { margin: 0; }
+.presenter-shortcuts kbd { margin: 0; opacity: 1; font-size: 11px; }
 .key-row { flex-wrap: nowrap; }
 .key-row input { flex: 1; min-width: 0; }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
