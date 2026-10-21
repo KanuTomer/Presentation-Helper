@@ -45,7 +45,8 @@ export function PresenterApp(): React.JSX.Element {
   const questionRef = useRef('')
   const composerRevision = useRef(0)
   const captureComposer = useRef<{ operationId: string; text: string; revision: number } | undefined>(undefined)
-  const lastSubmittedFormat = useRef<AnswerFormat>('code')
+  const lastSubmission = useRef<{ format: AnswerFormat; screenshot: boolean }>({ format: 'code', screenshot: false })
+  const submitting = useRef(false)
   const workspace = status.workspace ?? { mode: 'presenter' as const }
   const confirming = Boolean(workspace.setupRequest)
   usePresenterSizing(shellRef, contentRef, true)
@@ -85,6 +86,8 @@ export function PresenterApp(): React.JSX.Element {
     setQuestion(''); setTranscriptDraft(undefined); setResponse(undefined); setAiError(undefined); setAttachment(undefined)
     setAnswerFormat(answerFormatAfterSubmission())
   }, [status.sessionUsage.sessionId])
+  // Returning to Setup discards the screenshot in the main process.
+  useEffect(() => { if (workspace.mode !== 'presenter') setAttachment(undefined) }, [workspace.mode])
   // An attached screenshot expires in the main process; drop the chip with it.
   useEffect(() => {
     if (!attachment) return
@@ -120,23 +123,30 @@ export function PresenterApp(): React.JSX.Element {
     if (status.operationKind === 'audio' && (status.operation === 'starting_capture' || status.operation === 'listening')) setAiError(undefined)
   }, [status.operation, status.operationId, status.operationKind])
 
-  const ask = async (formatOverride?: AnswerFormat): Promise<void> => {
+  /** Sends the composer, or with `retry` resends the last submission (recapturing its screenshot). */
+  const ask = async (retry = false): Promise<void> => {
+    // Main reports busy only after a round trip, so a quick second press must stop here.
+    if (submitting.current) return
     if (transcriptDraft?.conflict) {
       setAiError({ code: 'invalid_transcript', message: 'Choose Replace, Append, or Discard for the pending transcript before submitting.', retryable: false })
       return
     }
+    submitting.current = true
     setAiError(undefined); setResponse(undefined); setTranscriptDraft(undefined)
-    const requestedFormat = formatOverride ?? answerFormat
-    lastSubmittedFormat.current = requestedFormat
+    const submission = retry ? lastSubmission.current : { format: answerFormat, screenshot: Boolean(attachment) }
+    lastSubmission.current = submission
     // Presenter is a one-request override; Code stays the visible default.
     setAnswerFormat(answerFormatAfterSubmission())
-    const screenshot = attachment
+    let screenshotId = retry ? undefined : attachment?.id
     setAttachment(undefined)
     try {
-      const result = screenshot ? await window.presenter.askAboutScreen(question, screenshot.id) : await window.presenter.ask(question, requestedFormat)
+      // The first screenshot is cleared once its request ends, so a retry takes a new one.
+      if (submission.screenshot && !screenshotId) screenshotId = (await window.presenter.attachScreenshot()).id
+      const result = screenshotId ? await window.presenter.askAboutScreen(question, screenshotId) : await window.presenter.ask(question, submission.format)
       if (result.ok) setResponse(result.response); else setAiError(result.error)
       void refresh()
     } catch (value) { setAiError({ code: 'unknown', message: (value as Error).message || 'Request failed.', retryable: false }) }
+    finally { submitting.current = false }
   }
   const setClickThrough = async (enabled: boolean): Promise<void> => {
     try {
@@ -162,7 +172,7 @@ export function PresenterApp(): React.JSX.Element {
     const ran = ((): boolean => {
       switch (command) {
         case 'send':
-          if (!apiKeyStatus.configured || busy || transcriptDraft?.conflict || !(question.trim() || attachment)) return false
+          if (!apiKeyStatus.configured || busy || submitting.current || transcriptDraft?.conflict || !(question.trim() || attachment)) return false
           void ask(); return true
         case 'snapshot': if (busy || attaching) return false; void toggleAttachment(); return true
         case 'format': if (busy) return false; setAnswerFormat((format) => format === 'code' ? 'presenter' : 'code'); return true
@@ -175,7 +185,10 @@ export function PresenterApp(): React.JSX.Element {
         }
         case 'retry':
           if (busy || !shownError?.retryable || !retryAllowed(status, shownError)) return false
-          void ask(lastSubmittedFormat.current); return true
+          void ask(true); return true
+        case 'cancel':
+          if (!busy) return false
+          void window.presenter.cancel().then((result) => { if (!result.ok) showAiError(result.error) }); return true
         case 'transcript-replace': case 'transcript-append':
           if (!transcriptDraft?.conflict) return false
           resolveTranscript(command === 'transcript-replace' ? 'replace' : 'append'); return true
@@ -211,7 +224,8 @@ export function PresenterApp(): React.JSX.Element {
     <section className="content no-drag" tabIndex={0} aria-label="copilot content" onKeyDown={handleContentScrollKey} inert={confirming}>
       <div ref={contentRef} className="workspace-content">
         {workspace.error && <Notice tone="danger">{workspace.error}</Notice>}
-        <Copilot folded={folded} onSnapshotResponse={(value) => { setResponse(value); setAiError(undefined); void refresh() }} question={question} setQuestion={setQuestionFromUser} transcriptDraft={transcriptDraft} resolveTranscript={resolveTranscript} answerFormat={answerFormat} setAnswerFormat={setAnswerFormat} onSetClickThrough={setClickThrough} input={input} ask={() => ask()} retry={() => ask(lastSubmittedFormat.current)} response={response} aiError={aiError ?? status.operationError} openSettings={() => openSetup()} openPrivacy={() => openSetup('privacy')} hasKey={apiKeyStatus.configured} status={status} onAudioError={showAiError} attachment={attachment} attaching={attaching} onToggleAttachment={() => void toggleAttachment()} composerStatus={<>
+        {status.shortcutWarnings.length > 0 && <Notice tone="warning">{status.shortcutWarnings.join(' ')}</Notice>}
+        <Copilot folded={folded} onSnapshotResponse={(value) => { setResponse(value); setAiError(undefined); void refresh() }} question={question} setQuestion={setQuestionFromUser} transcriptDraft={transcriptDraft} resolveTranscript={resolveTranscript} answerFormat={answerFormat} setAnswerFormat={setAnswerFormat} onSetClickThrough={setClickThrough} input={input} ask={() => ask()} retry={() => ask(true)} response={response} aiError={aiError ?? status.operationError} openSettings={() => openSetup()} openPrivacy={() => openSetup('privacy')} hasKey={apiKeyStatus.configured} status={status} onAudioError={showAiError} attachment={attachment} attaching={attaching} onToggleAttachment={() => void toggleAttachment()} composerStatus={<>
           {status.outboundPreview && <TransmissionPreviewPanel
             preview={status.outboundPreview}
             onRendered={(operationId, stage) => window.presenter.acknowledgeTransmissionPreview(operationId, stage)}

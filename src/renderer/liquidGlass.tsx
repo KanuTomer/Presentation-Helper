@@ -99,7 +99,7 @@ class GlassRenderer {
   private constructor(
     private canvas: HTMLCanvasElement,
     private gl: WebGL2RenderingContext,
-    private program: WebGLProgram,
+    private gpu: GlassProgram,
     private display: GlassDisplay,
     private haze: number
   ) {}
@@ -107,9 +107,9 @@ class GlassRenderer {
   static create(canvas: HTMLCanvasElement, display: GlassDisplay, haze: number): GlassRenderer | undefined {
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance', desynchronized: true })
     if (!gl) return undefined
-    const program = compile(gl)
-    if (!program) return undefined
-    return new GlassRenderer(canvas, gl, program, display, haze)
+    const gpu = compile(gl)
+    if (!gpu) return undefined
+    return new GlassRenderer(canvas, gl, gpu, display, haze)
   }
 
   async start(): Promise<void> {
@@ -131,7 +131,8 @@ class GlassRenderer {
     if (this.videoRequest) this.video.cancelVideoFrameCallback(this.videoRequest)
     this.stop()
     // Keep the context: the same canvas is reused when the capture restarts.
-    this.gl.deleteProgram(this.program)
+    const { gl, gpu } = this
+    gl.deleteProgram(gpu.program); gl.deleteBuffer(gpu.buffer); gl.deleteTexture(gpu.texture)
   }
 
   private stop(): void {
@@ -168,11 +169,11 @@ class GlassRenderer {
     const width = Math.round(innerWidth * ratio), height = Math.round(innerHeight * ratio)
     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height }
     gl.viewport(0, 0, width, height)
-    const uniform = (name: string) => gl.getUniformLocation(this.program, name)
-    gl.uniform4f(uniform('uCrop'), (screenX - display.x) / display.width, (screenY - display.y) / display.height, innerWidth / display.width, innerHeight / display.height)
-    gl.uniform2f(uniform('uSize'), innerWidth, innerHeight)
-    gl.uniform2f(uniform('uTexel'), 1 / video.videoWidth, 1 / video.videoHeight)
-    gl.uniform1f(uniform('uHaze'), this.haze)
+    const { uniforms } = this.gpu
+    gl.uniform4f(uniforms.crop, (screenX - display.x) / display.width, (screenY - display.y) / display.height, innerWidth / display.width, innerHeight / display.height)
+    gl.uniform2f(uniforms.size, innerWidth, innerHeight)
+    gl.uniform2f(uniforms.texel, 1 / video.videoWidth, 1 / video.videoHeight)
+    gl.uniform1f(uniforms.haze, this.haze)
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
   }
 
@@ -187,7 +188,15 @@ class GlassRenderer {
   }
 }
 
-function compile(gl: WebGL2RenderingContext): WebGLProgram | undefined {
+interface GlassProgram {
+  program: WebGLProgram
+  buffer: WebGLBuffer
+  texture: WebGLTexture
+  uniforms: Record<'crop' | 'size' | 'texel' | 'haze', WebGLUniformLocation | null>
+}
+
+/** Builds the program and its buffer and texture; dispose() deletes all three. */
+function compile(gl: WebGL2RenderingContext): GlassProgram | undefined {
   const shader = (type: number, source: string): WebGLShader | undefined => {
     const item = gl.createShader(type)
     if (!item) return undefined
@@ -198,17 +207,20 @@ function compile(gl: WebGL2RenderingContext): WebGLProgram | undefined {
   const program = gl.createProgram()
   if (!vertex || !fragment || !program) return undefined
   gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program)
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return undefined
+  gl.deleteShader(vertex); gl.deleteShader(fragment)
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) { gl.deleteProgram(program); return undefined }
   gl.useProgram(program)
-  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer())
+  const buffer = gl.createBuffer(), texture = gl.createTexture()
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW)
   const position = gl.getAttribLocation(program, 'aPos')
   gl.enableVertexAttribArray(position)
   gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0)
-  gl.bindTexture(gl.TEXTURE_2D, gl.createTexture())
+  gl.bindTexture(gl.TEXTURE_2D, texture)
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-  return program
+  const uniform = (name: string) => gl.getUniformLocation(program, name)
+  return { program, buffer, texture, uniforms: { crop: uniform('uCrop'), size: uniform('uSize'), texel: uniform('uTexel'), haze: uniform('uHaze') } }
 }

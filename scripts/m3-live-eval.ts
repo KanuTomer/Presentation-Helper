@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AppSettings, AssistantResponse, DocumentInfo, QuestionCategory } from '../src/shared/contracts.js'
+import type { AppSettings, DocumentInfo, PresenterAssistantResponse, QuestionCategory } from '../src/shared/contracts.js'
 import { AiService, type AiRequestMetric, type AiSettingsProvider, type OpenAIClientLike, type OpenAIResponseLike } from '../src/main/ai/service.js'
 import {
   buildInput, PRESENTER_PROMPT_FINGERPRINT, PRESENTER_PROMPT_REVISION, presenterInstructions, responseJsonSchema
@@ -16,7 +16,7 @@ import {
   addMissingPromptLineage, appendRepairHistory, caseKey, pacingDelayMs, readResumeReport, safeProviderMetadata,
   restoreUnattemptedReruns, selectFailedRerun, validateExplicitRepairSelection, type SafeProviderMetadata
 } from '../src/main/ai/evalRuntime.js'
-import { responseRequestPolicy } from '../src/main/ai/requestPolicy.js'
+import { EVALUATED_MODELS, responseRequestPolicy, withRequestPolicy } from '../src/main/ai/requestPolicy.js'
 
 const EVALUATION_REVISION = 'm3-natural-delivery-v1'
 const PROMPT_REVISION = PRESENTER_PROMPT_REVISION
@@ -88,7 +88,8 @@ const promptFingerprint = PRESENTER_PROMPT_FINGERPRINT
 const baseSettings: AppSettings = {
   neonIntensity: 0.65, clickThrough: false, modelMode: 'normal', normalModel: 'gpt-5.6-luna', strongModel: 'gpt-5.6-terra',
   transcriptionModel: 'gpt-4o-mini-transcribe', askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H',
-  listenShortcut: 'Control+Shift+Space', projectSummary: '', approvedVocabulary: [], sessionBudgetUsd: 0.25
+  listenShortcut: 'Control+Shift+Space', projectSummary: '', approvedVocabulary: [], sessionBudgetUsd: 0.25,
+  glassHaze: 0.5, fontScale: 1, liveGlass: true
 }
 const requestConfiguration = {
   normal: { model: baseSettings.normalModel, ...responseRequestPolicy('normal') },
@@ -176,6 +177,7 @@ if (preflightOnly) {
 
 const key = process.env.OPENAI_API_KEY?.trim()
 if (!key) throw new Error('Set OPENAI_API_KEY for this local opt-in evaluation. The key is never persisted or printed.')
+const apiKey: string = key
 const sdk = new OpenAI({ apiKey: key, maxRetries: 0, timeout: 30_000 })
 const client: OpenAIClientLike = {
   models: sdk.models as unknown as OpenAIClientLike['models'],
@@ -209,14 +211,17 @@ async function evaluate(mode: EvalModelMode, cases: EvalCase[]): Promise<boolean
     latestProviderMetadata = undefined
     let metric: AiRequestMetric | undefined
     const provider: AiSettingsProvider = {
-      settings: { ...baseSettings, modelMode: mode }, documents: [] as DocumentInfo[], addUsage: async () => undefined
+      settings: { ...baseSettings, modelMode: mode }, documents: [] as DocumentInfo[], addUsage: async () => undefined, addTranscriptionUsage: async () => undefined
     }
-    const service = new AiService({ getKey: async () => key }, provider, { search: () => [] }, {
-      clientFactory: async () => client, historicalEvaluationPolicy: responseRequestPolicy(mode), onMetric: (value) => { metric = value }
+    const service = new AiService({ getKey: async () => apiKey }, provider, { search: () => [] }, {
+      clientFactory: async () => withRequestPolicy(client, responseRequestPolicy(mode), EVALUATED_MODELS), onMetric: (value) => { metric = value }
     })
-    let answer: AssistantResponse | undefined; let outcome = 'unknown'
-    try { answer = await service.ask(item.question); outcome = 'success' }
-    catch (error) { outcome = (error as { code?: string }).code ?? 'unknown' }
+    // M3 measures spoken presenter answers, so request that format explicitly.
+    let answer: PresenterAssistantResponse | undefined; let outcome = 'unknown'
+    try {
+      const response = await service.ask(item.question, { answerFormat: 'presenter' })
+      if (response.responseStyle === 'presenter') { answer = response; outcome = 'success' } else outcome = 'unexpected_response_style'
+    } catch (error) { outcome = (error as { code?: string }).code ?? 'unknown' }
     madeRequestThisRun = true
     const visible = answer ? [answer.say, ...answer.keyPoints, answer.ifChallenged, answer.warning ?? ''].join(' ') : ''
     const wordCount = visible.trim() ? visible.trim().split(/\s+/u).length : 0

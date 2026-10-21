@@ -10,5 +10,5 @@
     "noUncheckedIndexedAccess": true,
     "outDir": ".tsbuild/node"
   },
-  "include": ["electron.vite.config.ts", "src/main/**/*.ts", "src/preload/**/*.ts", "src/shared/**/*.ts"]
+  "include": ["electron.vite.config.ts", "src/main/**/*.ts", "src/preload/**/*.ts", "src/shared/**/*.ts", "scripts/**/*.ts"]
 }

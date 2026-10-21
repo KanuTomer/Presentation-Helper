@@ -77,8 +77,6 @@ export interface AiRequestMetric {
 }
 export interface AiServiceOptions {
   clientFactory?: () => Promise<OpenAIClientLike>
-  /** Isolated historical evaluators only. Never supplied by production IPC. */
-  historicalEvaluationPolicy?: { reasoningEffort: 'none' | 'low'; maxOutputTokens: number; verbosity?: 'low' }
   onMetric?: (metric: AiRequestMetric) => void
   onTranscriptionMetric?: (metric: TranscriptionMetric) => void
 }
@@ -104,7 +102,6 @@ export interface TranscriptionAudioSource {
 }
 export interface AskOptions {
   signal?: AbortSignal
-  onStage?: (stage: 'retrieving' | 'generating') => void
   answerFormat?: AnswerFormat
 }
 export interface GenerateOptions {
@@ -118,7 +115,6 @@ export class AiServiceError extends Error {
 }
 
 export class AiService {
-  private active?: { id: string; controller?: AbortController; signal: AbortSignal }
   private context = new ConversationContext()
   constructor(
     private secrets: SecretProvider,
@@ -127,8 +123,6 @@ export class AiService {
     private options: AiServiceOptions = {}
   ) {}
 
-  get isBusy(): boolean { return this.active !== undefined }
-  cancel(): void { this.active?.controller?.abort() }
   clearSession(): void { this.context.clear() }
   transcriptionTerminologyHint(extraVocabulary: readonly string[] = []): string {
     return buildTerminologyHint({
@@ -204,18 +198,17 @@ export class AiService {
     if (options.signal) throwIfAborted(options.signal)
     return attachPreparedAnswer(prepared)
   }
-  retrieveSnapshot(question: string, signal: AbortSignal): RetrievedChunk[] {
+  /** Searches with the typed text first, then recent conversation and the project summary. */
+  retrieveSnapshot(question: string, typedQuestion: string, signal: AbortSignal): RetrievedChunk[] {
     const previous = this.context.snapshot().previousQuestion ?? ''
-    const contextQuery = [previous, this.settings.settings.projectSummary].filter(Boolean).join('\n')
+    const contextQuery = [typedQuestion.trim(), previous, this.settings.settings.projectSummary].filter(Boolean).join('\n')
     const prepared = prepareAnswer({ question, context: this.context, projectSummary: this.settings.settings.projectSummary,
       search: () => contextQuery ? this.retrieval.search(Array.from(contextQuery).slice(0, 4_000).join(''), 5) : [], signal })
     return attachPreparedAnswer(prepared)
   }
+  /** Retrieve then generate, for scripts and tests. The app runs both inside an OperationCoordinator operation. */
   async ask(question: string, options: AskOptions = {}): Promise<AssistantResponse> {
-    if (this.active) throw new AiServiceError('busy', 'Another question is already being answered.', false)
-    options.onStage?.('retrieving')
     const chunks = this.retrieve(question, { signal: options.signal })
-    options.onStage?.('generating')
     return this.generate(question, chunks, {
       signal: options.signal,
       ...(options.answerFormat ? { answerFormat: options.answerFormat } : {})
@@ -228,12 +221,10 @@ export class AiService {
   ): Promise<AssistantResponse> {
     const validated = questionSchema.safeParse(question)
     if (!validated.success) throw new AiServiceError('unknown', validated.error.issues[0]?.message ?? 'Enter a valid question.', false)
-    if (this.active) throw new AiServiceError('busy', 'Another question is already being answered.', false)
-    if (options.signal) throwIfAborted(options.signal)
-
-    const controller = options.signal ? undefined : new AbortController()
-    const operation = { id: randomUUID(), ...(controller ? { controller } : {}), signal: options.signal ?? controller!.signal }
-    this.active = operation
+    // Busy and cancellation belong to OperationCoordinator; the signal carries cancellation here.
+    const signal = options.signal ?? new AbortController().signal
+    throwIfAborted(signal)
+    const operationId = randomUUID()
     const startedAt = performance.now()
     const settings = this.settings.settings
     const requestedModel = settings.modelMode === 'strong' ? settings.strongModel : settings.normalModel
@@ -245,25 +236,22 @@ export class AiService {
     let requestDispatched = false
     try {
       const model = findModel(requestedModel)
-      if (this.options.historicalEvaluationPolicy && (!this.options.clientFactory || !['gpt-5.6-luna', 'gpt-5.6-terra'].includes(requestedModel))) throw new AiServiceError('unknown', 'Historical evaluation policy requires an isolated GPT-5.6 evaluation client.', false)
       if (!model || !model.reasoning.includes(reasoningEffort) || !model.structuredOutputs || (options.snapshotDataUrl && !model.imageInput)) {
         throw new AiServiceError('unknown', 'The selected model or reasoning level is not supported. Choose a reviewed model in Settings.', false)
       }
-      const prepared = this.resolvePrepared(validated.data, chunks, operation.signal)
+      const prepared = this.resolvePrepared(validated.data, chunks, signal)
       const selectedChunks = [...prepared.chunks]
       const allowed = new Map(selectedChunks.map((chunk) => [chunk.id, chunk]))
       const requestBody = {
         model: requestedModel,
-        reasoning: { effort: this.options.historicalEvaluationPolicy?.reasoningEffort ?? reasoningEffort },
+        reasoning: { effort: reasoningEffort },
         instructions: options.snapshotDataUrl ? snapshotInstructions : codeAnswer ? developerInstructions : presenterInstructions,
         input: options.snapshotDataUrl ? [{ role: 'user', content: [
           { type: 'input_text', text: buildInput(prepared.question, selectedChunks, prepared.conversationPrompt, prepared.projectSummary) },
           { type: 'input_image', image_url: options.snapshotDataUrl, detail: 'auto' }
         ] }] : buildInput(prepared.question, selectedChunks, prepared.conversationPrompt, prepared.projectSummary),
         store: false,
-        ...(this.options.historicalEvaluationPolicy ? { max_output_tokens: this.options.historicalEvaluationPolicy.maxOutputTokens } : {}),
         text: {
-          ...(this.options.historicalEvaluationPolicy?.verbosity ? { verbosity: this.options.historicalEvaluationPolicy.verbosity } : {}),
           format: {
             type: 'json_schema', name: options.snapshotDataUrl ? 'snapshot_solution' : codeAnswer ? 'developer_response' : 'presenter_response', strict: true,
             schema: options.snapshotDataUrl ? snapshotResponseJsonSchema : codeAnswer ? developerResponseJsonSchema : responseJsonSchema
@@ -272,8 +260,8 @@ export class AiService {
       }
       const client = await this.client()
       requestDispatched = true
-      response = await client.responses.create(requestBody, { signal: operation.signal })
-      ensureCurrentOperation(operation, this.active)
+      response = await client.responses.create(requestBody, { signal })
+      throwIfAborted(signal)
       if (response.status === 'incomplete' && response.incomplete_details?.reason === 'max_output_tokens') throw outputLimitResponse()
       if (containsRefusal(response.output) || !response.output_text?.trim()) throw malformedResponse('refused or empty')
       let raw: unknown
@@ -302,7 +290,7 @@ export class AiService {
       })
       const grounding = validateGroundingResponse(parsed, parsed.responseStyle === 'solution' ? parsed.interpretedProblem : prepared.question, selectedChunks)
       if (!grounding.valid) throw malformedResponse(grounding.reason)
-      ensureCurrentOperation(operation, this.active)
+      throwIfAborted(signal)
       this.context.add(parsed.responseStyle === 'solution' ? parsed.interpretedProblem : prepared.question, parsed, prepared.contextRevision)
       outcome = 'success'
       return parsed
@@ -323,11 +311,10 @@ export class AiService {
         }
       }
       this.options.onMetric?.({
-        operationId: operation.id, requestedModel, returnedModel: response?.model, latencyMs: performance.now() - startedAt,
+        operationId, requestedModel, returnedModel: response?.model, latencyMs: performance.now() - startedAt,
         inputTokens, outputTokens, reasoningTokens, outcome,
         usagePresent: Boolean(response?.usage), requestDispatched
       })
-      if (this.active?.id === operation.id) this.active = undefined
     }
   }
   private documentTitles(): readonly string[] {
@@ -429,14 +416,6 @@ function emptyTranscriptionUsage(): TranscriptionUsage {
 }
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new AiServiceError('cancelled', 'Operation cancelled.', false)
-}
-function ensureCurrentOperation(
-  operation: { id: string; signal: AbortSignal },
-  active: { id: string } | undefined
-): void {
-  if (operation.signal.aborted || active?.id !== operation.id) {
-    throw new AiServiceError('cancelled', 'Operation cancelled.', false)
-  }
 }
 function normalizeProviderNulls(raw: unknown): void {
   if (!raw || typeof raw !== 'object') return

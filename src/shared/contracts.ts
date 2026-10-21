@@ -365,9 +365,7 @@ export interface AppSettings {
   sessionBudgetUsd?: number
 }
 
-export interface SnapshotMonitor { id: string; name: string; current: boolean; width: number; height: number }
 export interface ScreenshotAttachment { id: string; expiresAt: string }
-export interface SnapshotPreview { id: string; monitorId: string; dataUrl: string; width: number; height: number; bytes: number; expiresAt: string }
 export interface SessionUsageStatus { sessionId: string; startedAt: string; actualUsd: number; inputTokens: number; outputTokens: number; reasoningTokens: number; unpricedRequests: number; pricingVersion: string }
 
 export interface ClickThroughStatus {

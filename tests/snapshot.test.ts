@@ -2,34 +2,40 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SnapshotStore, SNAPSHOT_EXPIRY_MS, SNAPSHOT_MAX_BYTES } from '../src/main/snapshots/store'
 import { AiService, type AiSettingsProvider, type OpenAIClientLike } from '../src/main/ai/service'
 import { solutionResponseSchema } from '../src/shared/contracts'
-import { snapshotResponseJsonSchema, SNAPSHOT_QUESTION } from '../src/main/ai/snapshotPrompt'
+import { snapshotQuestion, snapshotResponseJsonSchema, SNAPSHOT_QUESTION, SNAPSHOT_TYPED_MAX } from '../src/main/ai/snapshotPrompt'
+import { questionSchema } from '../src/shared/contracts'
 import { MODEL_REGISTRY } from '../src/shared/models'
 
 afterEach(() => vi.useRealTimers())
 function frames() {
   const bytes = Buffer.from('synthetic-screen')
   const capture = vi.fn(async () => ({ bytes: Buffer.from(bytes), width: 1920, height: 1080, mime: 'image/png' as const }))
-  const store = new SnapshotStore({ monitors: () => [{ id: '1', name: 'One', current: false, width: 1920, height: 1080 }, { id: '2', name: 'Two', current: true, width: 1920, height: 1080 }], capture })
+  const store = new SnapshotStore(capture)
   return { store, capture }
 }
 const solution = { task: 'math', interpretedProblem: 'Solve x² = 4.', explanation: 'Take both square roots.', equations: ['x^2=4', 'x=\\pm2'], steps: ['Take the square root of both sides.'], finalResult: 'x = ±2', codeBlocks: [], clarification: '', support: 'general-technical', evidenceIssue: 'none', warning: null, evidence: [] }
 describe('memory-only screen snapshots', () => {
-  it('selects the overlay monitor by default and permits explicit selection', async () => {
-    const h = frames(); const signal = new AbortController().signal
-    const first = await h.store.capture(undefined, signal); expect(first.monitorId).toBe('2')
-    const second = await h.store.capture('1', signal); expect(second.id).not.toBe(first.id)
-    expect(() => h.store.get(first.id)).toThrow(/expired/); expect(h.store.get(second.id).id).toBe(second.id); h.store.clear()
+  it('keeps only the newest frame and builds its data URL on demand', async () => {
+    const h = frames()
+    const first = await h.store.capture(); const second = await h.store.capture(); expect(second.id).not.toBe(first.id)
+    expect(() => h.store.dataUrl(first.id)).toThrow(/expired/)
+    expect(h.store.dataUrl(second.id)).toBe(`data:image/png;base64,${Buffer.from('synthetic-screen').toString('base64')}`)
+    expect(h.store.has(second.id)).toBe(true); h.store.clear(); expect(h.store.has(second.id)).toBe(false)
   })
-  it('clears images on discard, cancellation and expiration', async () => {
-    vi.useFakeTimers(); const h = frames(); const signal = new AbortController().signal
-    const first = await h.store.capture(undefined, signal); h.store.clear(); expect(() => h.store.get(first.id)).toThrow()
-    const second = await h.store.capture(undefined, signal); vi.advanceTimersByTime(SNAPSHOT_EXPIRY_MS); expect(() => h.store.get(second.id)).toThrow()
-    const aborted = new AbortController(); aborted.abort(); await expect(h.store.capture(undefined, aborted.signal)).rejects.toThrow()
+  it('clears images on discard and expiration, and discards a capture cleared mid-flight', async () => {
+    vi.useFakeTimers(); const h = frames()
+    const first = await h.store.capture(); h.store.clear(); expect(() => h.store.dataUrl(first.id)).toThrow()
+    const second = await h.store.capture(); vi.advanceTimersByTime(SNAPSHOT_EXPIRY_MS); expect(() => h.store.dataUrl(second.id)).toThrow()
+    const pending = h.store.capture(); h.store.clear(); await expect(pending).rejects.toThrow(/discarded/)
   })
-  it('rejects disconnected displays and oversized images', async () => {
-    const h = frames(); await expect(h.store.capture('missing', new AbortController().signal)).rejects.toThrow(/unavailable/)
+  it('rejects oversized images', async () => {
+    const h = frames()
     h.capture.mockResolvedValueOnce({ bytes: Buffer.alloc(SNAPSHOT_MAX_BYTES + 1), width: 1920, height: 1080, mime: 'image/png' })
-    await expect(h.store.capture(undefined, new AbortController().signal)).rejects.toThrow(/8 MiB/)
+    await expect(h.store.capture()).rejects.toThrow(/8 MiB/)
+  })
+  it('leaves room for the screenshot note within the question limit', () => {
+    expect(questionSchema.safeParse(snapshotQuestion('x'.repeat(SNAPSHOT_TYPED_MAX))).success).toBe(true)
+    expect(questionSchema.safeParse(snapshotQuestion('x'.repeat(SNAPSHOT_TYPED_MAX + 1))).success).toBe(false)
   })
   it.each(['formula', 'subscript', 'matrix', 'code', 'compiler-error', 'ambiguous', 'unreadable'])('validates synthetic %s response fixtures', (kind) => {
     const value = kind === 'code' || kind === 'compiler-error'
@@ -55,13 +61,20 @@ describe('screenshot Responses requests', () => {
     return { ai: new AiService({ getKey: vi.fn() }, settings, { search: () => [] }, { clientFactory: async () => client }), create }
   }
   it('sends one image request with context and no output cap; math overrides Code', async () => {
-    const h = harness(); const chunks = h.ai.retrieveSnapshot(SNAPSHOT_QUESTION, new AbortController().signal)
+    const h = harness(); const chunks = h.ai.retrieveSnapshot(SNAPSHOT_QUESTION, '', new AbortController().signal)
     const result = await h.ai.generate(SNAPSHOT_QUESTION, chunks, { answerFormat: 'code', snapshotDataUrl: 'data:image/png;base64,c2NyZWVu' })
     expect(result).toMatchObject({ responseStyle: 'solution', task: 'math' }); expect(h.create).toHaveBeenCalledTimes(1)
     const request = h.create.mock.calls[0]?.[0] as Record<string, unknown>
     expect(request).toMatchObject({ model: 'gpt-6-luna', store: false, reasoning: { effort: 'medium' } })
     expect(request).not.toHaveProperty('max_output_tokens')
     expect(JSON.stringify(request.input)).toContain('input_image'); expect(JSON.stringify(request.input)).toContain('Reference context')
+  })
+  it('searches documents with the question typed beside the screenshot', () => {
+    const search = vi.fn(() => [])
+    const settings = { settings: { modelMode: 'normal', normalModel: 'gpt-6-luna', projectSummary: '' }, documents: [] } as unknown as AiSettingsProvider
+    const ai = new AiService({ getKey: vi.fn() }, settings, { search })
+    ai.retrieveSnapshot(snapshotQuestion('What accuracy did we get?'), 'What accuracy did we get?', new AbortController().signal)
+    expect(search).toHaveBeenCalledWith(expect.stringContaining('What accuracy did we get?'), 5)
   })
   it('rejects forged screenshot document citations', async () => {
     const h = harness({ ...solution, support: 'document-supported', evidence: [{ chunkId: 'forged', documentName: 'fake', location: 'page 1' }] } as typeof solution)

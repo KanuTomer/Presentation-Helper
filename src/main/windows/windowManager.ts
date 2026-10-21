@@ -63,6 +63,8 @@ export class WindowManager {
   onClickThroughStatusChange?: ClickThroughStatusListener
   /** Turns click-through on through the same persisted path as the button. */
   onEnableClickThrough?: () => void
+  /** Esc inside a PresenterAI window; returns true when it cancelled an operation. */
+  onEscape?: () => boolean
   private presenterShortcutsRegistered = new Set<string>()
   private readonly handleDisplayChange = (): void => {
     const setup = this.setupWindow
@@ -338,6 +340,9 @@ export class WindowManager {
       if (window === this.setupWindow) { this.setupWindow = undefined; this.unregisterDisplayListeners() }
       if (window === this.presenterWindow) this.presenterWindow = undefined
     })
+    window.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.key === 'Escape' && this.onEscape?.()) event.preventDefault()
+    })
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     window.webContents.on('will-navigate', (event) => event.preventDefault())
   }
@@ -414,7 +419,8 @@ export class WindowManager {
       ? []
       : [`Could not register ${CLICK_THROUGH_RECOVERY_SHORTCUT}. Click-through was disabled for safety.`]
     const attemptedWarnings = this.replaceConfigurableShortcuts(askShortcut, hideShortcut)
-    this.shortcutWarnings = [...recoveryWarnings, ...attemptedWarnings]
+    const presenterWarnings = this.shortcutWarnings.filter((warning) => warning.startsWith(PRESENTER_SHORTCUT_WARNING))
+    this.shortcutWarnings = [...recoveryWarnings, ...attemptedWarnings, ...presenterWarnings]
     return recoveryAvailable && attemptedWarnings.length === 0
   }
 

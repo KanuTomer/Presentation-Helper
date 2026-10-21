@@ -10,8 +10,7 @@ export class SnapshotController {
 
   /** Captures the presenter's monitor now and keeps it in memory until sent, removed, or expired. */
   async attach(): Promise<ScreenshotAttachment> {
-    const frame = await this.frames.capture(undefined, new AbortController().signal)
-    return { id: frame.id, expiresAt: frame.expiresAt }
+    return this.frames.capture()
   }
 
   /**
@@ -26,13 +25,13 @@ export class SnapshotController {
     try {
       this.operations.registerCleanup(operation.id, () => this.frames.clear())
       this.operations.registerCleanup(operation.id, () => this.preview.clear(operation.id))
-      const frame = this.frames.get(attachmentId)
+      const snapshotDataUrl = this.frames.dataUrl(attachmentId)
       const question = snapshotQuestion(typedQuestion)
-      const chunks = this.ai.retrieveSnapshot(question, operation.signal)
+      const chunks = this.ai.retrieveSnapshot(question, typedQuestion, operation.signal)
       await this.preview.present(buildResponseTransmissionPreview(operation.id, chunks, { screenshot: true }))
       if (operation.signal.aborted || !this.operations.isCurrent(operation.id)) throw operationError('cancelled', 'Operation cancelled.', false)
       this.operations.transition(operation.id, 'generating')
-      const response = await this.ai.generate(question, chunks, { signal: operation.signal, snapshotDataUrl: frame.dataUrl })
+      const response = await this.ai.generate(question, chunks, { signal: operation.signal, snapshotDataUrl })
       return { ok: true, response }
     } catch (error) { failure = operation.signal.aborted ? { code: 'cancelled', message: 'Operation cancelled.', retryable: false } : toOperationError(error); return { ok: false, error: failure } }
     finally { await this.operations.finish(operation.id, operation.signal.aborted ? 'cancelled' : failure ? 'error' : 'success', failure) }
