@@ -150,7 +150,7 @@ describe('manual AI service', () => {
     for (const chunk of chunks.slice(0, 5)) expect(input).toContain(chunk.text)
   })
 
-  it('rejects overlap and prevents a cancelled late response from entering conversation context', async () => {
+  it('prevents a cancelled late response from entering conversation context', async () => {
     let resolveFirst!: (value: OpenAIResponseLike) => void
     const requests: Record<string, unknown>[] = []
     const create = vi.fn((body: Record<string, unknown>) => {
@@ -159,10 +159,10 @@ describe('manual AI service', () => {
       return Promise.resolve(apiResponse(response))
     })
     const { service } = harness(create)
-    const first = service.ask('First private question')
+    const controller = new AbortController()
+    const first = service.ask('First private question', { signal: controller.signal })
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
-    await expect(service.ask('Overlapping question')).rejects.toMatchObject({ code: 'busy' })
-    service.cancel(); resolveFirst(apiResponse(response))
+    controller.abort(); resolveFirst(apiResponse(response))
     await expect(first).rejects.toMatchObject({ code: 'cancelled' })
     await service.ask('Fresh question')
     expect(String(requests[1]?.input)).not.toContain('First private question')
@@ -185,9 +185,7 @@ describe('manual AI service', () => {
     resolveFirst(apiResponse(response))
     await expect(first).rejects.toMatchObject({ code: 'cancelled' })
 
-    const stages: string[] = []
-    await service.ask('Fresh staged question', { onStage: (stage) => stages.push(stage) })
-    expect(stages).toEqual(['retrieving', 'generating'])
+    await service.ask('Fresh question')
     expect(create).toHaveBeenCalledTimes(2)
     expect(String(requests[1]?.input)).not.toContain('Externally cancelled question')
   })

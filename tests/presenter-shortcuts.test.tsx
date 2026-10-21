@@ -15,11 +15,11 @@ const answer: AssistantResponse = {
   implementationNotes: ['Note.'], caveats: [], evidence: []
 }
 
-async function harness(hasKey = true) {
+async function harness(hasKey = true, operation: string = 'idle') {
   let command: (value: PresenterCommand) => void = () => undefined
   const noop = vi.fn(() => () => undefined)
   const presenter = {
-    getStatus: vi.fn(async () => ({ ...blankStatus, workspace: { mode: 'presenter' } })),
+    getStatus: vi.fn(async () => ({ ...blankStatus, operation, workspace: { mode: 'presenter' } })),
     getSettings: vi.fn(async () => undefined), listDocuments: vi.fn(async () => []),
     getApiKeyStatus: vi.fn(async () => ({ configured: hasKey, masked: hasKey, protection: 'windows-dpapi' as const })),
     getUsage: vi.fn(async () => undefined),
@@ -27,6 +27,8 @@ async function harness(hasKey = true) {
     getGlassDisplay: vi.fn(async () => ({ x: 0, y: 0, width: 1920, height: 1080 })),
     onPresenterCommand: vi.fn((callback: (value: PresenterCommand) => void) => { command = callback; return () => undefined }),
     ask: vi.fn(async () => ({ ok: true, response: answer })),
+    askAboutScreen: vi.fn(async () => ({ ok: true, response: answer })),
+    cancel: vi.fn(async () => ({ ok: true })),
     attachScreenshot: vi.fn(async () => ({ id: '00000000-0000-4000-8000-000000000000', expiresAt: new Date(Date.now() + 600_000).toISOString() })),
     discardScreenshot: vi.fn(async () => undefined),
     copyCode: vi.fn(async () => undefined)
@@ -80,6 +82,40 @@ describe('presenter keyboard commands', () => {
     expect(screen.queryByText('Two blocks.')).toBeNull()
     await h.run('fold')
     expect(screen.getByText('Two blocks.')).toBeTruthy()
+  })
+
+  it('submits once when Send is pressed twice before main reports busy', async () => {
+    const h = await harness()
+    let finish!: (value: unknown) => void
+    h.presenter.ask.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }) as never)
+    fireEvent.change(h.box, { target: { value: 'Explain the cache.' } })
+    await h.run('send'); await h.run('send')
+    expect(h.presenter.ask).toHaveBeenCalledOnce()
+    await act(async () => { finish({ ok: true, response: answer }) })
+    await screen.findByText('Two blocks.')
+  })
+
+  it('retries a screenshot question with a fresh screenshot', async () => {
+    const h = await harness()
+    h.presenter.askAboutScreen.mockResolvedValueOnce({ ok: false, error: { code: 'rate_limit', message: 'Slow down.', retryable: true } } as never)
+    await h.run('snapshot'); await screen.findByText(/Screenshot attached/)
+    fireEvent.change(h.box, { target: { value: 'Why PostgreSQL?' } })
+    await h.run('send'); await screen.findByText('Slow down.')
+    await h.run('retry')
+    await screen.findByText('Two blocks.')
+    expect(h.presenter.attachScreenshot).toHaveBeenCalledTimes(2)
+    expect(h.presenter.askAboutScreen).toHaveBeenCalledTimes(2)
+    expect(h.presenter.ask).not.toHaveBeenCalled()
+  })
+
+  it('cancels only while a request is running', async () => {
+    const idle = await harness()
+    await idle.run('cancel'); expect(idle.presenter.cancel).not.toHaveBeenCalled()
+    cleanup()
+    const busy = await harness(true, 'generating')
+    fireEvent.change(busy.box, { target: { value: 'Explain the cache.' } }) // with text, only busy disables Send
+    await waitFor(() => expect(document.querySelector('.composer-send')?.hasAttribute('disabled')).toBe(true))
+    await busy.run('cancel'); expect(busy.presenter.cancel).toHaveBeenCalledOnce()
   })
 
   it('briefly marks the control a shortcut pressed', async () => {

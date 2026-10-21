@@ -27,6 +27,7 @@ import { applyClickThroughTransaction } from '../windows/clickThroughTransaction
 import { SnapshotStore } from '../snapshots/store.js'
 import { SnapshotController } from '../snapshots/controller.js'
 import { electronSnapshotCapture } from '../snapshots/electronCapture.js'
+import { SNAPSHOT_TYPED_MAX } from '../ai/snapshotPrompt.js'
 
 interface Services {
   store: SettingsStore
@@ -108,7 +109,7 @@ export function registerIpc(services: Services): RegisteredIpcServices {
   handle(channels.discardScreenshot, () => snapshots.frames.clear())
   handle<[unknown, unknown]>(channels.askAboutScreen, (_event, question, attachmentId) => {
     requirePresenter()
-    if (typeof question !== 'string' || question.length > 4_000) throw new Error('Invalid question.')
+    if (typeof question !== 'string' || question.trim().length > SNAPSHOT_TYPED_MAX) throw new Error(`Questions with a screenshot are limited to ${SNAPSHOT_TYPED_MAX.toLocaleString('en-US')} characters.`)
     if (typeof attachmentId !== 'string' || !/^[a-f0-9-]{36}$/i.test(attachmentId)) throw new Error('Invalid screenshot.')
     return snapshots.ask(question, attachmentId)
   })
@@ -159,7 +160,9 @@ export function registerIpc(services: Services): RegisteredIpcServices {
     if (typeof question !== 'string') throw new Error('Invalid question.')
     return typedAnswers.ask(question, parseAnswerFormat(requestedFormat))
   })
-  handle(channels.cancel, () => { snapshots.frames.clear(); return audio.cancel() })
+  // A snapshot request clears its own frame when it ends; cancelling anything
+  // else must keep an attached screenshot the presenter is still showing.
+  handle(channels.cancel, () => audio.cancel())
   handle(channels.clearSession, () => { snapshots.frames.clear(); ai.clearSession() })
   handle(channels.startNewSession, async () => {
     snapshots.frames.clear()

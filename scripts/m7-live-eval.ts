@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { assistantResponseSchema, type AssistantResponse } from '../src/shared/contracts.js'
+import { assistantResponseSchema, type PresenterAssistantResponse } from '../src/shared/contracts.js'
 import { maximumCallCostUsd, staysWithinBudget, tokenCostUsd } from '../src/main/ai/evalBudget.js'
 import { validateGroundingResponse } from '../src/main/ai/grounding.js'
 import {
@@ -170,12 +170,12 @@ function metric(item: M7EvalCase, value: Partial<CaseMetric> & Pick<CaseMetric, 
   }
 }
 
-function normalizeAndValidate(raw: unknown): AssistantResponse | undefined {
+function normalizeAndValidate(raw: unknown): PresenterAssistantResponse | undefined {
   if (raw && typeof raw === 'object' && 'warning' in raw && (raw as { warning?: unknown }).warning === null) {
     delete (raw as { warning?: unknown }).warning
   }
   const parsed = assistantResponseSchema.safeParse(raw)
-  return parsed.success ? parsed.data : undefined
+  return parsed.success ? { responseStyle: 'presenter', ...parsed.data } : undefined
 }
 
 function safeOutcome(error: unknown): string {

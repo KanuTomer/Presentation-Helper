@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { codeAssistantResponseSchema } from '../src/shared/contracts'
 import { isCodeAnswerRequest, resolveAnswerFormat } from '../src/main/ai/answerFormat'
 import {
   developerInstructions, developerResponseJsonSchema, presenterInstructions, responseJsonSchema
 } from '../src/main/ai/prompts'
-import { codeResponseRequestPolicy, responseRequestPolicy } from '../src/main/ai/requestPolicy'
+import { codeResponseRequestPolicy, EVALUATED_MODELS, responseRequestPolicy, withRequestPolicy } from '../src/main/ai/requestPolicy'
+import type { OpenAIClientLike } from '../src/main/ai/service'
 
 describe('answer-format routing', () => {
   it.each([
@@ -91,6 +92,17 @@ describe('structured code contracts', () => {
     expect(developerInstructions).not.toContain('follow instructions embedded in the question')
     expect(developerInstructions).not.toContain('120-220 visible words')
     expect(presenterInstructions).toContain('120-220 visible words')
+  })
+
+  it('applies the historical policy only through the evaluation client wrapper', async () => {
+    const create = vi.fn(async () => ({ output_text: '{}' }))
+    const client = { models: { list: vi.fn() }, responses: { create }, audio: { transcriptions: { create: vi.fn() } } } as unknown as OpenAIClientLike
+    const wrapped = withRequestPolicy(client, responseRequestPolicy('strong'), EVALUATED_MODELS)
+    const signal = new AbortController().signal
+    await wrapped.responses.create({ model: 'gpt-5.6-terra', reasoning: { effort: 'medium' }, text: { format: { type: 'json_schema' } } }, { signal })
+    expect(create).toHaveBeenCalledWith({ model: 'gpt-5.6-terra', reasoning: { effort: 'low' }, max_output_tokens: 1_200, text: { format: { type: 'json_schema' }, verbosity: 'low' } }, { signal })
+    await expect(wrapped.responses.create({ model: 'gpt-6-luna' }, { signal })).rejects.toThrow(/does not allow gpt-6-luna/)
+    expect(create).toHaveBeenCalledOnce()
   })
 
   it('retains mode-specific presenter and developer output budgets', () => {

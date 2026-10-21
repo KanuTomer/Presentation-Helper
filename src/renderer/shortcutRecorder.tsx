@@ -136,7 +136,7 @@ export function PresenterShortcutList(): React.JSX.Element {
     <p className="muted">These work from any app while the presenter is open, so you never need to click it.</p>
     <dl>{PRESENTER_SHORTCUTS.map((shortcut) => <div key={shortcut.command}><dt>{shortcut.label}</dt><dd><kbd>{shortcut.keys}</kbd></dd></div>)}
       <div><dt>Click-through on / off</dt><dd><kbd>Ctrl+Shift+I</kbd></dd></div>
-      <div><dt>Cancel the current request</dt><dd><kbd>Esc</kbd></dd></div>
+      <div><dt>Cancel, inside PresenterAI</dt><dd><kbd>Esc</kbd></dd></div>
     </dl>
   </fieldset>
 }

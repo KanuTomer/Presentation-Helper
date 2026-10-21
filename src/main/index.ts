@@ -70,7 +70,14 @@ if (packagedFtsSmoke) {
     })
     await retrieval.initialize()
     const ai = new AiService(secrets, store, retrieval)
-    const operations = new OperationCoordinator(globalShortcut)
+    // Esc cancels only when pressed in a PresenterAI window. A global Esc would
+    // swallow the key in PowerPoint, Meet and every other app during requests.
+    let cancelOnEscape: (() => void) | undefined
+    const operations = new OperationCoordinator({
+      register: (_key, callback) => { cancelOnEscape = callback; return true },
+      unregister: () => { cancelOnEscape = undefined }
+    })
+    windows.onEscape = () => { if (!cancelOnEscape) return false; cancelOnEscape(); return true }
     const transmissionPreview = new TransmissionPreviewGate(operations, {
       showOverlay: () => windows?.showTransmissionPreview(),
       onChange: () => audio?.onState?.()

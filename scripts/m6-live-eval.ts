@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { responseRequestPolicy } from '../src/main/ai/requestPolicy.js'
+import { EVALUATED_MODELS, responseRequestPolicy, withRequestPolicy } from '../src/main/ai/requestPolicy.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -113,15 +113,14 @@ const settings: {
     strongModel: 'gpt-5.6-terra', transcriptionModel: M6_TRANSCRIPTION_MODEL,
     askShortcut: 'Control+Space', hideShortcut: 'Control+Shift+H', listenShortcut: 'Control+Shift+Space',
     projectSummary: '', approvedVocabulary: ['OpenTelemetry', 'PostgreSQL', 'rendezvous hashing'],
-    sessionBudgetUsd: 0.25
+    sessionBudgetUsd: 0.25, glassHaze: 0.5, fontScale: 1, liveGlass: true
   },
   documents,
   async addUsage() {},
   async addTranscriptionUsage() {}
 }
 const ai = new AiService({ getKey: async () => { throw new Error('The injected no-retry client must be used.') } }, settings, retrieval, {
-  clientFactory: async () => client as unknown as OpenAIClientLike,
-  historicalEvaluationPolicy: responseRequestPolicy('normal'),
+  clientFactory: async () => withRequestPolicy(client as unknown as OpenAIClientLike, responseRequestPolicy('normal'), EVALUATED_MODELS),
   onTranscriptionMetric: (metric) => { transcriptionMetric = metric },
   onMetric: (metric) => { answerMetric = metric }
 })

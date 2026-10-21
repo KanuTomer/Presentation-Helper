@@ -8,8 +8,8 @@ afterEach(() => vi.useRealTimers())
 function harness(visible = true, isProtected = false) {
   const window = { getBounds: () => displays[0]!.bounds, isVisible: () => visible, isDestroyed: () => false, isContentProtected: () => isProtected, hide: vi.fn() }
   const showTransmissionPreview = vi.fn()
-  const adapter = electronSnapshotCapture({ presenterWindow: window, showTransmissionPreview } as unknown as WindowManager)
-  return { window, showTransmissionPreview, adapter }
+  const captureScreen = electronSnapshotCapture({ presenterWindow: window, showTransmissionPreview } as unknown as WindowManager)
+  return { window, showTransmissionPreview, captureScreen }
 }
 describe('monitor capture restoration', () => {
   it('uses native scaled monitor resolution, hides before capture and restores once', async () => {
@@ -18,25 +18,25 @@ describe('monitor capture restoration', () => {
       expect(h.window.hide).toHaveBeenCalledTimes(1)
       return [{ display_id: '1', thumbnail: { isEmpty: () => false, getSize: () => ({ width: 3840, height: 2160 }), toPNG: () => Buffer.from('png') } }]
     })
-    const result = h.adapter.capture('1', new AbortController().signal); await vi.advanceTimersByTimeAsync(100)
+    const result = h.captureScreen(); await vi.advanceTimersByTimeAsync(100)
     expect(await result).toMatchObject({ width: 3840, height: 2160 })
     expect(capture).toHaveBeenCalledWith(expect.objectContaining({ types: ['screen'], thumbnailSize: { width: 3840, height: 2160 } }))
     expect(h.showTransmissionPreview).toHaveBeenCalledTimes(1)
   })
   it('restores after capture failure without modifying interaction state', async () => {
     vi.useFakeTimers(); const h = harness(); capture.mockRejectedValueOnce(new Error('denied'))
-    const result = h.adapter.capture('1', new AbortController().signal); const assertion = expect(result).rejects.toThrow('denied')
+    const result = h.captureScreen(); const assertion = expect(result).rejects.toThrow('denied')
     await vi.advanceTimersByTimeAsync(100); await assertion; expect(h.showTransmissionPreview).toHaveBeenCalledTimes(1)
   })
   it('does not hide (flash) a presenter that is already excluded from capture', async () => {
     const h = harness(true, true)
     capture.mockImplementationOnce(async () => [{ display_id: '1', thumbnail: { isEmpty: () => false, getSize: () => ({ width: 3840, height: 2160 }), toPNG: () => Buffer.from('png') } }])
-    await expect(h.adapter.capture('1', new AbortController().signal)).resolves.toMatchObject({ width: 3840 })
+    await expect(h.captureScreen()).resolves.toMatchObject({ width: 3840 })
     expect(h.window.hide).not.toHaveBeenCalled(); expect(h.showTransmissionPreview).not.toHaveBeenCalled()
   })
   it('does not show a previously hidden overlay', async () => {
     vi.useFakeTimers(); const h = harness(false); capture.mockRejectedValueOnce(new Error('denied'))
-    const result = h.adapter.capture('1', new AbortController().signal); const assertion = expect(result).rejects.toThrow()
+    const result = h.captureScreen(); const assertion = expect(result).rejects.toThrow()
     await vi.advanceTimersByTimeAsync(100); await assertion; expect(h.showTransmissionPreview).not.toHaveBeenCalled()
   })
 })

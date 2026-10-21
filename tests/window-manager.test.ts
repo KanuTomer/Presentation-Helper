@@ -362,8 +362,24 @@ describe('two-window workspaces', () => {
     register.mockImplementation((key: string) => key !== 'Control+Alt+F')
     presenter!.fire('ready-to-show'); windows.enterPresenter()
     expect(windows.shortcutWarnings.join(' ')).toContain('Ctrl+Alt+F')
+    // Re-registering the editable shortcuts keeps the presenter warning.
+    windows.registerShortcuts()
+    expect(windows.shortcutWarnings.join(' ')).toContain('Ctrl+Alt+F')
     windows.requestSetup('settings'); windows.confirmSetup()
     expect(windows.shortcutWarnings.join(' ')).not.toContain('Ctrl+Alt+F')
+    windows.prepareToQuit()
+  })
+
+  it('cancels with Esc only inside PresenterAI windows, never globally', async () => {
+    const { windows, created } = await created2()
+    windows.create(); const [, presenter] = created
+    const onEscape = vi.fn(() => true); windows.onEscape = onEscape
+    const input = (presenter!.webContents.on as ReturnType<typeof vi.fn>).mock.calls.find(([event]) => event === 'before-input-event')![1] as (event: { preventDefault(): void }, input: { type: string; key: string }) => void
+    const event = { preventDefault: vi.fn() }
+    input(event, { type: 'keyDown', key: 'Escape' })
+    expect(onEscape).toHaveBeenCalledOnce(); expect(event.preventDefault).toHaveBeenCalledOnce()
+    input(event, { type: 'keyDown', key: 'Enter' }); expect(onEscape).toHaveBeenCalledOnce()
+    expect(register.mock.calls.some(([key]) => key === 'Escape')).toBe(false)
     windows.prepareToQuit()
   })
 
